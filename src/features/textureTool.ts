@@ -61,6 +61,13 @@ export class TextureTool {
   // that single callback slot belongs to main.ts) ---
   private lastFaceIds: number[] = [];
   private lastBodyIds: string[] = [];
+  // Each face's selector, kept from the FIRST build that saw the face. The
+  // viewport mints a selector from the mesh on screen, and once the preview
+  // lands that mesh is the DISPLACED one: re-minting at commit put the saved
+  // point on a crest, |depth| off the B-rep face, where by:"nearest" can tie
+  // with a small neighbour face and the saved texture fails as ambiguous. The
+  // first build for a face always runs before that face is textured.
+  private faceSelectors = new Map<number, Selector>();
   private raf = 0;
   private boundTick: () => void;
   private previewDebounce = 0;
@@ -112,6 +119,7 @@ export class TextureTool {
     this.lastFaceIds = [];
     this.lastBodyIds = [];
     this.rebuildLanded = false;
+    this.faceSelectors.clear();
     this.unsubBuild = this.store.onBuild((s) => {
       if (!s.building && s.result) this.rebuildLanded = true;
     });
@@ -163,6 +171,7 @@ export class TextureTool {
     this.awaitingRollback = true;
     this.lastFaceIds = [];
     this.lastBodyIds = [];
+    this.faceSelectors.clear();
     this.viewport.setSelectionMode(this.mode === "body" ? "bodies" : "faces");
     setPrompt(t("feature.rollingBack"));
 
@@ -397,9 +406,13 @@ export class TextureTool {
       // selection spans bodies keep only faces on the bound (first) one rather
       // than silently resolving the rest against the wrong shape.
       const body = sel.bodyId ?? undefined;
+      const pinned = sel.faceIds.map((fid, i) => {
+        if (!this.faceSelectors.has(fid)) this.faceSelectors.set(fid, sel.selectors[i]!);
+        return this.faceSelectors.get(fid)!;
+      });
       const selectors = body
-        ? sel.selectors.filter((_, i) => this.viewport.faceIdToBodyId(sel.faceIds[i]!) === body)
-        : sel.selectors;
+        ? pinned.filter((_, i) => this.viewport.faceIdToBodyId(sel.faceIds[i]!) === body)
+        : pinned;
       if (!selectors.length) return null;
       return { ...base, ...(body ? { body } : {}), faces: selectors.length === 1 ? selectors[0]! : selectors } as Feature;
     }
@@ -456,6 +469,7 @@ export class TextureTool {
     this.lastFaceIds = [];
     this.lastBodyIds = [];
     this.rebuildLanded = false;
+    this.faceSelectors.clear();
     // consumed members would dangle in the next tool's selection (same reason
     // Combine clears it after consuming the tool bodies) — clear both kinds.
     this.viewport.clearSelection();

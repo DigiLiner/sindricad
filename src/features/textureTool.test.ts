@@ -91,3 +91,38 @@ describe("TextureTool ambient selection", () => {
     expect(h.t.lastFaceIds).toEqual([3]);
   });
 });
+
+// The saved face point used to be re-minted at commit from the mesh on screen,
+// which by then is the DISPLACED preview: the point sat on a texture crest off
+// the B-rep face, by:"nearest" tied with a 1 mm2 neighbour, and the texture the
+// user had just saved failed as "ambiguous face reference". The fake viewport
+// below mints from whatever it is "showing", and the preview moves the point.
+describe("TextureTool saved face point", () => {
+  function commitHarness() {
+    let z = 25; // the plain top face
+    const viewport = {
+      selecting: "faces",
+      setSelectionMode: () => {},
+      getSelectedFaceIds: () => [4],
+      selectedFacesForPressPull: () => ({
+        selectors: [{ kind: "face", by: "nearest", point: [-30.57, 22.39, z] }],
+        faceIds: [4],
+        bodyId: "b1",
+      }),
+      faceIdToBodyId: () => "b1",
+    };
+    let n = 0;
+    const store = { buildState: { building: false, result: {} }, nextId: () => `f${++n}`, onBuild: () => () => {} };
+    const tool = new TextureTool(viewport as never, store as never);
+    const t = tool as unknown as { mode: string; buildFeature: () => { faces: { point: number[] } } };
+    t.mode = "faces";
+    return { t, showPreview: () => { z = 25.08; } };
+  }
+
+  it("keeps the point minted before the preview displaced the face", () => {
+    const h = commitHarness();
+    expect(h.t.buildFeature().faces.point[2]).toBe(25); // the first preview's build
+    h.showPreview(); // the displaced preview is on screen now
+    expect(h.t.buildFeature().faces.point[2]).toBe(25); // the commit's build
+  });
+});
