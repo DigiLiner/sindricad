@@ -124,8 +124,11 @@ export function dimConflictMsg(
   const adding = prevValue == null;
   // An `angle` stores DEGREES and every other dimension millimetres (types.ts),
   // so a length format here would report 30° as "30 mm" — or "1.181 in" with the
-  // display unit set to inches. Same split the inspector makes for a field.
-  const fmtPrev = (v: number) => (edited.type === "angle" ? `${round(v)}°` : fmtLength(v));
+  // display unit set to inches. Same split the inspector makes for a field. An
+  // angle's stored sign is which side of l2 the line sits on, not something a
+  // user reads off the number, so this reports the magnitude — the same thing
+  // the field showed before the edit.
+  const fmtPrev = (v: number) => (edited.type === "angle" ? `${round(Math.abs(v))}°` : fmtLength(v));
   const left = prevValue == null ? "" : t("sketch.dimConflict.leftAt", { value: fmtPrev(prevValue) });
   const withLeft = (main: string) => (left ? `${main} ${left}` : main);
 

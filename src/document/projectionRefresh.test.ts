@@ -596,6 +596,44 @@ describe("parameter edit: dimensioned geometry follows a far move", () => {
     });
   }
 
+  // T8: opening a document must not touch anything. A stored angle's sign names
+  // a side (numFields.ts), and nothing in load or migration should normalize it
+  // toward "positive" — whether the value is bare or named by a parameter.
+  it("T8: opening a document with a negative stored angle moves nothing", () => {
+    const bare = (): CadDocument => ({
+      parameters: {},
+      features: [{
+        id: "s1", type: "sketch", plane: "XY", name: "Sketch1",
+        entities: [
+          { id: "ref", type: "line", x1: 0, y1: 0, x2: 50, y2: 0 },
+          { id: "arm", type: "line", x1: 0, y1: 0, x2: 30 * Math.cos(-30 * deg), y2: 30 * Math.sin(-30 * deg) },
+        ],
+        constraints: [
+          { type: "fix", e: "ref", p: 0 }, { type: "fix", e: "ref", p: 1 },
+          { type: "coincident", e1: "arm", p1: 0, e2: "ref", p2: 0 },
+          { type: "angle", id: "a", l1: "ref", l2: "arm", value: -30 },
+          { type: "p2pDistance", e1: "arm", p1: 0, e2: "arm", p2: 1, value: 30 },
+        ],
+      }] as Feature[],
+    });
+    const named = (): CadDocument => ({
+      ...bare(),
+      paramDefs: { tilt: { expr: "-30", value: -30, unit: "deg", target: { kind: "constraint", sketch: "s1", constraint: "a" } } },
+    });
+    for (const doc of [bare(), named()]) {
+      const store = new DocumentStore(scriptedBackend(() => undefined, calls), doc);
+      store.headlessSolve = solveSketchFeature;
+      store.onParamSolveIssue = (id) => void issues.push(id);
+      const a = sketchIn(store).constraints?.find((c) => c.type === "angle" && c.id === "a");
+      expect(a?.type === "angle" && a.value).toBe(-30);
+      const arm = entityIn(store, "arm") as unknown as { x2: number; y2: number };
+      expect(arm.x2).toBeCloseTo(30 * Math.cos(-30 * deg), 6);
+      expect(arm.y2).toBeCloseTo(30 * Math.sin(-30 * deg), 6);
+      expect(calls).toEqual([]); // no rebuild was even asked for
+      expect(issues).toEqual([]);
+    }
+  });
+
   // A SIGNED dimension crossing zero reverses its line end for end; a point held
   // off the line stays where it was, which in the line's own frame is the other
   // side. Not a mirror: the edit lands, as it did before the walk existed.

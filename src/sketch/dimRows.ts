@@ -22,6 +22,7 @@ import { isDriven } from "../types";
 import { constraintDims, entityDims } from "./entityDims";
 import { isDimConstraint } from "./id";
 import { ORIGIN_X_ID, ORIGIN_Y_ID, isOriginGeometry, isOriginId } from "./origin";
+import { paramValueOfDim } from "../document/numFields";
 
 /** Where an edit of a listed dimension goes. An entity badge is addressed by
  *  entity id and field (and its place in the list, for an entity saved before
@@ -201,7 +202,7 @@ export function sketchDimRows(entities: readonly ResolvedEntity[], constraints: 
       dim: constraintWord(c),
       construction: one?.construction === true,
       entities: shapes.filter((s) => byId.has(s) && !unlisted(s)),
-      valueMm: d?.valueMm ?? (c.type === "offset" ? Math.abs(c.value) : c.value),
+      valueMm: d?.valueMm ?? paramValueOfDim(c),
       kind: c.type === "angle" ? "angle" : "length",
       driven: isDriven(c),
       signed: d?.signed === true,

@@ -19,7 +19,7 @@ import { isEditableTarget } from "../ui/focus";
 import { SketchDimensions, dimBadgeFields, type ExtraDim } from "./sketchDimensions";
 import { SketchGlyphs } from "./sketchGlyphs";
 import { constraintGlyphs, diagnosisOf, type ConstraintGlyph } from "./glyphs";
-import { entityDims, constraintDims, dimRefPoints, curveKind, hoverOperandCurve, lineOperand, lineOperandAt, linearDim, operandPoint, rebindPolygonSides, refPoint, refPointNear, setDimPixelScale, RECT_CENTRE, shapeSideAt, slotAxisAt, staggeredDefaults, type DimField, type ConstraintDim } from "./entityDims";
+import { entityDims, constraintDims, dimRefPoints, curveKind, hoverOperandCurve, lineOperand, lineOperandAt, linearDim, operandPoint, rebindPolygonSides, refPoint, refPointNear, setDimPixelScale, RECT_CENTRE, shapeSideAt, slotAxisAt, staggeredDefaults, angleDimMeasure, type DimField, type ConstraintDim } from "./entityDims";
 import {
   clampPlace, isDimError, isRoundTarget, pickDimTarget, rebindTarget, resolveDim, targetIdentity,
   targetKey, unsupportedMessage,
@@ -1500,12 +1500,23 @@ export class SketchMode {
   /** "Lock dimension" on a reference (driven) dim: keep the same dimension, at
    *  the value it currently MEASURES, and let it drive. setDrivingDimension's
    *  dedup removes the driven original and hands its id over, so a parameter
-   *  binding survives the lock. */
+   *  binding survives the lock.
+   *
+   *  `valueMm` (the badge's displayed number) is a MAGNITUDE for an angle dim
+   *  (entityDims.constraintDims) — locking at it verbatim would discard the
+   *  side the line is actually on and could flip it the moment it drives. A
+   *  reference dim's own `c.value` can't be trusted either: it follows the
+   *  geometry while driven, so its stored sign is stale the instant something
+   *  else moves the line. The live signed measurement is the only value that
+   *  both matches the badge's magnitude and keeps the current orientation. */
   private lockPlacedDim(cIndex: number, valueMm: number) {
     const c = this.constraints[cIndex];
     if (!c || !isPlacedDim(c) || !isDriven(c)) return;
     const { driven: _driven, ...rest } = c as SketchConstraint & { driven?: boolean };
-    this.setDrivingDimension({ ...rest, value: valueMm } as SketchConstraint);
+    const value = c.type === "angle"
+      ? (angleDimMeasure(new Map(this.entities.map((e) => [e.id, e])), c as { l1: string; l2: string }) ?? valueMm)
+      : valueMm;
+    this.setDrivingDimension({ ...rest, value } as SketchConstraint);
     this.conflictIdx.clear(); // indices shifted; the next solve repopulates
     this.overIdx.clear();
     this.refreshActive();

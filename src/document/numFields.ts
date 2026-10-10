@@ -244,18 +244,22 @@ export function coerceForField(field: string, value: number): number {
  *  on as the sign (types.ts), so the value gives the magnitude and the stored
  *  side is kept, whatever the value's own sign. Written as it came, an inward
  *  offset named or given a formula came back outward, and a formula that went
- *  below zero flipped the copy across. Every other dimension takes the value
- *  as it is. */
+ *  below zero flipped the copy across. An angle follows the same rule: its
+ *  sign is which side of l2 the line sits on, not something a user can read
+ *  off "the included angle", so a typed or parameter-driven angle is also
+ *  taken as a magnitude and keeps the constraint's existing sign (field
+ *  report, a 30°-typed angle flipping an already-30° line). Every other
+ *  dimension takes the value as it is. */
 export function dimValueFromParam(c: { type: string; value: number }, v: number): number {
-  if (c.type !== "offset") return v;
+  if (c.type !== "offset" && c.type !== "angle") return v;
   return c.value < 0 ? -Math.abs(v) : Math.abs(v);
 }
 
 /** The other way: the number a parameter holds for dimension constraint `c`
- *  when one is made for it (a dimension being named): an offset's magnitude,
- *  any other dimension's value as it is, so naming moves nothing. */
+ *  when one is made for it (a dimension being named): an offset's or angle's
+ *  magnitude, any other dimension's value as it is, so naming moves nothing. */
 export function paramValueOfDim(c: { type: string; value: number }): number {
-  return c.type === "offset" ? Math.abs(c.value) : c.value;
+  return c.type === "offset" || c.type === "angle" ? Math.abs(c.value) : c.value;
 }
 
 /** Write an evaluated parameter value into its target field. Returns the

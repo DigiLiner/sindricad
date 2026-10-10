@@ -26,6 +26,7 @@ import {
 import { pickEntity } from "./modify";
 import { isOriginGeometry } from "./origin";
 import { distToSeg, signedAngleDeg } from "./geom2d";
+import { dimValueFromParam } from "../document/numFields";
 
 type V = THREE.Vector2;
 const v = (x: number, y: number) => new THREE.Vector2(x, y);
@@ -879,14 +880,23 @@ function lineLine(l1: LineOp, l2: LineOp, forceDriven: boolean): DimResolution {
     const m1 = v((s1.x1 + s1.x2) / 2, (s1.y1 + s1.y2) / 2);
     const m2 = v((s2.x1 + s2.x2) / 2, (s2.y1 + s2.y2) / 2);
     const id1 = l1.opId, id2 = l2.opId;
+    // The stored value's sign is which side of l2 the line sits on, not
+    // something a user can read off "the included angle" — so the field
+    // shows (and make() takes) a MAGNITUDE, and the sign comes from the live
+    // measurement. Typing the magnitude that's already true moves nothing
+    // (field report, beta 0.1.244: 30 typed on an already-30° line flipped
+    // it to -30° because the raw signed value was stored as typed).
+    const measured = signedAngleDeg(s1, s2);
     return buildPlan({
       kind: "angle", field: "angle", label: "∠", fieldKind: "angle",
-      value: signedAngleDeg(s1, s2),
+      value: Math.abs(measured),
       anchors: null, // an angle dim renders as a bare value (see entityDims)
       labelAnchor: mid(m1, m2),
       forceDriven,
       hint: withDriven(t("sketch.dimension.hint.angle"), forceDriven),
-      make: (value, place) => ({ type: "angle", l1: id1, l2: id2, value, ...(place ? { place } : {}) }),
+      make: (value, place) => (
+        { type: "angle", l1: id1, l2: id2, value: dimValueFromParam({ type: "angle", value: measured }, value), ...(place ? { place } : {}) }
+      ),
     });
   }
   // Parallel: an angle dim here would read "0°" and drive nothing. Measure the

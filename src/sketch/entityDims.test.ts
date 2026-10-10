@@ -99,6 +99,26 @@ describe("constraintDims (radius + angle driving dims)", () => {
     expect(dims[0]!.valueMm).toBe(90);
   });
 
+  it("T4: a driving angle dim shows the MAGNITUDE of a negative stored value", () => {
+    // sign is which side of l2 the line sits on, not something read off the
+    // number — see angleSign.test.ts for the field report.
+    const l1: ResolvedEntity = { type: "line", id: "a", x1: 0, y1: 0, x2: 10, y2: 0 };
+    const l2: ResolvedEntity = { type: "line", id: "b", x1: 0, y1: 0, x2: 0, y2: 10 };
+    const cons: SketchConstraint[] = [{ type: "angle", l1: "a", l2: "b", value: -30 }];
+    const dims = constraintDims([l1, l2], cons);
+    expect(dims[0]!.valueMm).toBe(30);
+  });
+
+  it("T4: a reference (driven) angle dim on the same geometry also reads a magnitude", () => {
+    const l1: ResolvedEntity = { type: "line", id: "a", x1: 0, y1: 0, x2: 10, y2: 0 };
+    // b points down-left: the live measurement from a to b is -135°; the
+    // reference dim must still show 135, same as a driving dim would.
+    const l2: ResolvedEntity = { type: "line", id: "b", x1: 0, y1: 0, x2: -10 * Math.SQRT1_2, y2: -10 * Math.SQRT1_2 };
+    const cons: SketchConstraint[] = [{ type: "angle", l1: "a", l2: "b", value: -30, driven: true }];
+    const dims = constraintDims([l1, l2], cons);
+    expect(dims[0]!.valueMm).toBeCloseTo(135, 6);
+  });
+
   it("skips a radius dim whose entity is missing", () => {
     const cons: SketchConstraint[] = [{ type: "radius", e: "gone", value: 3 }];
     expect(constraintDims([], cons)).toEqual([]);

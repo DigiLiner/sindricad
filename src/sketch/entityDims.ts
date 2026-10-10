@@ -902,6 +902,19 @@ export interface ConstraintDim {
   signed?: boolean;
 }
 
+/** The live SIGNED angle between an angle constraint's two line operands —
+ *  the raw `signedAngleDeg(l1, l2)` measurement, by operand id instead of by
+ *  resolved segment. `constraintDims` takes its magnitude for the badge (an
+ *  angle's sign is which side of l2 the line sits on, not something read off
+ *  the geometry); `lockPlacedDim` (sketchMode.ts) commits it as-is, because
+ *  locking needs the actual orientation, not its magnitude. Returns null when
+ *  either operand is gone. */
+export function angleDimMeasure(byId: Map<string, ResolvedEntity>, c: { l1: string; l2: string }): number | null {
+  const s1 = lineOperand(byId, c.l1), s2 = lineOperand(byId, c.l2);
+  if (!s1 || !s2) return null;
+  return signedAngleDeg(s1, s2);
+}
+
 /** annotation + label geometry for the distance constraints (the driving dims
  *  the dimension tool places between two points, or a point and a line).
  *  `place` (when the dimension tool froze a placement) offsets the label from
@@ -954,7 +967,7 @@ export function constraintDims(ents: ResolvedEntity[], constraints: SketchConstr
       const labelPos = m1.clone().add(m2).multiplyScalar(0.5);
       const off = place ? v(place.ox, place.oy) : v(0, 0); // free 2D: a straight offset
       labelPos.add(off);
-      out.push({ cIndex: i, valueMm: driven ? signedAngleDeg(s1, s2) : c.value, labelPos, lines: [], kind: "angle", driven, place: off });
+      out.push({ cIndex: i, valueMm: Math.abs(driven ? (angleDimMeasure(byId, c) ?? c.value) : c.value), labelPos, lines: [], kind: "angle", driven, place: off });
       return;
     }
     // each branch yields the measured pair (a, b); the shared tail draws it.

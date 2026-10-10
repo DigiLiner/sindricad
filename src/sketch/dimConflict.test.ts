@@ -116,6 +116,19 @@ describe("dimConflictMsg", () => {
     expect(msg).not.toContain("mm");
   });
 
+  it("T4: shows a NEGATIVE stored angle's magnitude, not the signed number", () => {
+    // a stored value's sign names which side of l2 the line sits on (the fix
+    // this file's header and numFields.ts describe); a refusal message reports
+    // what the field showed before the edit, which was always the magnitude.
+    const cons: SketchConstraint[] = [
+      { type: "perpendicular", l1: "L1", l2: "L2" },
+      { type: "angle", l1: "L1", l2: "L2", value: -30 },
+    ] as SketchConstraint[];
+    const msg = dimConflictMsg(cons[1]!, new Set([0]), cons, -30);
+    expect(msg).toContain("The dimension was left at 30°.");
+    expect(msg).not.toContain("-30°");
+  });
+
   it("does not convert an angle's previous value when the display unit is inches", () => {
     const cons: SketchConstraint[] = [
       { type: "perpendicular", l1: "L1", l2: "L2" },

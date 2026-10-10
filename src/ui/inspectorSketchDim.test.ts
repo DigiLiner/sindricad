@@ -362,6 +362,25 @@ const offsetDoc = (value = -3): CadDocument => ({
   ] as Feature[],
 });
 
+/** Two lines through the origin, their stored angle whatever `value` is: the
+ *  panel always shows the MAGNITUDE (numFields.ts: an angle, like an offset,
+ *  is a typed magnitude with the side in the stored sign). */
+const angleLines = (value: number): ResolvedEntity[] => [
+  { id: "l1", type: "line", x1: 0, y1: 0, x2: 40, y2: 0 } as ResolvedEntity,
+  { id: "l2", type: "line", x1: 0, y1: 0, x2: 40 * Math.cos((value * Math.PI) / 180), y2: 40 * Math.sin((value * Math.PI) / 180) } as ResolvedEntity,
+];
+const angleOf = (value: number) => ({ type: "angle", id: "ca", l1: "l1", l2: "l2", value }) as SketchConstraint;
+const angleDoc = (value = -30): CadDocument => ({
+  parameters: {},
+  features: [
+    {
+      id: "f1", type: "sketch", plane: "XY", name: "Sketch1",
+      entities: angleLines(value),
+      constraints: [angleOf(value)],
+    },
+  ] as Feature[],
+});
+
 function mountDoc(d: CadDocument) {
   const store = new DocumentStore(backend(), d);
   store.headlessSolve = solveSketchFeature;
@@ -407,6 +426,29 @@ describe("inspector: a sketch dimension says whose it is", () => {
     const { root } = mountDoc(arcDoc());
     expect(input(root, "Arc 1 · Radius mm").value).toBe("50");
     expect(input(root, "Line 1 to Line 2 · Angle°").value).toBe("90");
+  });
+
+  it("T5: shows the MAGNITUDE of a negative stored angle", () => {
+    const { root } = mountDoc(angleDoc(-30));
+    expect(input(root, "Line 1 to Line 2 · Angle°").value).toBe("30");
+  });
+
+  it("T5: typing the shown magnitude back in leaves the stored sign alone", async () => {
+    const { store, root } = mountDoc(angleDoc(-30));
+    const box = input(root, "Line 1 to Line 2 · Angle°");
+    box.value = "30";
+    box.dispatch("change");
+    await settle();
+    expect(constraintOf(store, "ca")?.value).toBe(-30);
+  });
+
+  it("T5: typing a different magnitude keeps the same side", async () => {
+    const { store, root } = mountDoc(angleDoc(-30));
+    const box = input(root, "Line 1 to Line 2 · Angle°");
+    box.value = "45";
+    box.dispatch("change");
+    await settle();
+    expect(constraintOf(store, "ca")?.value).toBe(-45);
   });
 
   it("re-solves the sketch when the arc's radius is typed", async () => {
@@ -551,6 +593,29 @@ describe("inspector: naming a sketch dimension makes it a parameter", () => {
     }
   });
 
+  it("T5: names an angle dimension at the magnitude it shows, keeping its side", async () => {
+    const { store, root } = mountDoc(angleDoc(-30));
+    nameRow(root, "Line 1 to Line 2 · Angle°", "tilt");
+    await settle();
+    expect(store.document.paramDefs?.tilt).toMatchObject({ expr: "30", value: 30 });
+    expect(constraintOf(store, "ca")?.value).toBe(-30);
+  });
+
+  it("T5: keeps an angle's side whatever sign its parameter takes", async () => {
+    for (const side of [1, -1]) {
+      const { store, root } = mountDoc(angleDoc(30 * side));
+      nameRow(root, "Line 1 to Line 2 · Angle°", "tilt");
+      await settle();
+      const seen: number[] = [];
+      for (const v of ["-20", "20", "45"]) {
+        expect(store.setParamExpr("tilt", v)).toBeNull();
+        await settle();
+        seen.push(constraintOf(store, "ca")!.value);
+      }
+      expect(seen).toEqual([20 * side, 20 * side, 45 * side]);
+    }
+  });
+
   it("names a dimension when its name box is left, as Tab or a click elsewhere leaves it", async () => {
     // Enter was the only way in: the name typed and then clicked away from
     // was thrown away, where every other box in the panel commits on leaving.
@@ -657,6 +722,17 @@ describe("inspector: the open sketch's dimensions, live", () => {
     await settle(); // the parameter commit lands
     await o.settle(); // and the session re-solves
     expect((o.s.constraints[0] as { value: number }).value).toBe(-5);
+  });
+
+  it("T6: keeps an angle's side when its parameter changes with the sketch open", async () => {
+    const d = angleDoc(-30);
+    d.paramDefs = { tilt: { expr: "30", value: 30, unit: "deg", target: { kind: "constraint", sketch: "f1", constraint: "ca" } } };
+    const o = openSession(angleLines(-30), [angleOf(-30)], d);
+    expect(labels(o.root)).toContain("tiltLine 1 to Line 2 · Angle°");
+    expect(o.store.setParamExpr("tilt", "40")).toBeNull();
+    await settle(); // the parameter commit lands
+    await o.settle(); // and the session re-solves
+    expect((o.s.constraints[0] as { value: number }).value).toBe(-40);
   });
 
   it("says a name given in this session works in other values once the sketch is finished", async () => {
