@@ -71,6 +71,11 @@ interface DimLabel {
    *  Only the placed dims have a driven form, so this is absent on an entity
    *  badge — there, deleting the constraint is what unlocks it. */
   onUnlock?: () => void;
+  /** Angle dims only: re-read the same angle off the OTHER of its two wedges
+   *  (30 degrees ↔ its supplement, 150) by moving the label across one of the
+   *  two lines it measures, without moving either line (X-angle-supplement).
+   *  Absent on every other dim — a length or distance has no second wedge. */
+  onFlipSide?: () => void;
   /** This badge's value COULD be governed by a driving constraint and isn't —
    *  it is a live measurement of the geometry. Renders muted so a measured ⌀
    *  and a driving ⌀ stop being pixel-identical (report fd7dcc5f). Still
@@ -179,7 +184,7 @@ export class SketchDimensions {
    *  badge — the owner shows those disabled rather than absent, so the menu
    *  reads the same on every dimension. */
   onLabelMenu:
-    | ((e: MouseEvent, actions: { del: (() => void) | null; lock: (() => void) | null; unlock: (() => void) | null }) => void)
+    | ((e: MouseEvent, actions: { del: (() => void) | null; lock: (() => void) | null; unlock: (() => void) | null; flipSide: (() => void) | null }) => void)
     | null = null;
   /** The driving constraint behind an ENTITY dim, resolved by the owner against
    *  the live constraint list. Three answers, because the badge has three
@@ -410,6 +415,7 @@ export class SketchDimensions {
         del: label.onDelete ? () => label.onDelete!() : null,
         lock: label.onLock ? () => label.onLock!() : null,
         unlock: label.onUnlock ? () => label.onUnlock!() : null,
+        flipSide: label.onFlipSide ? () => label.onFlipSide!() : null,
       });
     });
     if (d.driven) {

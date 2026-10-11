@@ -25,7 +25,7 @@ import {
 } from "./entityDims";
 import { pickEntity } from "./modify";
 import { isOriginGeometry } from "./origin";
-import { distToSeg, signedAngleDeg } from "./geom2d";
+import { distToSeg, signedAngleDeg, angleQuadrant } from "./geom2d";
 import { dimValueFromParam } from "../document/numFields";
 
 type V = THREE.Vector2;
@@ -867,10 +867,10 @@ function pairPlan(t1: DimTarget, t2: DimTarget, opts: DimOptions = {}): DimResol
     }
     return p2lPlan(pt, ln, forceDriven, withDriven(t("sketch.dimension.hint.distanceToLine"), forceDriven));
   }
-  return lineLine(a, b, forceDriven);
+  return lineLine(a, b, forceDriven, opts.cursor);
 }
 
-function lineLine(l1: LineOp, l2: LineOp, forceDriven: boolean): DimResolution {
+function lineLine(l1: LineOp, l2: LineOp, forceDriven: boolean, cursor?: THREE.Vector2): DimResolution {
   if (l1.opId === l2.opId) return { error: "same-entity", message: "" };
   const d1 = dirOf(l1.seg), d2 = dirOf(l2.seg);
   if (!d1 || !d2) return degenerate("line");
@@ -880,6 +880,7 @@ function lineLine(l1: LineOp, l2: LineOp, forceDriven: boolean): DimResolution {
     const m1 = v((s1.x1 + s1.x2) / 2, (s1.y1 + s1.y2) / 2);
     const m2 = v((s2.x1 + s2.x2) / 2, (s2.y1 + s2.y2) / 2);
     const id1 = l1.opId, id2 = l2.opId;
+    const labelAnchor = mid(m1, m2);
     // The stored value's sign is which side of l2 the line sits on, not
     // something a user can read off "the included angle" — so the field
     // shows (and make() takes) a MAGNITUDE, and the sign comes from the live
@@ -887,16 +888,38 @@ function lineLine(l1: LineOp, l2: LineOp, forceDriven: boolean): DimResolution {
     // (field report, beta 0.1.244: 30 typed on an already-30° line flipped
     // it to -30° because the raw signed value was stored as typed).
     const measured = signedAngleDeg(s1, s2);
+    // X-angle-supplement: a line has no on-screen direction, so drawing the
+    // same visible pair the other way round can make `measured` read the
+    // angle's SUPPLEMENT instead of the angle itself (a right-to-left line on
+    // the X axis read 150, not 30). Read it off the wedge the label is IN
+    // instead — the live cursor while still picking, or the placed label once
+    // there is one — which is reversal-proof because it depends only on where
+    // the lines are, not which end either was drawn from.
+    const quadrantAt = (p: V) => angleQuadrant(s1, s2, p);
+    const shown = (p: V) => {
+      const q = quadrantAt(p);
+      return q === "direct" ? Math.abs(measured) : 180 - Math.abs(measured);
+    };
     return buildPlan({
       kind: "angle", field: "angle", label: "∠", fieldKind: "angle",
-      value: Math.abs(measured),
+      value: shown(cursor ?? labelAnchor),
       anchors: null, // an angle dim renders as a bare value (see entityDims)
-      labelAnchor: mid(m1, m2),
+      labelAnchor,
       forceDriven,
       hint: withDriven(t("sketch.dimension.hint.angle"), forceDriven),
-      make: (value, place) => (
-        { type: "angle", l1: id1, l2: id2, value: dimValueFromParam({ type: "angle", value: measured }, value), ...(place ? { place } : {}) }
-      ),
+      make: (value, place) => {
+        const labelPos = place ? v(labelAnchor.x + place.ox, labelAnchor.y + place.oy) : (cursor ?? labelAnchor);
+        // Undo the quadrant relabelling before handing the number to the
+        // solver's own (signedAngleDeg) convention, so typing the magnitude
+        // already shown — supplement or not — moves nothing, the same
+        // invariant the comment above protects for the direct case.
+        const asStored = quadrantAt(labelPos) === "direct" ? value : 180 - value;
+        return {
+          type: "angle", l1: id1, l2: id2,
+          value: dimValueFromParam({ type: "angle", value: measured }, asStored),
+          ...(place ? { place } : {}),
+        };
+      },
     });
   }
   // Parallel: an angle dim here would read "0°" and drive nothing. Measure the

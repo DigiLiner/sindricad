@@ -195,3 +195,50 @@ export function signedAngleDeg(
   while (d <= -180) d += 360;
   return d;
 }
+
+/** Fold a degree value into [0,180): an undirected line's own direction and
+ *  its reverse (a+180) read the same here, which is exactly the ambiguity
+ *  angleQuadrant resolves. */
+const foldTo180 = (deg: number) => (((deg % 180) + 180) % 180);
+
+/** Which of the two readings — signedAngleDeg's own magnitude ("direct"), or
+ *  its supplement, 180 minus it ("supplement") — a label at `labelPos` is
+ *  asking for. A line has no on-screen direction: drawing the same visible
+ *  segment the other way round reverses signedAngleDeg's sign and can swap
+ *  which of the two numbers it reports (field report, X-angle-supplement:
+ *  30 degrees against the X axis read as 150). But the two lines cut the
+ *  plane around their crossing into four wedges that alternate "direct",
+ *  "supplement", "direct", "supplement" — a split that depends only on where
+ *  the lines ARE, never on which end of either one was clicked first. Fusion's
+ *  rule: read off whichever wedge the label sits in. Parallel lines never
+ *  reach this (dimensionTool routes them to a distance dim instead). */
+export function angleQuadrant(
+  l1: { x1: number; y1: number; x2: number; y2: number },
+  l2: { x1: number; y1: number; x2: number; y2: number },
+  labelPos: Pt,
+): "direct" | "supplement" {
+  const ix = lineIntersect(v(l1.x1, l1.y1), v(l1.x2, l1.y2), v(l2.x1, l2.y1), v(l2.x2, l2.y2));
+  if (!ix) return "direct"; // parallel (shouldn't happen here): no wedge to pick
+  const a = (Math.atan2(l1.y2 - l1.y1, l1.x2 - l1.x1) * 180) / Math.PI;
+  const bearing = (Math.atan2(labelPos.y - ix.y, labelPos.x - ix.x) * 180) / Math.PI;
+  const m = signedAngleDeg(l1, l2);
+  const g = foldTo180(bearing - a); // the label's direction from l1, undirected
+  // The wedge adjacent to l1 on l2's side has width |m|; its antipode (same
+  // fold) reads the same. Which side of the [0,180) fold that lands on
+  // flips with m's sign, because l2 itself sits at g=m (not -m) for m<0.
+  return (m >= 0 ? g <= Math.abs(m) : g >= 180 - Math.abs(m)) ? "direct" : "supplement";
+}
+
+/** Mirror image of `p` across the infinite line through l1p1/l1p2. The angle
+ *  badge's "Flip side" reuses this on one of its two operand lines to move
+ *  the label into the ADJACENT wedge (never the opposite one, which reads the
+ *  same) — so it reclassifies angleQuadrant without moving `c.value` or any
+ *  geometry; only where the label sits changes. */
+export function reflectAcrossLine(l: { x1: number; y1: number; x2: number; y2: number }, p: Pt): V {
+  const dx = l.x2 - l.x1, dy = l.y2 - l.y1;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12) return v(p.x, p.y);
+  const tt = ((p.x - l.x1) * dx + (p.y - l.y1) * dy) / len2;
+  const footX = l.x1 + dx * tt, footY = l.y1 + dy * tt;
+  return v(2 * footX - p.x, 2 * footY - p.y);
+}

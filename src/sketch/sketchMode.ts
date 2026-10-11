@@ -27,6 +27,7 @@ import {
 } from "./dimensionTool";
 import { pickEntity, pointBeatsCurve, tangencyPoints, crossingPoints, trimSpan, trimWithConstraints, detachEndpoint, detachableEnd, isBreakCut, filletCorner, chamferCorner, cornerJoins, explodeCompound, polygonRingHolds, rotationTie, translationTie, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, followOffsets, followRefusal, breakWithConstraints, joinLines, extendLine, breakLink, attachmentPoints, bodyDragBlocked, bodyDragFrame, fixPinnedIds, pickDragPoint, FIXED_POINT_MSG, PROJECTED_FIXED_MSG, type ExplodeResult, type OffsetResult, type TrimResult } from "./modify";
 import { newEntityId, newConstraintId, isDimConstraint, notePatternId } from "./id";
+import { angleQuadrant, reflectAcrossLine } from "./geom2d";
 import { SketchHistory, cloneSnapshot, type SketchSnapshot } from "./history";
 import { isPlainNumber, parseField, dimValueOk, fmtLength, fieldText, canonicalDecimal, storedDimExpr } from "../ui/units";
 import { splitNameValue, validateName } from "../params/engine";
@@ -623,6 +624,7 @@ export class SketchMode {
       contextMenu(e.clientX, e.clientY, [
         { label: t("sketch.dimension.lock"), disabled: !a.lock, onClick: () => a.lock?.() },
         { label: t("sketch.dimension.unlock"), disabled: !a.unlock, onClick: () => a.unlock?.() },
+        { label: t("sketch.dimension.flipSide"), disabled: !a.flipSide, onClick: () => a.flipSide?.() },
         { label: t("sketch.dimension.delete"), danger: true, disabled: !a.del, shortcut: "Del", onClick: () => a.del?.() },
       ]);
     };
@@ -1629,6 +1631,7 @@ export class SketchMode {
         ...(d.driven
           ? { onLock: () => this.lockPlacedDim(d.cIndex, d.valueMm) }
           : con && isPlacedDim(con) ? { onUnlock: () => this.unlockPlacedDim(d.cIndex) } : {}),
+        ...(con && con.type === "angle" ? { onFlipSide: () => this.flipAngleSide(d.cIndex) } : {}),
         commitExpr: (raw: string) => {
           const c = this.constraints[d.cIndex];
           if (!c || !isDimConstraint(c)) return t("sketch.dimension.error.notEditable");
@@ -1639,6 +1642,49 @@ export class SketchMode {
         },
       };
     });
+  }
+
+  /** The angle half of writeDimValue's job: `val` is the QUADRANT-AWARE
+   *  magnitude the badge showed (entityDims.constraintDims), not the raw
+   *  signedAngleDeg convention dimValueFromParam expects (X-angle-supplement).
+   *  Undo that relabelling using the dim's CURRENT label position — the same
+   *  wedge the badge was just read from — so retyping the value already shown
+   *  moves nothing. Every other dim type passes `val` straight through. */
+  private angleAsStoredValue(c: SketchConstraint & { value: number }, val: number): number {
+    if (c.type !== "angle") return val;
+    const byId = new Map(this.entities.map((e) => [e.id, e]));
+    const s1 = lineOperand(byId, c.l1), s2 = lineOperand(byId, c.l2);
+    if (!s1 || !s2) return val;
+    const place = (c as { place?: PlaceOffset }).place;
+    const labelPos = {
+      x: (s1.x1 + s1.x2 + s2.x1 + s2.x2) / 4 + (place?.ox ?? 0),
+      y: (s1.y1 + s1.y2 + s2.y1 + s2.y2) / 4 + (place?.oy ?? 0),
+    };
+    return angleQuadrant(s1, s2, labelPos) === "direct" ? val : 180 - val;
+  }
+
+  /** "Flip side": re-read an angle dim off its OTHER wedge (30 ↔ its
+   *  supplement, 150) by moving the label across one of its two lines —
+   *  never by touching `c.value`, so neither line moves. Reusing the `place`
+   *  slot angle dims already carry (entityDims.constraintDims always gives
+   *  them one) means this needs no new stored field. */
+  private flipAngleSide(cIndex: number) {
+    const c = this.constraints[cIndex];
+    if (!c || c.type !== "angle") return;
+    const byId = new Map(this.entities.map((e) => [e.id, e]));
+    const s1 = lineOperand(byId, c.l1), s2 = lineOperand(byId, c.l2);
+    if (!s1 || !s2) return;
+    const anchor = {
+      x: (s1.x1 + s1.x2 + s2.x1 + s2.x2) / 4,
+      y: (s1.y1 + s1.y2 + s2.y1 + s2.y2) / 4,
+    };
+    const place = (c as { place?: PlaceOffset }).place;
+    const labelPos = { x: anchor.x + (place?.ox ?? 0), y: anchor.y + (place?.oy ?? 0) };
+    const flipped = reflectAcrossLine(s1, labelPos);
+    const p = clampPlace(flipped.x - anchor.x, flipped.y - anchor.y, this.viewport.pixelWorldSize(this.plane.origin));
+    this.constraints[cIndex] = (p ? { ...c, place: p } : c) as SketchConstraint;
+    this.refreshActive();
+    this.onState?.();
   }
 
   /** Write a typed value onto a dimension's constraint, then re-solve.
@@ -1657,7 +1703,7 @@ export class SketchMode {
    *  unsayable. The editor gate (units.dimValueOk) is what lets the negative
    *  through to this line. */
   private writeDimValue(c: SketchConstraint & { value: number }, val: number) {
-    c.value = dimValueFromParam(c, val);
+    c.value = dimValueFromParam(c, this.angleAsStoredValue(c, val));
     // A single-entity dimension moves that entity. Without this the solve runs
     // free and planegcs splits the correction across everything the dimension
     // can reach: report d8c5265e retyped a circle's diameter and the rectangle

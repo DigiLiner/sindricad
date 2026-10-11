@@ -12,7 +12,7 @@ import { isDriven, dimPlaceOf, projEndSamples } from "../types";
 import { circumcenter, arcCenterRadius } from "./arc";
 import { polygonPoints, rectCorners } from "./region";
 import { splineEndIndices } from "./spline";
-import { paramOnSeg, distToSeg, signedAngleDeg } from "./geom2d";
+import { paramOnSeg, distToSeg, signedAngleDeg, angleQuadrant } from "./geom2d";
 import { isOriginGeometry } from "./origin";
 
 export type { DimField };
@@ -967,7 +967,14 @@ export function constraintDims(ents: ResolvedEntity[], constraints: SketchConstr
       const labelPos = m1.clone().add(m2).multiplyScalar(0.5);
       const off = place ? v(place.ox, place.oy) : v(0, 0); // free 2D: a straight offset
       labelPos.add(off);
-      out.push({ cIndex: i, valueMm: Math.abs(driven ? (angleDimMeasure(byId, c) ?? c.value) : c.value), labelPos, lines: [], kind: "angle", driven, place: off });
+      // X-angle-supplement: the raw signed measurement can read a line's
+      // angle or its 180-degree supplement depending on which end it was
+      // drawn from (see dimensionTool.ts's lineLine, same rule applied here
+      // so a loaded document's badge reads exactly as it did when placed).
+      const base = driven ? (angleDimMeasure(byId, c) ?? c.value) : c.value;
+      const quadrant = angleQuadrant(s1, s2, labelPos);
+      const valueMm = quadrant === "direct" ? Math.abs(base) : 180 - Math.abs(base);
+      out.push({ cIndex: i, valueMm, labelPos, lines: [], kind: "angle", driven, place: off });
       return;
     }
     // each branch yields the measured pair (a, b); the shared tail draws it.

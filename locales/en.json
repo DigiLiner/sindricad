@@ -1727,6 +1727,7 @@
         "unsupported": "A {kind} can't be dimensioned there. Pick a line, an arc, a circle, or a side or corner of a rectangle, polygon or slot."
       },
       "expressionDropped": "Dimension expression \"{expr}\" was dropped: {reason}",
+      "flipSide": "Flip side",
       "fixedEndsNotApplied": "Both ends are fixed reference geometry, so this dimension can only measure — the value you typed was not applied.",
       "geometryGone": "The geometry this dimension referenced is gone — dimension cancelled",
       "hint": {
