@@ -1930,8 +1930,10 @@ export class DocumentStore {
 
   /** Show/hide several bodies in one step (Isolate / Show all): apply every
    *  change, then re-emit ONCE — per-body emits would re-render the whole model
-   *  N times (each emit runs setModel + the flush-seam pass). No-op entries are
-   *  skipped; a call that changes nothing doesn't emit or dirty the document. */
+   *  N times (each emit runs setModel's visibility-only fast path, which also
+   *  re-runs the flush-seam pass so a body shown again gets its own seams
+   *  recomputed — see viewport.ts's setModel). No-op entries are skipped; a
+   *  call that changes nothing doesn't emit or dirty the document. */
   setBodiesVisibility(vis: Map<string, boolean>) {
     let changed = false;
     for (const [id, visible] of vis) {

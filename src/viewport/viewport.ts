@@ -1427,6 +1427,16 @@ export class Viewport {
         }
       }
       if (anyChanged) {
+        // hideFlushSeamsInner only ever HIDES (never un-hides), so re-running
+        // it here is idempotent for everything it already correctly hid — but
+        // it is NOT a no-op: a body that loaded hidden skips its own planar
+        // faces in the candidate scan, so a same-body seam on it is never
+        // computed until it is shown. Without this, showing that body left
+        // its own seam visible forever (field report 8c6ad338). Cheap on a
+        // huge assembly too: FLUSH_SEAM_MAX_EDGES bails before any per-
+        // triangle work, which is exactly the cost this fast path exists to
+        // dodge — see hideFlushSeams's own early return.
+        this.hideFlushSeams();
         for (const d of edgeObjects(this.model)) d.flush();
         // Render-on-demand: flipping `visible` dirties nothing the loop can
         // see. Without this line the eye toggle repaints only because main.ts
@@ -1562,13 +1572,18 @@ export class Viewport {
   /** Set when the pass was skipped for being too big (see FLUSH_SEAM_MAX_EDGES). */
   seamSkipped = false;
 
-  /** Flush-seam hiding (display-only). A contact line between ALIGNED pieces —
-   *  two mating bodies, or glued solids inside one body — reads as a scar
-   *  across a continuous surface. Hide an edge when two DISTINCT coplanar,
-   *  same-orientation planar faces sit on OPPOSITE SIDES of it (the surface
-   *  provably continues across, checked against the actual triangles — so a
-   *  hole rim, whose far side is empty space, can never be swallowed). A real
-   *  step keeps its line: a visible seam now MEANS misalignment. */
+  /** Flush-seam hiding (display-only). A contact line between ALIGNED pieces
+   *  glued inside ONE body reads as a scar across a continuous surface. Hide
+   *  an edge when two DISTINCT coplanar, same-orientation planar faces of the
+   *  SAME BODY sit on OPPOSITE SIDES of it (the surface provably continues
+   *  across, checked against the actual triangles — so a hole rim, whose far
+   *  side is empty space, can never be swallowed). A real step keeps its
+   *  line: a visible seam now MEANS misalignment. Two DIFFERENT bodies never
+   *  have a seam hidden between them, flush or not: they are two objects in
+   *  the user's mental model, and silently erasing the line where they touch
+   *  read as a rendering bug (reports 57dbc91e, 8c6ad338) — a user who wants
+   *  the seamless look can Combine/Join them, which already gets this
+   *  treatment. */
   private hideFlushSeams() {
     const t0 = performance.now();
     this.seamMs = 0;
@@ -1596,14 +1611,13 @@ export class Viewport {
     // normal / plane point / bbox / planarity / triangle list (curved faces
     // never hide a seam). faceId is globally unique across bodies (the wire
     // protocol partitions it per body), so a single Map keyed by faceId still
-    // spans the whole model correctly even though the triangles backing each
-    // entry now live in several different BufferGeometries — this is what lets
-    // a seam between two DIFFERENT mating bodies still hide, not just a seam
-    // within one body's own faces.
+    // spans the whole model correctly, one body per entry — bodyId below is
+    // what later gates the hide decision to same-body pairs only.
     interface FInfo {
       planar: boolean;
       n: THREE.Vector3; p: THREE.Vector3;
       min: THREE.Vector3; max: THREE.Vector3;
+      bodyId: string;
       tris: { body: BodyMesh; t: number }[]; // (owning body, LOCAL triangle index)
     }
     const faces = new Map<number, FInfo>();
@@ -1612,8 +1626,13 @@ export class Viewport {
     for (const body of model.bodies) {
       // A scan has no edges and its one "face" is never planar, so it can never
       // hide a seam, and walking it cost ~105 ms per rebuild on a 1.3M-triangle
-      // scan (measured) for nothing.
-      if (body.meshOnly) continue;
+      // scan (measured) for nothing. A hidden body's faces must never count as
+      // a flush-seam candidate either: with nothing of it on screen, erasing a
+      // neighbour's own edge against it left no way to see why (report
+      // 8c6ad338) — and since hiding is same-body-only below, the only seam a
+      // hidden body could still affect is its own, which is moot while it's
+      // not drawn.
+      if (body.meshOnly || !body.mesh.visible) continue;
       const pos = body.mesh.geometry.getAttribute("position");
       const index = body.mesh.geometry.getIndex()!;
       const ids = body.faceIds;
@@ -1631,7 +1650,7 @@ export class Viewport {
           f = {
             planar: true,
             n: len > 1e-9 ? n.clone().divideScalar(len) : new THREE.Vector3(),
-            p: a.clone(), min: a.clone(), max: a.clone(), tris: [],
+            p: a.clone(), min: a.clone(), max: a.clone(), bodyId: body.id, tris: [],
           };
           faces.set(id, f);
         } else if (len > 1e-9 && f.n.lengthSq() > 0.5 && n.clone().divideScalar(len).dot(f.n) < 0.9998) {
@@ -1723,12 +1742,17 @@ export class Viewport {
       qMinus.copy(m).addScaledVector(s, -EPS);
 
       // the surface continues across iff DISTINCT same-orientation faces own
-      // the two sides (one face owning both = the edge wraps a slot/hole rim)
+      // the two sides (one face owning both = the edge wraps a slot/hole rim).
+      // Same body only (DECIDED): a flush contact between two DIFFERENT
+      // bodies keeps its edge — see this method's doc comment.
       let gPlus: FInfo | null = null;
       let gMinus: FInfo | null = null;
       for (const f of cands) if (contains(f, qPlus)) { gPlus = f; break; }
       for (const f of cands) if (contains(f, qMinus)) { gMinus = f; break; }
-      if (gPlus && gMinus && gPlus !== gMinus && gPlus.n.dot(gMinus.n) > 0.999) {
+      if (
+        gPlus && gMinus && gPlus !== gMinus &&
+        gPlus.bodyId === gMinus.bodyId && gPlus.n.dot(gMinus.n) > 0.999
+      ) {
         line.draw.setHidden(line.slot, true);
       }
     }
