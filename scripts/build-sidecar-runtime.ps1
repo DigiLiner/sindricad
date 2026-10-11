@@ -47,18 +47,34 @@ Get-ChildItem -Path (Join-Path $side "*.py") -Exclude "test_*.py", "spike_*.py" 
 # Data the sidecar reads at import (see the .sh): thread_standards.json sits at the
 # project root, shared with the frontend, and the packaged sidecar reads it from app\.
 Copy-Item -Path (Join-Path $repo "thread_standards.json") -Destination (Join-Path $out "app")
+# selector_tuning.json sits in sidecar\ itself and holds the Norn-sealed scoring
+# constants (TIE_BAND 0.05, ...) that geom_select.py loads over its hardcoded
+# defaults (TIE_BAND 0.15). The loader swallows a missing file with no error, so
+# leaving this out shipped the untuned defaults silently -- nothing crashed.
+Copy-Item -Path (Join-Path $side "selector_tuning.json") -Destination (Join-Path $out "app")
 & $py -m compileall -q (Join-Path $out "app")
 
 # 5. smoke: import the geometry module with the packaged interpreter from app\, the
 #    way the app launches it (see the .sh). A native exit code does not trip
-#    $ErrorActionPreference, so check it by hand.
+#    $ErrorActionPreference, so check it by hand. A missing data file that an
+#    importer swallows (like selector_tuning.json above) would not fail a plain
+#    `import builder`, so also assert the shipped tuning value matches the source
+#    of truth, not a second hardcoded 0.05 in this script.
 $env:PYTHONPATH = Join-Path $out "site-packages"
 Push-Location (Join-Path $out "app")
 & $py -c "import builder"
 $smoke = $LASTEXITCODE
+if ($smoke -eq 0) {
+  & $py -c "import json, geom_select as g
+with open('selector_tuning.json') as f:
+    want = json.load(f)['TIE_BAND']
+assert g.TIE_BAND == want, f'packaged TIE_BAND {g.TIE_BAND} != selector_tuning.json {want}'
+"
+  $smoke = $LASTEXITCODE
+}
 Pop-Location
 Remove-Item Env:PYTHONPATH
 if ($smoke -ne 0) { throw "[runtime] smoke: builder failed to import (exit $smoke)" }
-Write-Host "[runtime] smoke: builder imports"
+Write-Host "[runtime] smoke: builder imports, selector tuning loaded from the packaged file"
 
 Write-Host "[runtime] done: $out"

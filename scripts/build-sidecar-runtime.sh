@@ -66,13 +66,28 @@ done
 # because the frontend imports the same table; the packaged sidecar reads it from
 # app/. Copying only *.py left it out, and 0.1.241's engine could not start at all.
 cp "$REPO/thread_standards.json" "$OUT/app/"
+# selector_tuning.json sits in sidecar/ itself and holds the Norn-sealed scoring
+# constants (TIE_BAND 0.05, ...) that geom_select.py loads over its hardcoded
+# defaults (TIE_BAND 0.15). The loader swallows a missing file with no error, so
+# leaving this out shipped the untuned defaults silently -- nothing crashed.
+cp "$SIDE/selector_tuning.json" "$OUT/app/"
 PYTHONPATH="$OUT/site-packages" "$PY" -m compileall -q "$OUT/app" "$OUT/site-packages" || true
 
 # 5. smoke: import the geometry module with the packaged interpreter from app/, the
 #    way the app launches it, so a file the sidecar needs at import that this script
-#    did not ship fails the build here instead of on every user's machine.
+#    did not ship fails the build here instead of on every user's machine. A missing
+#    data file that an importer swallows (like selector_tuning.json above) would not
+#    fail a plain `import builder`, so also assert the shipped tuning value matches
+#    the source of truth, not a second hardcoded 0.05 in this script.
 (cd "$OUT/app" && PYTHONPATH="$OUT/site-packages" "$PY" -c "import builder")
 echo "[runtime] smoke: builder imports"
+(cd "$OUT/app" && PYTHONPATH="$OUT/site-packages" "$PY" -c "
+import json, geom_select as g
+with open('selector_tuning.json') as f:
+    want = json.load(f)['TIE_BAND']
+assert g.TIE_BAND == want, f'packaged TIE_BAND {g.TIE_BAND} != selector_tuning.json {want}'
+")
+echo "[runtime] smoke: selector tuning loaded from the packaged file"
 
 echo "[runtime] done: $OUT ($(du -sh "$OUT" 2>/dev/null | cut -f1))"
 echo "[runtime] launch: PYTHONPATH=$OUT/site-packages $PY $OUT/app/server.py (cwd=$OUT/app)"
