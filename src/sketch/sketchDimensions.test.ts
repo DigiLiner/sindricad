@@ -177,6 +177,23 @@ describe("4f6649d1: a draggable label defers to a drag, but a click still goes t
     expect(overlapPick).toHaveBeenCalledTimes(1); // nothing to defer to, decided right away
     expect(badge.classList.contains("is-selected")).toBe(true);
   });
+
+  // A pointercancel (pointer capture lost to a system/browser gesture mid-press,
+  // e.g. alt-tab or an OS context menu — common on exactly the press-and-hold
+  // this feature targets) is an ABORTED gesture, not a completed click. Before
+  // the drag deferral existed, the un-moved branch here was an unconditional
+  // early return, so neither pointerup nor pointercancel on an un-moved press
+  // ran any arbitration. Only pointerup — a real release — should now decide
+  // whether the curve underneath claims the click.
+  it("a pointercancel on an un-moved press is a no-op: no curve arbitration, nothing selected", () => {
+    badge.dispatch("pointerdown", press(0));
+    expect(overlapPick).not.toHaveBeenCalled();
+    // real PointerEvents carry `type`, which is how one shared handler (wired
+    // to both "pointerup" and "pointercancel") tells the two apart
+    badge.dispatch("pointercancel", { ...up(), type: "pointercancel" });
+    expect(overlapPick).not.toHaveBeenCalled();
+    expect(badge.classList.contains("is-selected")).toBe(false);
+  });
 });
 // happens." A line's driving length and a circle's driving diameter render
 // through the ENTITY's own badge (constraintDims deliberately skips them), and

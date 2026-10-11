@@ -502,6 +502,13 @@ export class SketchDimensions {
     if (!d) return;
     this.endDrag(d.label, e.pointerId);
     if (!d.moved) {
+      // A pointercancel is an ABORTED gesture (pointer capture lost to a
+      // system/browser gesture mid-press, e.g. alt-tab or an OS context menu —
+      // common on exactly the press-and-hold this feature targets), not a
+      // completed click: it must stay a no-op, as the un-moved branch always
+      // was before the drag deferral below existed. Only a real release
+      // (pointerup) decides whether a curve underneath claims the click.
+      if (e.type === "pointercancel") return;
       // An un-moved release: NOW decide whether a curve underneath claims
       // this click after all — the same arbitration onOverlapPick always
       // did, just no longer decided before the press had a chance to become
