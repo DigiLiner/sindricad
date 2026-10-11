@@ -82,7 +82,7 @@ function makeMode(tool: string, dim: ReturnType<typeof fakeDim>, base?: THREE.Ve
     onState: undefined,
     ...over,
   });
-  return s as unknown as SketchMode & Priv;
+  return s as unknown as Omit<SketchMode, keyof Priv> & Priv;
 }
 
 describe("71b9955e/75d4e294: a draw-time typed value locks on commit", () => {
@@ -92,7 +92,7 @@ describe("71b9955e/75d4e294: a draw-time typed value locks on commit", () => {
     s.centerRectClick(new THREE.Vector2(0, 0)); // centre
     s.centerRectClick(new THREE.Vector2(30, 20)); // corner — ignored, W/H are typed
     expect(s.entities).toHaveLength(1);
-    const rect = s.entities[0];
+    const rect = s.entities[0]!;
     expect(rect).toMatchObject({ type: "rectangle", width: 60, height: 40 });
     expect(governingDimAt(s.constraints, rect, "width")).not.toBe("free");
     expect(governingDimAt(s.constraints, rect, "height")).not.toBe("free");

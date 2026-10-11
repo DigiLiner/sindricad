@@ -134,7 +134,7 @@ describe("retyping an existing placed angle badge is a no-op (sketchMode.writeDi
       refreshActive: () => {},
       onState: undefined,
     });
-    return s as unknown as SketchMode & Priv;
+    return s as unknown as Omit<SketchMode, keyof Priv> & Priv;
   }
 
   it("retyping the shown magnitude (30) reproduces the same stored value", () => {
