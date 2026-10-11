@@ -2248,8 +2248,13 @@ export class ExtrudeTool {
     this.overlay.clearRegionSelection();
     // The Settings preference overrides the MCAD-style auto-hide: set an
     // explicit per-sketch override (same mechanism the eye icon writes to) so
-    // cleanup()'s re-hide below has nothing left to hide.
-    if (!this.editId && getKeepSketchVisibleAfterExtrude() && (feature as Extract<Feature, { type: "extrude" }>).sketch) {
+    // cleanup()'s re-hide below has nothing left to hide. Applies to an EDIT
+    // of an existing extrude too, not just a brand-new one: re-opening an old
+    // extrude (e.g. to tweak its depth) and committing consumes the sketch
+    // again, and cleanup()'s re-hide runs on that path exactly as it does on
+    // create — skipping it here silently re-hid the sketch on every edit,
+    // the one case the preference exists for.
+    if (getKeepSketchVisibleAfterExtrude() && (feature as Extract<Feature, { type: "extrude" }>).sketch) {
       this.store.setSketchVisibility((feature as Extract<Feature, { type: "extrude" }>).sketch, true);
     }
     this.cleanup();

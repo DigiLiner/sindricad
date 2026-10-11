@@ -60,20 +60,36 @@ const { ExtrudeTool, getKeepSketchVisibleAfterExtrude, setKeepSketchVisibleAfter
 const toScreen = (w: THREE.Vector3) => ({ x: 400 + 4 * w.x, y: 300 - 4 * w.z });
 
 /** One sketch (s1, XY) with one profile region, nothing else — a plain
- *  extrude needs no Start/End picks at all. */
-function doc(): CadDocument {
+ *  extrude needs no Start/End picks at all. An optional pre-existing
+ *  `extrude` feature (same sketch, same region) lets a test drive startEdit
+ *  on an already-committed extrude instead of creating a new one. */
+function doc(extrude?: Partial<Feature> & object): CadDocument {
   return {
     features: [
       { id: "s1", type: "sketch", plane: "XY", entities: [{ id: "ra", type: "rectangle", x: -30, y: 0, width: 20, height: 20 }] },
+      ...(extrude
+        ? [
+            {
+              id: "ex1",
+              type: "extrude",
+              sketch: "s1",
+              distance: 10,
+              operation: "new",
+              regions: [[-20, 10, 0]],
+              regionEntities: [["ra"]],
+              ...extrude,
+            } as Feature,
+          ]
+        : []),
     ],
     parameters: {},
   } as unknown as CadDocument;
 }
 
-function harness() {
+function harness(extrude?: Partial<Feature> & object) {
   const body = (globalThis.document as unknown as { body: FakeEl }).body;
   body.children.length = 0;
-  const d = doc();
+  const d = doc(extrude);
   const overlay = new SketchOverlay();
   overlay.update(d);
   const scene = new THREE.Scene();
@@ -139,8 +155,13 @@ function harness() {
     overlay.toggleRegionSelection(overlay.regions.find((wr) => wr.region.entityIds.includes("ra"))!, false);
     tool.start(() => {});
   };
+  // Re-open the pre-existing "ex1" extrude (requires `doc(extrude)` above)
+  // and commit it unchanged — the edit path, as opposed to `create`.
+  const edit = () => {
+    expect(tool.startEdit("ex1", () => {})).toBe(true);
+  };
 
-  return { tool, store, added, visibilityCalls, create, ok };
+  return { tool, store, added, visibilityCalls, create, edit, ok };
 }
 
 describe("keep sketch visible after Extrude (dbfbe70a)", () => {
@@ -171,5 +192,28 @@ describe("keep sketch visible after Extrude (dbfbe70a)", () => {
     expect(getKeepSketchVisibleAfterExtrude()).toBe(true);
     setKeepSketchVisibleAfterExtrude(false);
     expect(getKeepSketchVisibleAfterExtrude()).toBe(false);
+  });
+
+  // Review finding (extrudeTool.ts:2245, `!this.editId` gate): committing an
+  // EDIT of an already-existing extrude never called setSketchVisibility, so
+  // with the preference on, reopening an old extrude to tweak its depth and
+  // pressing OK silently re-hid its sketch again — the exact behaviour the
+  // preference exists to prevent. Scoped to "no prior override": a sketch
+  // already forced visible by a prior create-time commit hid this gap.
+  it("preference on: committing an EDIT of an EXISTING extrude also keeps its sketch visible", () => {
+    setKeepSketchVisibleAfterExtrude(true);
+    const h = harness({ id: "ex1" });
+    h.edit();
+    h.ok();
+    expect(h.added).toHaveLength(1);
+    expect(h.visibilityCalls).toEqual([{ id: "s1", visible: true }]);
+  });
+
+  it("default (preference off): committing an edit does NOT set a visibility override", () => {
+    const h = harness({ id: "ex1" });
+    h.edit();
+    h.ok();
+    expect(h.added).toHaveLength(1);
+    expect(h.visibilityCalls).toEqual([]);
   });
 });
