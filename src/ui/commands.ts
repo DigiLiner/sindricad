@@ -38,6 +38,7 @@ const GLOBAL: Command[] = [
   { id: "persp", label: t("menu.view.cycleProjection"), group: t("menu.view.title"), context: "global" },
   { id: "selmode", label: t("menu.view.toggleSelectMode"), group: t("menu.view.title"), context: "global" },
   { id: "show-all-bodies", label: t("menu.view.showAllBodies"), group: t("menu.view.title"), context: "global", key: "Shift+H" },
+  { id: "toggle-panels", label: t("menu.view.sidePanels"), group: t("menu.view.title"), context: "global" },
   { id: "shortcut-help", label: t("palette.shortcutHelp"), group: t("menu.help.title"), context: "global", key: "?" },
   // pinned ribbon groups (FINISH/PALETTE) live outside the SKETCH const, so the
   // palette must list them explicitly — "Finish Sketch" was unsearchable before

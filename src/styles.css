@@ -1023,6 +1023,20 @@ body {
   min-height: 0;
 }
 
+/* Side panels hidden for more sketch room (View menu toggle, main.ts
+   "toggle-panels"; state is a session-only flag, not persisted). The
+   sketch palette needs no extra rule: it's already absolutely positioned
+   against #viewport's own right edge (see .palette below), so #viewport's
+   grid column widening slides it over automatically. */
+#app.panels-hidden #main {
+  grid-template-columns: 1fr;
+}
+#app.panels-hidden #browser,
+#app.panels-hidden #inspector,
+#app.panels-hidden #prompt {
+  display: none;
+}
+
 #browser,
 #inspector {
   background: var(--panel);

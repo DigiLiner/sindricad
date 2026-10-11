@@ -1218,6 +1218,7 @@
         "faces": "Faces"
       },
       "showAllBodies": "Show All Bodies",
+      "sidePanels": "Side Panels",
       "spaceMouseCamera": "SpaceMouse: Move Camera",
       "spaceMouseObject": "SpaceMouse: Move Object",
       "spaceMouseSettings": "3D Mouse Settings…",

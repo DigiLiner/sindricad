@@ -106,6 +106,7 @@ window.onerror = (message, source, lineno, colno, error) => {
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
 const statusEl = document.getElementById("status")!;
 const contextTab = document.getElementById("context-tab")!;
+const appEl = document.getElementById("app")!;
 
 const geometry = import.meta.env.VITE_GEOM === "rust" ? new TauriGeometry() : new Geometry();
 void geometry.init(); // fetch the per-launch sidecar auth token + open the socket
@@ -557,6 +558,8 @@ const menubar = new Menubar(document.getElementById("menubar")!, [
   {
     label: t("menu.view.title"),
     items: [
+      { label: t("menu.view.sidePanels"), checked: () => !panelsHidden, onClick: () => handleAction("toggle-panels") },
+      { separator: true, label: "" },
       { label: t("menu.view.spaceMouseObject"), checked: () => getSpaceMouseMode() === "object", onClick: () => setSpaceMouseMode("object") },
       { label: t("menu.view.spaceMouseCamera"), checked: () => getSpaceMouseMode() === "camera", onClick: () => setSpaceMouseMode("camera") },
       { separator: true, label: "" },
@@ -783,9 +786,12 @@ const NON_REPEATABLE = new Set([
   "select", // a mode switch, not a command — "Repeat Select" would be nonsense
   "fit", "iso", "top", "front", "right", "persp",
   "selmode", "selmode-faces", "selmode-bodies",
-  "hide-selected", "show-all-bodies",
+  "hide-selected", "show-all-bodies", "toggle-panels",
 ]);
 let lastAction: string | null = null;
+// Side-panel visibility (View > Side Panels): session-only, not persisted —
+// resets to shown on every launch.
+let panelsHidden = false;
 
 const starters = createFeatureStarters({
   store,
@@ -2055,6 +2061,10 @@ function handleAction(action: string) {
       store.setBodiesVisibility(
         new Map((store.buildState.result?.bodies ?? []).map((b) => [b.id, true])),
       );
+      break;
+    case "toggle-panels":
+      panelsHidden = !panelsHidden;
+      appEl.classList.toggle("panels-hidden", panelsHidden);
       break;
     case "shortcut-help":
       toggleShortcutHUD();
