@@ -1095,6 +1095,7 @@
         "vertical": "Vertical distance"
       },
       "label": "{subject} · {dim}",
+      "nameButtonAria": "Name {label}",
       "newSketch": "New sketch",
       "none": "No dimensions in this sketch yet. Dimension something and its value shows here.",
       "origin": "Origin",

@@ -1705,6 +1705,35 @@ button.active {
   color: var(--text);
   font-weight: 600;
 }
+/* An unnamed, editable row (report X-name-discoverable): a visible icon-only
+   button next to what the dimension measures, so naming it is not something
+   you only find by double-clicking and hoping. */
+.param-dim-nameable {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.param-dim-name-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-mute);
+  cursor: pointer;
+}
+.param-dim-name-btn svg {
+  width: 13px;
+  height: 13px;
+  display: block;
+}
+.param-dim-name-btn:hover {
+  background: var(--raised);
+  color: var(--accent);
+}
 .param-row-dim.fx-row label::before {
   content: none;
 }

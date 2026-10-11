@@ -482,6 +482,37 @@ describe("inspector: naming a sketch dimension makes it a parameter", () => {
     expect(labels(root)).toContain("wallRectangle 1 · Width mm");
   });
 
+  // report X-name-discoverable: double-clicking the label named a dimension
+  // but nothing on screen said you could — only a hover-only title. An
+  // unnamed row now also carries a visible icon-only button.
+  it("shows a visible button to name an unnamed dimension, gone once it has one", async () => {
+    const { root } = mount();
+    const lab = labelOf(row(root, "Rectangle 1 · Width mm"));
+    expect(lab.classList.contains("param-dim-nameable")).toBe(true);
+    const btn = lab.children.find((c) => c.tagName === "button");
+    expect(btn, "a visible button, not just the hover-only title").toBeTruthy();
+    expect(btn!.getAttribute("aria-label"), "icon-only control needs its own name").toBeTruthy();
+
+    nameRow(root, "Rectangle 1 · Width mm", "wall");
+    await settle();
+    const namedLab = labelOf(row(root, "wallRectangle 1 · Width mm"));
+    expect(namedLab.classList.contains("param-dim-nameable")).toBe(false);
+    expect(namedLab.children.find((c) => c.tagName === "button")).toBeFalsy();
+  });
+
+  it("names it from the new button, the same as double-clicking the label", async () => {
+    const { store, root } = mount();
+    const lab = labelOf(row(root, "Rectangle 1 · Width mm"));
+    const btn = lab.children.find((c) => c.tagName === "button")!;
+    btn.dispatch("click");
+    const box = lab.children.find((c) => c.tagName === "input");
+    expect(box, "the button opens the same name box the label's dblclick does").toBeTruthy();
+    box!.value = "wall";
+    box!.dispatch("keydown", keyEv("Enter"));
+    await settle();
+    expect(store.document.paramDefs?.wall).toBeTruthy();
+  });
+
   it("drives the geometry once named: changing the parameter resizes the rectangle", async () => {
     const { store, root } = mount();
     nameRow(root, "Rectangle 1 · Width mm", "wall");

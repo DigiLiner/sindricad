@@ -470,6 +470,8 @@ export class Inspector {
       if (!row.driven && !locked) {
         setTitle(lab, "inspector.sketchDim.renameHint");
         lab.addEventListener("dblclick", () => this.beginRename(lab, row, b?.name ?? null, label, src));
+        const nameBtn = lab.querySelector<HTMLElement>("button");
+        nameBtn?.addEventListener("click", () => this.beginRename(lab, row, b?.name ?? null, label, src));
       }
       const point = (on: boolean) => this.onDimHover(src.sketchId, on ? row : null);
       el.addEventListener("mouseenter", () => point(true));
@@ -658,7 +660,12 @@ function numberRow(label: string, mm: number, onChange: (mm: number) => string |
 }
 
 /** A sketch dimension's row: a text row whose label also carries the name of
- *  the parameter the dimension is, when it is one. */
+ *  the parameter the dimension is, when it is one. An unnamed, editable row
+ *  (report X-name-discoverable) gets a visible icon-only button alongside it
+ *  instead of relying on the double-click-the-label affordance alone — that
+ *  one is real but undiscoverable (a hover-only title, nothing on screen
+ *  hints it exists). The button's own click handler is wired in
+ *  renderSketchDims, which is where beginRename already lives. */
 function dimRow(label: string, name: string | null, value: string, commit: (raw: string) => string | null, locked: boolean): HTMLElement {
   const row = textRow(label, value, commit, locked);
   row.className = "param-row param-row-dim";
@@ -669,6 +676,15 @@ function dimRow(label: string, name: string | null, value: string, commit: (raw:
     n.className = "param-dim-name";
     n.textContent = name;
     lab.appendChild(n);
+  } else if (!locked) {
+    lab.classList.add("param-dim-nameable");
+    const nameBtn = document.createElement("button");
+    nameBtn.type = "button";
+    nameBtn.className = "param-dim-name-btn";
+    nameBtn.innerHTML = icon("tag");
+    // icon-only control: the accessible name has to come from the button itself
+    nameBtn.setAttribute("aria-label", t("inspector.sketchDim.nameButtonAria", { label }));
+    lab.appendChild(nameBtn);
   }
   const what = document.createElement("span");
   what.className = "param-dim-what";

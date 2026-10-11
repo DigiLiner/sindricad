@@ -41,6 +41,8 @@ const PATHS = {
   lockDimension: `<line x1="4" y1="3" x2="4" y2="10"/><line x1="20" y1="3" x2="20" y2="10"/><line x1="4" y1="6.5" x2="20" y2="6.5"/><path d="M7 4.5l-3 2 3 2"/><path d="M17 4.5l3 2-3 2"/><rect x="8.5" y="15" width="7" height="6" rx="1"/><path d="M10 15v-1.5a2 2 0 0 1 4 0V15"/>`,
   // Project: a 3D curve above, an arrow projecting it down onto a plane
   project: `<path d="M5 6 Q 12 1 19 6" fill="none"/><line x1="12" y1="7" x2="12" y2="13"/><path d="M9.5 11 L12 14 L14.5 11"/><path d="M3 19l5-4h13l-5 4z"/><path d="M6.5 17.4 Q 12 13.6 17.5 17.4" fill="none" stroke-dasharray="2 1.4"/>`,
+  // a price tag — the "name this dimension" affordance on an unnamed param row
+  tag: `<path d="M3 11.5 L11.5 3 H18 a2 2 0 0 1 2 2 v6.5 L11.5 21 a2 2 0 0 1 -2.8 0 L3 15.3 a2 2 0 0 1 0 -2.8 Z"/><circle cx="15" cy="8" r="1.4" fill="currentColor"/>`,
 
   // inspect
   measure: `<rect x="3" y="9" width="18" height="6" rx="0.5"/><line x1="7" y1="9" x2="7" y2="12"/><line x1="11" y1="9" x2="11" y2="12.5"/><line x1="15" y1="9" x2="15" y2="12"/><line x1="19" y1="9" x2="19" y2="12.5"/>`,
