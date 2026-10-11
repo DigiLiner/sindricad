@@ -1190,6 +1190,32 @@ def test_extrude_noop_guards():
           "flagged + body intact; interacting dirs still build")
 
 
+def test_cut_that_empties_a_body_is_refused():
+    """Field report X-doug-revolve-empty: a cut sized to remove MORE than the
+    no-op guard's small tolerance — not a sliver, the whole body — passed
+    silently with no error and left Body1 at volume 0, invisible and
+    unselectable. The existing no-op guard only catches `removed < eps`
+    (a near-zero cut); a cut that removes everything is the opposite extreme
+    and slipped straight past it, unlike Intersect's sibling guard which
+    already catches its own empty-body case. A whole-feature refusal here
+    must behave like every other boolean guard: flagged, and the body left
+    intact."""
+    _s, base = _box(1, 40, 40, 20)  # body1: z=0..20, vol 32000
+    # a profile covering the WHOLE top face (and then some), cut all the way
+    # through and past the bottom — removes the entire body, not a sliver.
+    top = {"id": "s2", "type": "sketch",
+           "plane": {"origin": [0, 0, 20], "normal": [0, 0, 1], "xdir": [1, 0, 0]},
+           "entities": [{"id": "r", "type": "rectangle", "width": 50, "height": 50, "x": 0, "y": 0}]}
+    ex = {"id": "x", "type": "extrude", "sketch": "s2", "distance": -25,
+          "operation": "cut", "regions": [[0, 0, 20]]}
+    part, err, bodies = rebuild({"parameters": {}, "features": base + [top, ex]})
+    vol = bodies[0]["shape"].volume if bodies and bodies[0].get("shape") else None
+    assert err and err[0]["feature_id"] == "x", f"cut-to-empty should flag a feature error, got {err}"
+    assert "empty" in err[0]["message"], f"message should say the body went empty: {err[0]['message']}"
+    assert vol is not None and abs(vol - 32000) < 1, f"body must be left intact (32000), got {vol}"
+    print("  cut-to-empty guard OK: whole-body cut flagged, body left intact")
+
+
 def test_primitives():
     """Box / Cylinder / Sphere create independent bodies; a cylinder cut into a box
     via Combine makes a hole (the primitive-as-tool-body workflow)."""

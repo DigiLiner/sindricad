@@ -12105,6 +12105,7 @@ def _boolean_into_bodies(bodies, solid, op, new_body, hidden=frozenset(), split_
         # the extrude actually removed material from some body.
         results, removed, measured = [], 0.0, False
         sealed = False
+        emptied = []
         for b in hits:
             before = _try_vol(b["shape"])
             # Void counting is paid ONLY when someone is collecting diagnostics.
@@ -12119,6 +12120,14 @@ def _boolean_into_bodies(bodies, solid, op, new_body, hidden=frozenset(), split_
             if before is not None and after is not None:
                 measured = True
                 removed += max(0.0, before - after)
+                # The OVER-removal case: the cut consumed the whole body, not
+                # just a sliver. The no-op guard below only catches a near-zero
+                # `removed`, the opposite extreme, so a cut sized to clear the
+                # entire body slipped past it silently (field report
+                # X-doug-revolve-empty) while Intersect's sibling guard a few
+                # lines down already catches its own empty-body case.
+                if after < eps(before):
+                    emptied.append(b.get("name") or b.get("id"))
             # The sealed-void backstop. A cut that ADDS a void did not break the
             # surface, it closed a bubble inside the body — the invisible result
             # of GH #52. Detected on the RESULT, so it also catches the ~all
@@ -12141,6 +12150,14 @@ def _boolean_into_bodies(bodies, solid, op, new_body, hidden=frozenset(), split_
                 )
             raise ValueError(f"Cut removed nothing: the {_BOOLEAN_NOUN.get(kind, kind)} "
                              "doesn't reach any body.")
+        if emptied:
+            # Refuse the whole feature, not just the body it happened to empty
+            # first — same all-or-nothing semantics as the no-op guard above.
+            names = ", ".join(emptied)
+            raise ValueError(
+                f"Cut would leave {names} empty — the whole body was removed. "
+                "Did you mean to keep less on each side, or cut a different body?"
+            )
         for b, newshape in results:
             b["shape"] = newshape
         # One entry per FEATURE, not per body: a cut that bridges two bodies and
