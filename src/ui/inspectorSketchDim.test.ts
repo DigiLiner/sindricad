@@ -786,6 +786,22 @@ describe("inspector: the open sketch's dimensions, live", () => {
     expect(paramRows(o.root).some((r) => r.classList.contains("param-row-linked"))).toBe(false);
   });
 
+  it("marks a compound shape's row when the click lands on one of its SIDES, not its bare id (report 38381a48)", () => {
+    // A rectangle (like a polygon or slot) is a compound shape: clicking its
+    // outline resolves to a side key (`r1~2`), never the bare id `r1` that
+    // its dimension rows carry — markSelectedRows must normalize through the
+    // selection's owner, not compare keys verbatim.
+    const o = openSession([rect()]);
+    Object.assign(o.s, {
+      refreshActive: () => (o.s as unknown as { activeCurves(d: unknown[]): unknown }).activeCurves([]),
+      viewport: { ...(o.s as unknown as { viewport: object }).viewport, pixelWorldSize: () => 0.1 },
+    });
+    o.click(45, 44); // on the rectangle's top edge, away from its corners
+    expect(o.sm.selectedIds).toEqual(new Set(["r1~2"])); // confirms the click DID yield a side key
+    const marked = paramRows(o.root).filter((r) => r.classList.contains("param-row-linked")).map((r) => text(labelOf(r)));
+    expect(marked).toEqual(["Rectangle 1 · Width mm", "Rectangle 1 · Height mm"]);
+  });
+
   it("applies a number typed into an arc's diameter label on the canvas", () => {
     // The label showed the arc's diameter and took the edit, but its commit
     // wrote only the placed dimensions, which an arc's diameter is not.

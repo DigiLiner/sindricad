@@ -12,6 +12,7 @@ import { getUnit, onUnitChange, round, fieldText, isPlainNumber, parseField, fmt
 import { validatedInput, keystrokeGuard } from "./liveInputs";
 import { isImeComposing } from "./focus";
 import { resolveRealEntities } from "../sketch/resolve";
+import { selOwners } from "../sketch/selection";
 import { dimRowLabel, sketchDimRows, type SketchDimRow } from "../sketch/dimRows";
 import { isNumericLiteral } from "../params/parse";
 import { FEATURE_NUM_FIELDS as NUM_FIELDS, hasUpToTarget, isHelixSweep } from "../document/numFields";
@@ -156,11 +157,17 @@ export class Inspector {
     first?.scrollIntoView({ block: "nearest" });
   }
 
-  /** Mark the rows whose geometry is in `sel`; returns the first marked. */
+  /** Mark the rows whose geometry is in `sel`; returns the first marked. A
+   *  selection key can be a whole entity, one of its points (`e3@4`) or one
+   *  side of a compound shape (`e3~2`), but row.entities only ever holds bare
+   *  entity ids, so the selection is normalized to its owners first (GH
+   *  report 38381a48: a polygon's offset-copy side never highlighted its
+   *  row). */
   private markSelectedRows(sel: ReadonlySet<string>): HTMLElement | null {
+    const owners = selOwners(sel);
     let first: HTMLElement | null = null;
     for (const { row, el } of this.dimRowEls) {
-      const on = row.entities.some((id) => sel.has(id));
+      const on = row.entities.some((id) => owners.has(id));
       el.classList.toggle("param-row-linked", on);
       if (on) first ??= el;
     }
