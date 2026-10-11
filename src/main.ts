@@ -1808,6 +1808,15 @@ function handleAction(action: string) {
     return;
   }
   if (action === "palette") return void palette.setVisible(true);
+  // View > Side Panels (report 3d04e930) is a VIEW state, not a 3D modeling
+  // command — the whole point is more sketch ROOM while sketching, so it must
+  // not finish the active sketch as a side effect the way falling through to
+  // the generic switch below would. Same reasoning as undo/redo just below.
+  if (action === "toggle-panels") {
+    panelsHidden = !panelsHidden;
+    appEl.classList.toggle("panels-hidden", panelsHidden);
+    return;
+  }
   // Undo/redo must be handled BEFORE the finish-the-sketch line below. They are
   // not 3D modeling commands: letting Ctrl+Z fall through would commit the sketch
   // and THEN undo it as a whole — which is the exact bug in-sketch undo exists to
@@ -2061,10 +2070,6 @@ function handleAction(action: string) {
       store.setBodiesVisibility(
         new Map((store.buildState.result?.bodies ?? []).map((b) => [b.id, true])),
       );
-      break;
-    case "toggle-panels":
-      panelsHidden = !panelsHidden;
-      appEl.classList.toggle("panels-hidden", panelsHidden);
       break;
     case "shortcut-help":
       toggleShortcutHUD();
