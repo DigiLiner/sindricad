@@ -216,3 +216,39 @@ describe("a tangent's badge sits where the two curves touch (34bede7e)", () => {
     expectAt(at(ents, { type: "tangent2", a: "c1", b: "c2" }), 0, 0);
   });
 });
+
+// Report 003a3494 (Paul Crabb): "When I use the 'equal' constraint between 2
+// arcs, only one arc has an '=' symbol, same with the parallel constraint -
+// is this intentional?" parallel/perpendicular/equal/equalRadius are
+// two-operand and symmetric, so Fusion parity draws the matching badge on
+// BOTH operands, not just the first.
+describe("003a3494: a badge on EACH operand of a symmetric two-operand constraint", () => {
+  const a: ResolvedEntity = { type: "line", id: "a", x1: 0, y1: 0, x2: 10, y2: 0 };
+  const b: ResolvedEntity = { type: "line", id: "b", x1: 0, y1: 5, x2: 20, y2: 5 };
+
+  it("parallel", () => {
+    const g = constraintGlyphs([a, b], [{ type: "parallel", l1: "a", l2: "b" }]);
+    expect(g.map((x) => x.label)).toEqual(["∥", "∥"]);
+    expect(g[0]!.pos.x).toBeCloseTo(5); // a's midpoint
+    expect(g[1]!.pos.x).toBeCloseTo(10); // b's midpoint
+  });
+
+  it("perpendicular", () => {
+    const g = constraintGlyphs([a, b], [{ type: "perpendicular", l1: "a", l2: "b" }]);
+    expect(g.map((x) => x.label)).toEqual(["⊥", "⊥"]);
+  });
+
+  it("equal", () => {
+    const g = constraintGlyphs([a, b], [{ type: "equal", l1: "a", l2: "b" }]);
+    expect(g.map((x) => x.label)).toEqual(["=", "="]);
+  });
+
+  it("equalRadius, on both arcs", () => {
+    const arc1: ResolvedEntity = { type: "arc", id: "r1", x1: 0, y1: 0, x2: 10, y2: 0, mx: 5, my: 5 };
+    const arc2: ResolvedEntity = { type: "arc", id: "r2", x1: 20, y1: 0, x2: 30, y2: 0, mx: 25, my: 5 };
+    const g = constraintGlyphs([arc1, arc2], [{ type: "equalRadius", a: "r1", b: "r2" }]);
+    expect(g.map((x) => x.label)).toEqual(["=", "="]);
+    expect(g[0]!.pos.x).toBeCloseTo(5);
+    expect(g[1]!.pos.x).toBeCloseTo(25);
+  });
+});

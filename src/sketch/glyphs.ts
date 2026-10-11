@@ -40,6 +40,37 @@ export function diagnosisOf(i: number, conflict: Set<number>, over: Set<number>)
   return conflict.has(i) ? "conflict" : over.has(i) ? "over" : null;
 }
 
+/** One entry per on-canvas badge symbol constraintGlyphs() below can draw
+ *  (the `pending` flag just mutes one of these, it is not a new kind), for the
+ *  Sketch Palette's legend. Feature request X-badge-legend: a user read the
+ *  pointOn badge (∈) as a Euro sign, and never found the hover tooltip that
+ *  names it, because that tooltip only exists on a badge already on the
+ *  canvas, i.e. after the constraint it would explain has already been
+ *  applied. `nameKey` reuses the constraint's own name key — the same word
+ *  its tool and its own right-click delete menu already use — so the legend
+ *  can never say something different from the rest of the app. Kept beside
+ *  constraintGlyphs() itself: a new case added there without a row added here
+ *  is immediately visible as the one switch case with no neighbour below. */
+export interface GlyphLegendEntry {
+  label: string;
+  nameKey: string;
+}
+export const GLYPH_LEGEND: GlyphLegendEntry[] = [
+  { label: "H", nameKey: "sketch.constraint.horizontal" },
+  { label: "V", nameKey: "sketch.constraint.vertical" },
+  { label: "∥", nameKey: "sketch.constraint.parallel" },
+  { label: "⊥", nameKey: "sketch.constraint.perpendicular" },
+  { label: "—", nameKey: "sketch.constraint.collinear" },
+  { label: "=", nameKey: "sketch.constraint.equal" },
+  { label: "T", nameKey: "sketch.constraint.tangent" },
+  { label: "⊙", nameKey: "sketch.constraint.coincident" },
+  { label: "◎", nameKey: "sketch.constraint.concentric" },
+  { label: "M", nameKey: "sketch.constraint.midpoint" },
+  { label: "∈", nameKey: "sketch.constraint.pointOn" },
+  { label: "⋈", nameKey: "sketch.constraint.symmetric" },
+  { label: "⚓", nameKey: "sketch.constraint.fix" },
+];
+
 /** representative point of an entity for glyph placement */
 function entCenter(e: ResolvedEntity): THREE.Vector2 {
   switch (e.type) {
@@ -138,11 +169,14 @@ export function constraintGlyphs(ents: ResolvedEntity[], constraints: SketchCons
     switch (c.type) {
       case "horizontal": push(i, "H", center(c.line)); break;
       case "vertical": push(i, "V", center(c.line)); break;
-      case "parallel": push(i, "∥", center(c.l1)); break;
-      case "perpendicular": push(i, "⊥", center(c.l1)); break;
+      // One badge per operand, not just the first: report 003a3494, "only one
+      // of the two lines shows the parallel mark" (equal/perpendicular share
+      // the same two-operand shape and the same gap).
+      case "parallel": push(i, "∥", center(c.l1)); push(i, "∥", center(c.l2)); break;
+      case "perpendicular": push(i, "⊥", center(c.l1)); push(i, "⊥", center(c.l2)); break;
       case "collinear": push(i, "—", mid2(center(c.l1), center(c.l2))); break;
-      case "equal": push(i, "=", center(c.l1)); break;
-      case "equalRadius": push(i, "=", center(c.a)); break;
+      case "equal": push(i, "=", center(c.l1)); push(i, "=", center(c.l2)); break;
+      case "equalRadius": push(i, "=", center(c.a)); push(i, "=", center(c.b)); break;
       // At the touching point; the old halfway spot only when there is none
       // to find (an operand that does not resolve, two concentric rounds).
       case "tangent": push(i, "T", tangencyPoint(byId, c.line, c.circle) ?? mid2(center(c.line), center(c.circle))); break;
