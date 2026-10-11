@@ -138,6 +138,10 @@ pub struct SidecarDeath {
     /// "port_in_use", "startup_failure" or "crash"
     pub kind: &'static str,
     pub cause: String,
+    /// A translation key the frontend maps to an extra, translated sentence
+    /// (`cause` itself stays the raw, untranslated diagnostic a triager needs
+    /// verbatim). Currently only ever `Some("dllInit")`, see `dll_init_hint`.
+    pub hint: Option<&'static str>,
 }
 
 /// Turn an exit status into something the frontend can phrase.
@@ -165,17 +169,44 @@ fn classify_exit(
         return SidecarDeath {
             kind: "port_in_use",
             cause: fatal.unwrap_or_else(|| "the geometry engine could not open its port".into()),
+            hint: None,
         };
     }
     if !ready {
-        return SidecarDeath {
-            kind: "startup_failure",
-            cause: fatal
-                .or(last_err)
-                .unwrap_or_else(|| describe_exit(status)),
-        };
+        let cause = fatal.or(last_err).unwrap_or_else(|| describe_exit(status));
+        // Windows-only: this error shape (a DLL present but failing to
+        // initialise) does not occur on the other platforms, so only apply
+        // the hint there, even though the text match itself is plain and
+        // testable everywhere (see `is_dll_init_failure` below).
+        #[cfg(windows)]
+        let hint = is_dll_init_failure(&cause).then_some("dllInit");
+        #[cfg(not(windows))]
+        let hint = None;
+        return SidecarDeath { kind: "startup_failure", cause, hint };
     }
-    SidecarDeath { kind: "crash", cause: describe_exit(status) }
+    SidecarDeath { kind: "crash", cause: describe_exit(status), hint: None }
+}
+
+/// Whether a startup diagnostic names a DLL that is present but fails to
+/// initialise: `ImportError: DLL load failed while importing ...` or the raw
+/// `STATUS_DLL_INIT_FAILED` text — a materially different condition from "the
+/// specified module could not be found" (Windows only raises it once a DLL
+/// has been located and mapped). Field report 14928c4f: numpy's
+/// `_multiarray_umath` failed this way on Windows even though
+/// python-build-standalone already ships vcruntime140.dll/vcruntime140_1.dll
+/// next to the interpreter (see build-sidecar-runtime.ps1) and numpy's own
+/// wheel needs exactly those two — so this is not a missing-file packaging gap
+/// we can fix. The likelier causes (antivirus/EDR flagging OpenBLAS's JIT'd
+/// pages, or a damaged/partial install) are both things the user can act on,
+/// unlike a bare "it crashed".
+///
+/// Only called from the `#[cfg(windows)]` arm of `classify_exit` above, but kept
+/// compiled (and tested) on every platform so the text match itself — the part
+/// that is not actually OS-specific — still gets caught by a Linux/macOS CI run.
+#[cfg(any(test, windows))]
+fn is_dll_init_failure(cause: &str) -> bool {
+    let lower = cause.to_lowercase();
+    lower.contains("dll load failed") || lower.contains("dll init") || lower.contains("dll_init")
 }
 
 /// How the sidecar died, in a form a human can act on.
@@ -813,6 +844,60 @@ mod tests {
         let port = std::process::ExitStatus::from_raw(EXIT_PORT_IN_USE << 8);
         let d = classify_exit(&port, Some("cannot open port 8765 on 127.0.0.1: …".into()), false, None);
         assert_eq!(d.kind, "port_in_use");
+    }
+
+    /// 14928c4f (Windows, 0.1.232): numpy's `_multiarray_umath` died at import
+    /// with `DLL load failed while importing ...` / STATUS_DLL_INIT_FAILED.
+    /// We do not claim a packaging fix (the runtime already ships the DLLs
+    /// numpy needs, see build-sidecar-runtime.ps1) — only that the startup
+    /// error names the likely cause instead of a bare traceback line.
+    #[test]
+    fn dll_init_failure_text_is_recognised() {
+        assert!(is_dll_init_failure(
+            "ImportError: DLL load failed while importing _multiarray_umath: \
+             The specified procedure could not be found."
+        ));
+        assert!(is_dll_init_failure("STATUS_DLL_INIT_FAILED"));
+        assert!(is_dll_init_failure("dll init routine failed")); // case-insensitive
+        assert!(!is_dll_init_failure("OpenBLAS error: Memory allocation still failed"));
+        assert!(!is_dll_init_failure("exit code 1"));
+    }
+
+    /// The hint is Windows-only: this error shape (a DLL present but failing
+    /// to initialise) does not occur on the other platforms, so `classify_exit`
+    /// must only set it there even though the text match works everywhere.
+    #[cfg(unix)]
+    #[test]
+    fn classify_exit_never_sets_the_dll_hint_off_windows() {
+        use std::os::unix::process::ExitStatusExt;
+        let one = std::process::ExitStatus::from_raw(1 << 8);
+        let d = classify_exit(
+            &one,
+            None,
+            false,
+            Some("ImportError: DLL load failed while importing _multiarray_umath".into()),
+        );
+        assert_eq!(d.kind, "startup_failure");
+        assert_eq!(d.hint, None, "the hint is Windows-only, this build is not Windows");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn classify_exit_sets_the_dll_hint_on_a_windows_dll_init_failure() {
+        use std::os::windows::process::ExitStatusExt;
+        let one = std::process::ExitStatus::from_raw(1);
+        let d = classify_exit(
+            &one,
+            None,
+            false,
+            Some("ImportError: DLL load failed while importing _multiarray_umath".into()),
+        );
+        assert_eq!(d.kind, "startup_failure");
+        assert_eq!(d.hint, Some("dllInit"));
+
+        // an ordinary startup failure (no DLL text) still gets no hint
+        let d = classify_exit(&one, None, false, Some("exit code 1".into()));
+        assert_eq!(d.hint, None);
     }
 
     /// Fresh, empty scratch dir under the OS temp dir, wiped on both entry and Drop

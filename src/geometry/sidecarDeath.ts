@@ -11,10 +11,14 @@
 import { t, tEn } from "../i18n";
 
 /** The `sidecar:died` payload. `kind` is "startup_failure", "port_in_use" or
- *  "crash"; anything unrecognised is treated as a crash. */
+ *  "crash"; anything unrecognised is treated as a crash. `hint`, when present,
+ *  names an extra translated sentence to append (currently only "dllInit",
+ *  see sidecar.rs's `is_dll_init_failure` — a DLL present but failing to
+ *  initialise at startup, field report 14928c4f, Windows-only). */
 export interface SidecarDeathPayload {
   kind?: string;
   cause?: string;
+  hint?: string;
 }
 
 /** The one line every call refused after the halt carries: into the status bar,
@@ -40,8 +44,10 @@ export function sidecarDeathMessage(p: SidecarDeathPayload | null | undefined): 
   switch (p?.kind) {
     case "port_in_use":
       return t("engine.death.portInUse", { cause: cause || t("engine.death.portInUseDefault") });
-    case "startup_failure":
-      return t("engine.death.startupFailure", { detail, reportHere: t("engine.reportHere") });
+    case "startup_failure": {
+      const hint = p?.hint === "dllInit" ? ` ${t("engine.death.dllInitHint")}` : "";
+      return t("engine.death.startupFailure", { detail, reportHere: t("engine.reportHere") }) + hint;
+    }
     default:
       return t("engine.death.crash", { detail });
   }

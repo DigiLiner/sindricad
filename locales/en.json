@@ -232,6 +232,7 @@
   "engine": {
     "death": {
       "crash": "The geometry engine crashed{detail}. Save your work, then restart SindriCAD.",
+      "dllInitHint": "This usually means antivirus software blocked a file, or the install is damaged. Try reinstalling, and if it happens again, tell me which antivirus you use.",
       "portInUse": "SindriCAD could not start its geometry engine: {cause}. Another copy of SindriCAD may still be running. Close it and open SindriCAD again.",
       "portInUseDefault": "its port is already in use",
       "startupFailure": "The geometry engine could not start{detail}. Modelling is unavailable until you restart SindriCAD. If it happens again, {reportHere}."
