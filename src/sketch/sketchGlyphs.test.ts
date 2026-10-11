@@ -285,14 +285,78 @@ describe("badges on the same spot sit side by side", () => {
     expect([coinc?.textContent, tan?.textContent, h?.textContent, fix?.textContent]).toEqual(["⊙", "T", "H", "⚓"]);
     const near = (x: number, y: number) => ({ x: expect.closeTo(x, 6), y: expect.closeTo(y, 6) });
     const joint = { x: 100 + 100 * 3, y: 400 };
-    // Coincident sits ON the point it marks (9e4c9bb5: nudged clear of it on
-    // screen so the point still shows through), so it no longer shares the
-    // tangent's and fix's "same spot" screen position at all.
+    // Coincident and fix both sit ON the point they mark (9e4c9bb5 nudged
+    // coincident clear of it; the fix badge has the identical problem — see
+    // sketchMode.ts's labelOverlapPoint doc comment — and gets the same nudge),
+    // so they land on the SAME nudged spot and then sit side by side there,
+    // sharing it with neither the tangent's nor the horizontal's own position.
     expect(drawnAt(coinc!)).toEqual(near(joint.x + 12, joint.y - 12));
-    // Tangent and fix both land exactly on the joint: the first drawn keeps it,
-    // the second sits beside it (a badge is at least 16 px across).
+    expect(drawnAt(fix!)).toEqual(near(joint.x + 12 + 20, joint.y - 12));
+    // Tangent is unnudged and lands exactly on the joint.
     expect(drawnAt(tan!)).toEqual(near(joint.x, joint.y));
     expect(drawnAt(h!)).toEqual(near(100 + 50 * 3, 400));
-    expect(drawnAt(fix!)).toEqual(near(joint.x + 20, joint.y));
+  });
+});
+
+// The on-point nudge (9e4c9bb5, ON_POINT_LABELS above) pushes a coincident or
+// pointOn badge a few screen pixels clear of the point it marks, so the point
+// still shows through. But a badge whose REAL anchor is comfortably on screen,
+// near an edge, can be pushed past that edge by the nudge alone and vanish —
+// losing the badge (and its on-canvas delete affordance) for a constraint the
+// user can see fine, which is worse than the overlap the nudge was fixing.
+describe("the on-point nudge must not cull a badge whose real anchor is on screen", () => {
+  /** screen px of a plane point: 3 px per mm, y up, origin at (100, 400), in a
+   *  900x700 overlay — the same convention as "badges on the same spot". */
+  const projecting = {
+    camera: new THREE.PerspectiveCamera(),
+    projectToOverlay: (w: THREE.Vector3) => ({ x: 100 + w.x * 3, y: 400 - w.y * 3, width: 900, height: 700 }),
+  } as unknown as Viewport;
+  // chosen so the screen anchor lands at (400, 5): 5px from the top edge,
+  // clearly on screen, but only 5px of headroom before the -12px y-nudge
+  // (ON_POINT_OFFSET_PX) carries it past y=0.
+  const wx = 100, wy = (400 - 5) / 3;
+  const ents: ResolvedEntity[] = [
+    { type: "line", id: "h", x1: wx - 20, y1: wy, x2: wx + 20, y2: wy },
+    { type: "line", id: "b", x1: wx, y1: wy, x2: wx + 40, y2: wy - 40 },
+  ];
+  const cons: SketchConstraint[] = [
+    { type: "horizontal", line: "h" },
+    { type: "coincident", e1: "b", p1: 0, e2: "b", p2: 1 },
+  ];
+
+  it("an unnudged badge at the same on-screen spot is not culled, but the coincident badge is", () => {
+    body().innerHTML = "";
+    const glyphs = new SketchGlyphs(projecting);
+    glyphs.show(constraintGlyphs(ents, cons), plane, new Set(), new Set());
+    (glyphs as unknown as { loop: () => void }).loop();
+    const [h, coinc] = byClass(body(), "sketch-glyph");
+    expect([h?.textContent, coinc?.textContent]).toEqual(["H", "⊙"]);
+    expect(h!.style.visibility).not.toBe("hidden");
+    expect(coinc!.style.visibility).not.toBe("hidden");
+  });
+});
+
+// Finding: the fix (⚓) badge was left out of ON_POINT_LABELS, so it rendered
+// exactly on the point it marks — reproducing 9e4c9bb5's "badge covers the
+// point I am trying to target" for fix instead of coincident.
+describe("a fix badge is nudged clear of its point too, the same as coincident", () => {
+  const projecting = {
+    camera: new THREE.PerspectiveCamera(),
+    projectToOverlay: (w: THREE.Vector3) => ({ x: 100 + w.x * 3, y: 400 - w.y * 3, width: 900, height: 700 }),
+  } as unknown as Viewport;
+  const ents: ResolvedEntity[] = [{ type: "line", id: "a", x1: 0, y1: 0, x2: 40, y2: 0 }];
+  const cons: SketchConstraint[] = [{ type: "fix", e: "a", p: 0 }];
+
+  it("does not land on the exact screen spot of the point it fixes", () => {
+    body().innerHTML = "";
+    const glyphs = new SketchGlyphs(projecting);
+    glyphs.show(constraintGlyphs(ents, cons), plane, new Set(), new Set());
+    (glyphs as unknown as { loop: () => void }).loop();
+    const [fix] = byClass(body(), "sketch-glyph");
+    expect(fix?.textContent).toBe("⚓");
+    const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(fix!.style.transform ?? "");
+    const drawn = { x: Number(m![1]), y: Number(m![2]) };
+    const point = { x: 100, y: 400 }; // (a, p=0) is the entity's first endpoint, at plane (0,0)
+    expect(drawn).not.toEqual({ x: point.x, y: point.y });
   });
 });

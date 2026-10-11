@@ -20,14 +20,16 @@ interface GlyphEl {
 }
 
 /** Badges anchored exactly on the point they mark (glyphs.ts's `refPos`), rather
- *  than on a curve's centre: Coincident and Point-On. Report 9e4c9bb5: "the
+ *  than on a curve's centre: Coincident, Point-On, and Fix. Report 9e4c9bb5: "the
  *  coincident symbol covers the point I am trying to target" — the 16px,
  *  90%-opaque badge sits pixel-for-pixel on the one spot a FOLLOW-UP pick needs
- *  to land on. Nudged a few screen pixels clear of it below, in loop(), so the
+ *  to land on. Fix (⚓) is drawn on a point the same way and has the identical
+ *  problem (see sketchMode.ts's labelOverlapPoint doc comment), so it gets the
+ *  same nudge. Nudged a few screen pixels clear of it below, in loop(), so the
  *  point still shows through; `constraintGlyphs()`'s own `pos` stays exactly on
  *  the point (right-click-to-delete, and `follow()`'s drag tracking, both still
  *  key off the real constraint geometry, not this display-only nudge). */
-const ON_POINT_LABELS = new Set(["⊙", "∈"]);
+const ON_POINT_LABELS = new Set(["⊙", "∈", "⚓"]);
 /** screen pixels, clear of the 16px-square badge (styles.css .sketch-glyph) */
 const ON_POINT_OFFSET_PX = 12;
 
@@ -200,16 +202,20 @@ export class SketchGlyphs {
     for (const g of this.items) {
       this.plane.to3D(g.pos.x, g.pos.y, this.scratch);
       const p = this.viewport.projectToOverlay(this.scratch);
-      if (ON_POINT_LABELS.has(g.label)) {
-        p.x += ON_POINT_OFFSET_PX;
-        p.y -= ON_POINT_OFFSET_PX;
-      }
       // Same rule as SketchDimensions: a glyph whose anchor has left the canvas
       // is not drawn at all. Clipping alone would leave half a badge that still
       // deletes a constraint when the click was aimed at the panel behind it.
+      // Checked on the REAL anchor, before the on-point nudge below: the nudge
+      // is a display-only few pixels, and an anchor that is comfortably on
+      // screen must not be culled just because the nudge alone carries the
+      // nudged position past an edge.
       if (outsideRect(p)) {
         g.el.style.visibility = "hidden";
         continue;
+      }
+      if (ON_POINT_LABELS.has(g.label)) {
+        p.x += ON_POINT_OFFSET_PX;
+        p.y -= ON_POINT_OFFSET_PX;
       }
       const at = `${Math.round(p.x)},${Math.round(p.y)}`;
       const n = taken.get(at) ?? 0;
