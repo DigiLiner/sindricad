@@ -286,15 +286,22 @@ describe("badges on the same spot sit side by side", () => {
     expect([coinc?.textContent, tan?.textContent, h?.textContent, fix?.textContent]).toEqual(["⊙", "T", "H", "⚓"]);
     const near = (x: number, y: number) => ({ x: expect.closeTo(x, 6), y: expect.closeTo(y, 6) });
     const joint = { x: 100 + 100 * 3, y: 400 };
-    // Coincident and fix both sit ON the point they mark (9e4c9bb5 nudged
-    // coincident clear of it; the fix badge has the identical problem — see
-    // sketchMode.ts's labelOverlapPoint doc comment — and gets the same nudge),
-    // so they land on the SAME nudged spot and then sit side by side there,
-    // sharing it with neither the tangent's nor the horizontal's own position.
+    // The coincident, the tangent and the fix all mark the joint, so they form
+    // ONE group (grouped by the real anchor, before any nudge) laid out in a
+    // row just above the joint, alternating right and left: none covers the
+    // point, none covers another. Before, the tangent stayed on the joint while
+    // the coincident was nudged 12 px off it, and the two 16 px badges
+    // overlapped (sketch_palette_e2e "...and not on top of the ⊙").
     expect(drawnAt(coinc!)).toEqual(near(joint.x + 12, joint.y - 12));
+    expect(drawnAt(tan!)).toEqual(near(joint.x - 12, joint.y - 12));
     expect(drawnAt(fix!)).toEqual(near(joint.x + 12 + 20, joint.y - 12));
-    // Tangent is unnudged and lands exactly on the joint.
-    expect(drawnAt(tan!)).toEqual(near(joint.x, joint.y));
+    const box = (el: FakeEl) => { const c = drawnAt(el)!; return { l: c.x - 8, r: c.x + 8, t: c.y - 8, b: c.y + 8 }; };
+    const apart = (a: FakeEl, b: FakeEl) => { const p = box(a), q = box(b); return p.l >= q.r || q.l >= p.r || p.t >= q.b || q.t >= p.b; };
+    expect(apart(coinc!, tan!) && apart(coinc!, fix!) && apart(tan!, fix!)).toBe(true);
+    for (const el of [coinc!, tan!, fix!]) {
+      const q = box(el);
+      expect(joint.x >= q.l && joint.x <= q.r && joint.y >= q.t && joint.y <= q.b).toBe(false);
+    }
     // H used to land exactly on the line's own midpoint — the regression this
     // file now guards against (a badge there intercepts the click a
     // double-press on the line needs for chain-select, see

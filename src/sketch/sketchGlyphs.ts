@@ -222,49 +222,62 @@ export class SketchGlyphs {
     // curves touch, which for an arc drawn off a line's end is the very point
     // the coincident's badge marks; stacked, the one underneath could be
     // neither read nor right-clicked away. A fix on a joined end is the same.
-    const taken = new Map<string, number>();
+    //
+    // Grouping is by the REAL anchor, before any nudge below. Keyed after the
+    // nudges, a coincident (nudged off its point) and a tangent at the same
+    // joint (not nudged) stopped counting as one spot and landed on top of
+    // each other (sketch_palette_e2e). A group holding a point badge is laid
+    // out in a row just above that point, alternating right and left of it,
+    // so no badge covers the point and none covers another.
+    const placed: { g: GlyphEl; p: { x: number; y: number }; key: string }[] = [];
+    const onPointGroup = new Set<string>();
     for (const g of this.items) {
       this.plane.to3D(g.pos.x, g.pos.y, this.scratch);
       const p = this.viewport.projectToOverlay(this.scratch);
-      // Same rule as SketchDimensions: a glyph whose anchor has left the canvas
-      // is not drawn at all. Clipping alone would leave half a badge that still
-      // deletes a constraint when the click was aimed at the panel behind it.
-      // Checked on the REAL anchor, before the on-point nudge below: the nudge
-      // is a display-only few pixels, and an anchor that is comfortably on
-      // screen must not be culled just because the nudge alone carries the
-      // nudged position past an edge.
       if (outsideRect(p)) {
         g.el.style.visibility = "hidden";
         continue;
       }
-      if (ON_POINT_LABELS.has(g.label)) {
-        p.x += ON_POINT_OFFSET_PX;
-        p.y -= ON_POINT_OFFSET_PX;
-      }
-      // A badge on a line's own midpoint (glyphs.ts's linePts): nudge it clear
-      // of the line, perpendicular to the line's ON-SCREEN direction (not its
-      // sketch-plane one — the two can differ once the camera tilts the
-      // plane), always to the same side so it doesn't flicker between frames.
-      // Same "after the visibility test, only a display-only few pixels" rule
-      // as the ON_POINT nudge above.
-      if (g.linePts) {
-        const [a, b] = g.linePts;
-        this.plane.to3D(a.x, a.y, this.scratch);
-        const pa = this.viewport.projectToOverlay(this.scratch);
-        this.plane.to3D(b.x, b.y, this.scratch);
-        const pb = this.viewport.projectToOverlay(this.scratch);
-        const dx = pb.x - pa.x, dy = pb.y - pa.y;
-        const len = Math.hypot(dx, dy);
-        if (len > 1e-6) {
-          p.x += (-dy / len) * LINE_MIDPOINT_OFFSET_PX;
-          p.y += (dx / len) * LINE_MIDPOINT_OFFSET_PX;
-        }
-      }
-      const at = `${Math.round(p.x)},${Math.round(p.y)}`;
-      const n = taken.get(at) ?? 0;
-      taken.set(at, n + 1);
+      const key = `${Math.round(p.x)},${Math.round(p.y)}`;
+      if (ON_POINT_LABELS.has(g.label)) onPointGroup.add(key);
+      placed.push({ g, p: { x: p.x, y: p.y }, key });
+    }
+    const taken = new Map<string, number>();
+    for (const { g, p, key } of placed) {
+      const n = taken.get(key) ?? 0;
+      taken.set(key, n + 1);
       g.el.style.visibility = "";
-      g.el.style.transform = `translate(${p.x + n * SketchGlyphs.SIDE_BY_SIDE_PX}px, ${p.y}px) translate(-50%, -50%)`;
+      if (onPointGroup.has(key)) {
+        const side = n % 2 === 0 ? 1 : -1;
+        const x = p.x + side * (ON_POINT_OFFSET_PX + Math.floor(n / 2) * SketchGlyphs.SIDE_BY_SIDE_PX);
+        g.el.style.transform = `translate(${x}px, ${p.y - ON_POINT_OFFSET_PX}px) translate(-50%, -50%)`;
+        continue;
+      }
+      this.layoutLineBadge(g, p, n);
     }
   };
+
+  /** A badge with no point badge on its spot: nudged clear of its line when it
+   *  marks one (glyphs.ts's linePts), perpendicular to the line's ON-SCREEN
+   *  direction (not its sketch-plane one, the two differ once the camera tilts
+   *  the plane), always to the same side so it does not flicker between frames,
+   *  then side by side with any other badge on the same anchor. */
+  private layoutLineBadge(g: GlyphEl, anchor: { x: number; y: number }, n: number) {
+    if (!this.plane) return;
+    let { x, y } = anchor;
+    if (g.linePts) {
+      const [a, b] = g.linePts;
+      this.plane.to3D(a.x, a.y, this.scratch);
+      const pa = this.viewport.projectToOverlay(this.scratch);
+      this.plane.to3D(b.x, b.y, this.scratch);
+      const pb = this.viewport.projectToOverlay(this.scratch);
+      const dx = pb.x - pa.x, dy = pb.y - pa.y;
+      const len = Math.hypot(dx, dy);
+      if (len > 1e-6) {
+        x += (-dy / len) * LINE_MIDPOINT_OFFSET_PX;
+        y += (dx / len) * LINE_MIDPOINT_OFFSET_PX;
+      }
+    }
+    g.el.style.transform = `translate(${x + n * SketchGlyphs.SIDE_BY_SIDE_PX}px, ${y}px) translate(-50%, -50%)`;
+  }
 }
