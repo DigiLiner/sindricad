@@ -2554,7 +2554,7 @@ function entityRefs(c: SConstraint): string[] {
  *  Deliberately the segment `lineOperand` decodes, rectangle edges included:
  *  that is the line the USER drew and picked, and the whole bug is that
  *  planegcs only ever knew the infinite one. */
-function tangentTouch(
+export function tangentTouch(
   byId: Map<string, ResolvedEntity>,
   lineId: string,
   roundId: string,

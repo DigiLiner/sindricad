@@ -4315,7 +4315,17 @@ export class SketchMode {
         const dx = raw.x - md.last.x, dy = raw.y - md.last.y;
         md.last.copy(raw);
         const next = bodyDragFrame(this.entities, md.group, dx, dy, this.constraints);
-        if (!next) { this.moveDrag = null; return; } // constraints changed mid-gesture
+        if (!next) {
+          // constraints changed mid-gesture, or this frame would walk a
+          // tangent-held circle off the span of the edge it touches
+          // (report 269f23b6) — same refusal a point-drag gives, same toast.
+          this.moveDrag = null;
+          if (!this.dragRefusedToast) {
+            this.dragRefusedToast = true;
+            toast(FIXED_POINT_MSG);
+          }
+          return;
+        }
         this.entities = next;
         // ...and re-satisfy the constraints AROUND it on this frame, not on
         // release. Grabbing a filleted side used to tear every joint open until

@@ -585,3 +585,66 @@ describe("dragging a selection moves all of it (3f16187e)", () => {
     for (const e of ents) expect(L(live, e.id).x1).toBeCloseTo(13, 6);
   });
 });
+
+// --- 269f23b6: a tangent circle's body drag must respect the span too -------
+
+describe("a body drag refuses to walk a tangent circle off the end of the span it touches (269f23b6)", () => {
+  beforeEach(() => { vi.mocked(toast).mockClear(); });
+
+  // The reporter's doc (269f23b6.json), verbatim: a slot (e17), two vertical
+  // lines pinned onto its two sides, and a circle (e24) tangent to side 0.
+  // Grabbing the circle's CENTRE is a point-drag and already refused by
+  // sketchSolve's own in-span guard; grabbing its RIM is a body drag, which
+  // used to be pure arithmetic translation with no span awareness at all.
+  const slotDoc = () => ({
+    ents: JSON.parse(JSON.stringify([
+      { id: "e17", x1: -138.76761379715427, y1: 3.053113317719181e-16, x2: -2.201634536491192e-19, y2: 2.1457071445499275e-31, type: "slot", width: 20 },
+      { id: "e19", x1: -41.51301886902108, y1: 30, x2: -41.51301886902108, y2: 10, type: "line" },
+      { id: "e20", x1: -48.392520069085464, y1: -10, x2: -48.392520069085464, y2: -25, type: "line" },
+      { x: -12.125974371900895, y: 30, id: "e24", type: "circle", radius: 20 },
+    ])) as ResolvedEntity[],
+    cons: JSON.parse(JSON.stringify([
+      { line: "e19", type: "vertical" },
+      { line: "e20", type: "vertical" },
+      { e: "e19", p: 1, type: "pointOn", curve: "e17~0" },
+      { e: "e20", p: 0, type: "pointOn", curve: "e17~1" },
+      { id: "c22", line: "e19", type: "distance", value: 20 },
+      { id: "c23", line: "e20", type: "distance", value: 15 },
+      { line: "e17~1", type: "horizontal" },
+      { e1: "e17", e2: "__origin__", p1: 1, p2: 0, type: "coincident" },
+      { id: "c25", type: "diameter", value: 40, circle: "e24" },
+      { a: "e17~0", b: "e24", type: "tangent2" },
+    ])) as unknown as SketchConstraint[],
+  });
+
+  it("CONTROL: a small translate that stays in span still passes through", () => {
+    const { ents, cons } = slotDoc();
+    const out = bodyDragFrame(ents, at(ents, "e24"), -10, 0, cons);
+    expect(out).not.toBeNull();
+    expect((byId(out!, "e24") as Extract<ResolvedEntity, { type: "circle" }>).x).toBeCloseTo(-22.125974371900895, 9);
+  });
+
+  it("refuses a frame that would carry the touch point past the slot end", () => {
+    const { ents, cons } = slotDoc();
+    // the circle's centre sits at x=-12.13; the slot's axis end (and the
+    // tangent side's own end) is at x=-138.77, so a translate well past it
+    // crosses from in-span to out-of-span in one frame
+    expect(bodyDragFrame(ents, at(ents, "e24"), -200, 0, cons)).toBeNull();
+  });
+
+  it("a rim grab dragged past the slot end stops at the last in-span frame and says why", async () => {
+    const h = liveSketch(slotDoc().ents, slotDoc().cons);
+    // grab a point on the rim, 20mm right of centre: pickDragPoint has no
+    // handle there, so this is a body drag, not a point drag
+    await h.drag([-12.125974371900895 + 20, 30], [-300 + 20, 30]);
+    const after = h.ent("e24") as Extract<ResolvedEntity, { type: "circle" }>;
+    // Measured: the last in-span frame of this 6-step drag lands the centre
+    // at x=-108.08, well short of the slot's axis end at x=-138.77 and far
+    // short of the cursor's eventual x=-300 -- the same kind of stall the
+    // centre point-drag already shows, not a silent walk past the end.
+    expect(after.x).toBeCloseTo(-108.0839829146006, 6);
+    expect(after.x).toBeGreaterThan(-138.77);
+    expect(after.y).toBeCloseTo(30, 6);
+    expect(vi.mocked(toast)).toHaveBeenCalledWith(FIXED_POINT_MSG);
+  });
+});

@@ -13,7 +13,7 @@ import { newEntityId } from "./id";
 import { arcCenterRadius } from "./arc";
 import { translated } from "./pattern";
 import { splineEndIndices, splineFlags } from "./spline";
-import { coincKey } from "./sketchSolve";
+import { coincKey, tangentTouch } from "./sketchSolve";
 import {
   circleLineIntersect,
   circleCircleIntersect,
@@ -120,11 +120,46 @@ export function bodyDragBlocked(
   return moved.some((e) => attachmentPoints(e, cons).some((q) => pinnedAt.has(coincKey(q.x, q.y))));
 }
 
+/** Would a body drag push a tangent2-held CIRCLE's touch point from in-span to
+ *  out-of-span against its line operand (a line, or a rectangle/polygon/slot
+ *  side)? Arcs are deliberately excluded — an arc's tangent2 can compile to the
+ *  shared-end `tangentAt` instead of `tangentLA`, which this is not judging,
+ *  and every fillet/corner tangency is an arc, so excluding them keeps this
+ *  from touching that code at all.
+ *
+ *  A body drag is pure translation with no solver in the loop until the frame
+ *  is already committed (report 269f23b6: grabbing the circle's RIM instead of
+ *  its centre took this path and walked straight past the slot's end, while a
+ *  centre-grab point-drag already refused the same move via sketchSolve's own
+ *  in-span guard). Reusing `tangentTouch` rather than re-deriving the span test
+ *  keeps both paths judging "in span" the same way. */
+function tangentCircleWalksOffSpan(
+  ents: readonly ResolvedEntity[],
+  next: readonly ResolvedEntity[],
+  cons: readonly SketchConstraint[],
+): boolean {
+  const before = new Map(ents.map((e) => [e.id, e] as const));
+  const after = new Map(next.map((e) => [e.id, e] as const));
+  for (const c of cons) {
+    if (c.type !== "tangent2") continue;
+    const pair = before.get(c.a)?.type === "circle" ? ([c.a, c.b] as const)
+      : before.get(c.b)?.type === "circle" ? ([c.b, c.a] as const)
+      : null;
+    if (!pair) continue;
+    const [circleId, lineId] = pair;
+    const b = tangentTouch(before, lineId, circleId);
+    const a = tangentTouch(after, lineId, circleId);
+    if (b?.inSpan && a && !a.inSpan) return true;
+  }
+  return false;
+}
+
 /** ONE frame of the select tool's whole-entity body drag: the grabbed entity
  *  (or every entity of a dragged selection, report 3f16187e) translated by
  *  (dx,dy), plus every OTHER entity's endpoint that coincides with one of their
  *  attachment points carried along with them. Returns null when the gesture is
- *  refused (see bodyDragBlocked).
+ *  refused (see bodyDragBlocked), or when it would walk a tangent-held circle
+ *  off the span of the line/edge it touches (see tangentCircleWalksOffSpan).
  *
  *  Neighbour attachment is decided with `coincKey`, the same position merge the
  *  solver does, so "rides along during the drag" and "one merged solver point in
@@ -161,7 +196,7 @@ export function bodyDragFrame(
     [...moved].flatMap((i) => attachmentPoints(ents[i]!, cons).map((q) => coincKey(q.x, q.y))),
   );
   const near = (x: number, y: number) => keys.has(coincKey(x, y));
-  return ents.map((e, i) => {
+  const next = ents.map((e, i) => {
     if (isOriginGeometry(e.id)) return e;
     if (moved.has(i)) return translated(e, dx, dy, e.id);
     if (e.type === "line" || e.type === "arc") {
@@ -181,6 +216,8 @@ export function bodyDragFrame(
     if (e.type === "point" && near(e.x, e.y)) return { ...e, x: e.x + dx, y: e.y + dy };
     return e;
   });
+  if (tangentCircleWalksOffSpan(ents, next, cons)) return null;
+  return next;
 }
 
 /** The nearest solver-controlled point (line/arc endpoint, circle or arc centre,
