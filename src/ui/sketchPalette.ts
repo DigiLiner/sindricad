@@ -8,6 +8,7 @@ import { t, setText, setTitle } from "../i18n";
 import { esc } from "./escape";
 import { icon } from "./icons";
 import { SKETCH, leavesOf, type ToolItem } from "./ribbon";
+import { GLYPH_LEGEND } from "../sketch/glyphs";
 
 export type PaletteToggle =
   | "lockView" | "construction" | "reference" | "grid" | "snap" | "autoConstrain" | "profile" | "dimensions" | "constraints";
@@ -70,6 +71,10 @@ export class SketchPalette {
   /** the constraint grid's buttons, in CONSTRAINT_TOOLS order */
   private tools: HTMLButtonElement[] = [];
   private switches = new Map<PaletteToggle, HTMLInputElement>();
+  /** The glyph legend (request X-badge-legend) starts closed: it is reference
+   *  material, not something every sketch needs open, and the palette already
+   *  has to fit a 1280x688 window (see .palette-grid's own comment). */
+  private legendCollapsed = true;
   onToggle: ((key: PaletteToggle, value: boolean) => void) | null = null;
   onLookAt: (() => void) | null = null;
   /** A constraint tool picked in the grid: the ribbon's action name, for the
@@ -182,5 +187,66 @@ export class SketchPalette {
       this.tools.push(btn);
     }
     this.el.append(section, grid);
+    this.renderLegend();
+  }
+
+  /** request X-badge-legend: "Constraint badges do not explain themselves: a
+   *  user read the pointOn glyph (∈) as a Euro sign and as an error, and never
+   *  found the hover tooltip." A collapsible section naming every on-canvas
+   *  badge symbol, plus what an amber or red border on one means — the only
+   *  other place either is explained is a tooltip on a badge that does not
+   *  exist until the constraint it would explain is already applied. */
+  private renderLegend() {
+    const head = document.createElement("div");
+    // Not combined with "palette-section": that class gives the Options and
+    // Constraints headers their look, which this copies in its own CSS rule
+    // below instead, so each stays a single, separately findable class name.
+    head.className = "palette-legend-head";
+    head.tabIndex = 0;
+    head.setAttribute("role", "button");
+    head.setAttribute("aria-expanded", String(!this.legendCollapsed));
+    setTitle(head, "palette.legend.toggleTitle");
+    const caret = document.createElement("span");
+    caret.className = "tree-caret";
+    const label = document.createElement("span");
+    setText(label, "palette.legend.heading");
+    head.append(caret, label);
+
+    const body = document.createElement("div");
+    body.className = "palette-legend";
+
+    const row = (variant: string | null, glyph: string, text: string) => {
+      const r = document.createElement("div");
+      r.className = "legend-row";
+      const sym = document.createElement("span");
+      sym.className = "legend-glyph";
+      if (variant) sym.classList.add(variant);
+      sym.textContent = glyph;
+      const name = document.createElement("span");
+      name.textContent = text;
+      r.append(sym, name);
+      return r;
+    };
+    for (const g of GLYPH_LEGEND) body.appendChild(row(null, g.label, t(g.nameKey)));
+    // amber/red apply to any badge (glyph or dimension, glyphs.ts's
+    // diagnosisOf is the one place that decides which), not to one symbol, so
+    // these two rows carry no letter of their own.
+    body.append(row("over", "", t("palette.legend.amber")), row("conflict", "", t("palette.legend.red")));
+
+    const draw = () => {
+      caret.innerHTML = icon(this.legendCollapsed ? "caretRight" : "caretDown");
+      body.classList.toggle("hidden", this.legendCollapsed);
+      head.setAttribute("aria-expanded", String(!this.legendCollapsed));
+    };
+    draw();
+    const toggle = () => { this.legendCollapsed = !this.legendCollapsed; draw(); };
+    head.addEventListener("click", toggle);
+    head.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      e.preventDefault();
+      toggle();
+    });
+
+    this.el.append(head, body);
   }
 }

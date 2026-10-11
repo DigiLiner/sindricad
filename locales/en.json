@@ -1229,6 +1229,12 @@
   },
   "palette": {
     "constraints": "Constraints",
+    "legend": {
+      "amber": "Amber: redundant (over-defined) — already implied by the others, safe to delete",
+      "heading": "Legend",
+      "red": "Red: conflicting — cannot all be satisfied at once",
+      "toggleTitle": "What the H, V, T and other constraint symbols on the geometry mean"
+    },
     "lookAt": "Look At",
     "lookAtTitle": "Square the view to the sketch plane",
     "noMatch": "No matching command",

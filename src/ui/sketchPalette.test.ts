@@ -12,6 +12,7 @@
 import { describe, it, expect } from "vitest";
 import { FakeEl, byClass, installFakeDocument } from "./fakeDom.testkit";
 import { SketchPalette, type PaletteToggle } from "./sketchPalette";
+import { GLYPH_LEGEND } from "../sketch/glyphs";
 
 installFakeDocument();
 
@@ -98,5 +99,58 @@ describe("a box the sketch draws, without calling back", () => {
     expect(toggled, "set() must not call back into the sketch that told it").toEqual([]);
     palette.emitAll();
     expect(toggled.find(([k]) => k === "reference")).toEqual(["reference", true]);
+  });
+});
+
+// Feature request X-badge-legend: "Constraint badges do not explain
+// themselves: a user read the pointOn glyph (∈) as a Euro sign and as an
+// error, and never found the hover tooltip." Every badge's meaning (and its
+// amber/red status colors) now lives in a legend in the palette too, not only
+// in a tooltip on a badge that does not exist until the constraint is already
+// applied.
+describe("X-badge-legend: a legend names every constraint badge, closed by default", () => {
+  it("has a legend section separate from Constraints, starting closed", () => {
+    const { host } = mount();
+    const sections = byClass(host, "palette-section").map((e) => e.textContent);
+    expect(sections).toContain("Constraints");
+    const legendHead = byClass(host, "palette-legend-head")[0];
+    expect(legendHead, "no legend header").toBeTruthy();
+    expect(legendHead!.getAttribute("aria-expanded")).toBe("false");
+    const body = byClass(host, "palette-legend")[0];
+    expect(body!.classList.contains("hidden")).toBe(true);
+  });
+
+  it("clicking the header opens it and lists every badge symbol with its name", () => {
+    const { host } = mount();
+    const legendHead = byClass(host, "palette-legend-head")[0]!;
+    legendHead.dispatch("click");
+    expect(legendHead.getAttribute("aria-expanded")).toBe("true");
+    const body = byClass(host, "palette-legend")[0]!;
+    expect(body.classList.contains("hidden")).toBe(false);
+
+    const rows = byClass(body, "legend-row");
+    // one row per GLYPH_LEGEND entry, plus the amber and red status rows
+    expect(rows).toHaveLength(GLYPH_LEGEND.length + 2);
+    for (const [i, g] of GLYPH_LEGEND.entries()) {
+      const glyph = rows[i]!.children[0]!;
+      const name = rows[i]!.children[1]!;
+      expect(glyph.textContent, `row ${i} symbol`).toBe(g.label);
+      expect(name.textContent, `row ${i} name`).not.toBe("");
+    }
+    const amber = rows[GLYPH_LEGEND.length]!;
+    const red = rows[GLYPH_LEGEND.length + 1]!;
+    expect(amber.children[0]!.classList.contains("over")).toBe(true);
+    expect(amber.children[1]!.textContent).toMatch(/redundant/i);
+    expect(red.children[0]!.classList.contains("conflict")).toBe(true);
+    expect(red.children[1]!.textContent).toMatch(/conflict/i);
+  });
+
+  it("the ∈ (pointOn) symbol the reporter misread is in the legend, named, not left to a tooltip alone", () => {
+    const { host } = mount();
+    byClass(host, "palette-legend-head")[0]!.dispatch("click");
+    const body = byClass(host, "palette-legend")[0]!;
+    const pointOn = byClass(body, "legend-row").find((r) => r.children[0]?.textContent === "∈");
+    expect(pointOn, "no legend row for ∈").toBeTruthy();
+    expect(pointOn!.children[1]!.textContent).toMatch(/point on/i);
   });
 });
