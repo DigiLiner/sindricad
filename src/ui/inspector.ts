@@ -572,7 +572,10 @@ export class Inspector {
     }
     // The expression is stored dot-decimal whatever the user typed, so the
     // document means the same thing on every machine (ui/units.canonicalDecimal).
-    return this.store.setTargetExpr(target, canonicalDecimal(raw), kind);
+    // storedDimExpr applies the same display-unit rule the sketch-dimension rows
+    // use (X-doug-inspector-fraction): a bare "1/16" here means 1/16 of the
+    // DISPLAY unit, same as the plain-number branch above, not 1/16 mm.
+    return this.store.setTargetExpr(target, storedDimExpr(raw, kind), kind);
   }
 
   /** An offset of 0 typed into a split saved before the Split Body panel.
