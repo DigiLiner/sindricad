@@ -30,6 +30,19 @@ describe("snap", () => {
     const r = snap(v(100, 100), cands, screen, 0, 10);
     expect(r.kind).toBe("free");
   });
+  it("prefers the NEARER candidate when it is far from the higher-priority one (9bb9e91c)", () => {
+    // a circle's centre (priority 90) sits right under the cursor; its own
+    // endpoint-priority rim point (100) is ~5mm away. Both are within
+    // pixelTol, but only the centre is close: priority must not reach across
+    // that gap, or a construction line meant for the centre lands on the rim.
+    const farCands: SnapCandidate[] = [
+      { p: v(0, 0), kind: "center", priority: 90 },
+      { p: v(5, 0), kind: "endpoint", priority: 100 },
+    ];
+    const r = snap(v(0, 0), farCands, screen, 1, 10);
+    expect(r.kind).toBe("center");
+    expect(r.point.x).toBe(0);
+  });
 });
 
 describe("candidatesFromEntities", () => {
@@ -66,9 +79,24 @@ describe("candidatesFromEntities", () => {
     expect(corners[0]!.p.x).toBeCloseTo(1, 9);
     expect(corners[0]!.p.y).toBeCloseTo(12, 9);
   });
-  it("emits a slot's two arc centres", () => {
+  it("emits a midpoint for every side of a polygon (f0b6dcfc)", () => {
+    const c = candidatesFromEntities([{ type: "polygon", id: "p", x: 0, y: 0, radius: 10, sides: 6, angle: 0 }]);
+    const mids = c.filter((x) => x.kind === "midpoint");
+    expect(mids).toHaveLength(6);
+    for (const m of mids) expect(m.curve).toMatch(/^p~\d+$/);
+  });
+  it("emits a slot's two arc centres and its two straight-side midpoints", () => {
+    // f0b6dcfc: a slot used to offer only its two round-end centres — its
+    // flats had no midpoint at all, unlike a rectangle's edges.
     const c = candidatesFromEntities([{ type: "slot", id: "s", x1: 0, y1: 0, x2: 30, y2: 4, width: 6 }]);
-    expect(c.map((x) => [x.kind, x.p.x, x.p.y])).toEqual([["center", 0, 0], ["center", 30, 4]]);
+    expect(c.filter((x) => x.kind === "center").map((x) => [x.p.x, x.p.y])).toEqual([[0, 0], [30, 4]]);
+    const mids = c.filter((x) => x.kind === "midpoint");
+    expect(mids).toHaveLength(2);
+    // each sits half the width off the slot's centreline, at its midpoint
+    for (const m of mids) {
+      expect(Math.hypot(m.p.x - 15, m.p.y - 2)).toBeCloseTo(3, 9);
+      expect(m.curve).toMatch(/^s~[01]$/);
+    }
   });
 });
 

@@ -17,6 +17,10 @@ export type SnapKind =
   // where two curves a Tangent names touch (modify's tangencyPoints): on both
   // of them, and no solver point, so it snaps the coordinate only
   | "tangent"
+  // where two independent curves genuinely CROSS (not a drawn endpoint, not a
+  // Tangent's touch) — a snap target only, never a selectable sketch point
+  // (bfe23a4b): nothing owns that coordinate the way an endpoint owns its own
+  | "crossing"
   | "on-x"
   | "on-y"
   // a vertex of an imported scan, projected onto the sketch plane. Never an
@@ -211,6 +215,22 @@ export function snapPointOns(
   return out;
 }
 
+/** How many screen pixels of "about equally close" two in-tolerance candidates
+ *  get before priority stops being allowed to override which one is nearer.
+ *
+ *  The old rule picked the highest-priority candidate anywhere in tolerance,
+ *  distance only breaking a tie between two candidates of THE SAME priority.
+ *  That let a circle's centre (priority 90), sitting exactly under the
+ *  cursor, lose to that same circle's own endpoint-priority (100) candidate
+ *  a few mm away, as long as both were within `pixelTol` — a construction
+ *  line meant for the centre landed on the rim instead (9bb9e91c, Doug).
+ *
+ *  2px: small enough that two targets a user can tell apart by eye never
+ *  pick the farther one on priority alone, large enough that a cursor a
+ *  fraction of a pixel off the exact tie point still reads as a tie (the
+ *  existing "higher priority wins when about equally close" case below). */
+const PRIORITY_TIE_PX = 2;
+
 export function snap(
   raw: THREE.Vector2,
   candidates: SnapCandidate[],
@@ -219,19 +239,24 @@ export function snap(
   pixelTol = 10,
 ): SnapResult {
   const rawScreen = toScreen(raw);
-  let best: SnapCandidate | null = null;
-  let bestD = pixelTol;
-
+  const inRange: { c: SnapCandidate; d: number }[] = [];
   for (const c of candidates) {
     const s = toScreen(c.p);
     const d = Math.hypot(s.x - rawScreen.x, s.y - rawScreen.y);
-    if (d <= pixelTol) {
-      // within tolerance: prefer higher priority, then nearer
-      if (
-        !best ||
-        c.priority > best.priority ||
-        (c.priority === best.priority && d < bestD)
-      ) {
+    if (d <= pixelTol) inRange.push({ c, d });
+  }
+
+  let best: SnapCandidate | null = null;
+  if (inRange.length) {
+    const d0 = Math.min(...inRange.map((x) => x.d));
+    let bestD = Infinity;
+    for (const { c, d } of inRange) {
+      // only a candidate about as close as the single nearest one may win on
+      // priority — one that is genuinely farther away is a DIFFERENT point,
+      // however strong its kind, and distance alone decides which one the
+      // cursor meant.
+      if (d > d0 + PRIORITY_TIE_PX) continue;
+      if (!best || c.priority > best.priority || (c.priority === best.priority && d < bestD)) {
         best = c;
         bestD = d;
       }
@@ -305,12 +330,35 @@ export function candidatesFromEntities(
       // ffae1a6e). They are solver points too now (dimRefPoints), so a line
       // drawn from one records the join, as from a rectangle's corner.
       add(e.x, e.y, "center", 90);
-      for (const v of polygonPoints(e.x, e.y, e.radius, e.sides, (e.angle * Math.PI) / 180)) {
+      const pts = polygonPoints(e.x, e.y, e.radius, e.sides, (e.angle * Math.PI) / 180);
+      pts.forEach((v, i) => {
         add(v.x, v.y, "endpoint", 100);
-      }
+        // a side's midpoint, same as a rectangle edge's: the solver has no
+        // index for it (not in dimRefPoints), so it snaps the coordinate and
+        // joins via `curve` (lineOperandAt's `${e.id}~k` side id), never a ref.
+        const n = pts[(i + 1) % pts.length]!;
+        const mx = (v.x + n.x) / 2;
+        const my = (v.y + n.y) / 2;
+        add(mx, my, "midpoint", 80, lineOperandAt(e, { x: mx, y: my }) ?? undefined);
+      });
     } else if (e.type === "slot") {
       add(e.x1, e.y1, "center", 90);
       add(e.x2, e.y2, "center", 90);
+      // the slot's two STRAIGHT sides, offset off the centreline by half the
+      // width — f0b6dcfc: these had no midpoint at all, so a slot could not
+      // be snapped to or measured from its flat like a rectangle can.
+      const dx = e.x2 - e.x1;
+      const dy = e.y2 - e.y1;
+      const len = Math.hypot(dx, dy);
+      if (len > JOIN_TOL) {
+        const nx = -dy / len;
+        const ny = dx / len;
+        const hw = e.width / 2;
+        const cx = (e.x1 + e.x2) / 2;
+        const cy = (e.y1 + e.y2) / 2;
+        add(cx + nx * hw, cy + ny * hw, "midpoint", 80, lineOperandAt(e, { x: cx + nx * hw, y: cy + ny * hw }) ?? undefined);
+        add(cx - nx * hw, cy - ny * hw, "midpoint", 80, lineOperandAt(e, { x: cx - nx * hw, y: cy - ny * hw }) ?? undefined);
+      }
     } else if (e.type === "arc") {
       add(e.x1, e.y1, "endpoint", 100);
       add(e.x2, e.y2, "endpoint", 100);
