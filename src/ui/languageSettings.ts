@@ -8,6 +8,7 @@
 import { pushModal, popModal } from "./choice";
 import { LOCALES, clearStoredLocale, detectLocale, getLocale, hasStoredLocale, setLocale, setText, t, asLocale, type LocaleCode } from "../i18n";
 import { esc } from "./escape";
+import { getKeepSketchVisibleAfterExtrude, setKeepSketchVisibleAfterExtrude } from "../features/extrudeTool";
 
 const isTauri = () => "__TAURI_INTERNALS__" in window;
 
@@ -37,6 +38,8 @@ export function openLanguageSettings(deps: LanguageSettingsDeps): void {
     `<label class="settings-row"><span data-i18n="settings.language.label">${esc(t("settings.language.label"))}</span>` +
     `<select class="settings-lang">${options}</select></label>` +
     `<div class="settings-note"></div>` +
+    `<label class="settings-row"><span data-i18n="settings.extrude.keepSketchVisible">${esc(t("settings.extrude.keepSketchVisible"))}</span>` +
+    `<input type="checkbox" class="settings-keep-sketch-visible"${getKeepSketchVisibleAfterExtrude() ? " checked" : ""}></label>` +
     `<div class="choice-row"><button class="choice-btn settings-restart" hidden><span></span></button>` +
     `<button class="choice-btn settings-close"><span></span></button></div>`;
   backdrop.appendChild(card);
@@ -46,8 +49,10 @@ export function openLanguageSettings(deps: LanguageSettingsDeps): void {
   const note = card.querySelector(".settings-note") as HTMLElement;
   const restart = card.querySelector(".settings-restart") as HTMLButtonElement;
   const closeBtn = card.querySelector(".settings-close") as HTMLButtonElement;
+  const keepSketchVisible = card.querySelector(".settings-keep-sketch-visible") as HTMLInputElement;
   setText(restart.firstElementChild!, "settings.language.restartNow");
   setText(closeBtn.firstElementChild!, "common.close");
+  keepSketchVisible.addEventListener("change", () => setKeepSketchVisibleAfterExtrude(keepSketchVisible.checked));
 
   const refresh = () => {
     const changed = getLocale() !== startedOn;

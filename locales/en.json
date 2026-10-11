@@ -1414,6 +1414,9 @@
     "toolWithKey": "{label} ({key})"
   },
   "settings": {
+    "extrude": {
+      "keepSketchVisible": "Keep the sketch visible after Extrude"
+    },
     "language": {
       "label": "Language",
       "pseudoHint": "The pseudo-locale is a layout test: every string is bracketed and lengthened.",

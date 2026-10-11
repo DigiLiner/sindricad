@@ -912,7 +912,10 @@ overlay.onRepaintNeeded = () => viewport.requestRender();
 tree.isSketchVisible = isSketchVisible;
 tree.onToggleSketch = (id) => {
   store.setSketchVisibility(id, !isSketchVisible(id));
-  if (!sketch.active) overlay.update(store.document);
+  if (!sketch.active) {
+    overlay.update(store.document);
+    viewport.requestRender(); // display-only change, no build to mark the frame dirty
+  }
   tree.refresh();
 };
 // Sketches folder-header eye toggle (hide/restore the whole group at once,
@@ -921,7 +924,10 @@ tree.onToggleSketch = (id) => {
 // toggle does).
 tree.onSetSketchesVisibility = (vis) => {
   store.setSketchesVisibility(vis);
-  if (!sketch.active) overlay.update(store.document);
+  if (!sketch.active) {
+    overlay.update(store.document);
+    viewport.requestRender(); // display-only change, no build to mark the frame dirty
+  }
   tree.refresh();
 };
 

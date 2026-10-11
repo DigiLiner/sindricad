@@ -225,6 +225,29 @@ function isTextField(target: EventTarget | null): boolean {
   return (typeof el.tagName === "string" && /^(input|textarea|select)$/i.test(el.tagName)) || el.isContentEditable === true;
 }
 
+const KEEP_SKETCH_VISIBLE_KEY = "sindricad.extrude.keepSketchVisible";
+
+/** "Keep sketch visible after Extrude" (Settings dialog): an app preference,
+ *  not part of any one document — same defensive shape as units.ts's own
+ *  localStorage reads. Default false: a consumed sketch still hides on
+ *  commit, same as before this preference existed. */
+export function getKeepSketchVisibleAfterExtrude(): boolean {
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(KEEP_SKETCH_VISIBLE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+export function setKeepSketchVisibleAfterExtrude(v: boolean) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(KEEP_SKETCH_VISIBLE_KEY, v ? "true" : "false");
+  } catch {
+    // best-effort preference; worst case the next extrude falls back to hiding
+  }
+}
+
 export class ExtrudeTool {
   active = false;
   private phase: Phase = "pick";
@@ -2223,6 +2246,12 @@ export class ExtrudeTool {
     }
     this.sentPreview = ""; // handed over above; cleanup must not take it back again
     this.overlay.clearRegionSelection();
+    // The Settings preference overrides the MCAD-style auto-hide: set an
+    // explicit per-sketch override (same mechanism the eye icon writes to) so
+    // cleanup()'s re-hide below has nothing left to hide.
+    if (!this.editId && getKeepSketchVisibleAfterExtrude() && (feature as Extract<Feature, { type: "extrude" }>).sketch) {
+      this.store.setSketchVisibility((feature as Extract<Feature, { type: "extrude" }>).sketch, true);
+    }
     this.cleanup();
     this.onDone?.(id);
   }
