@@ -1418,25 +1418,30 @@ export class Viewport {
     // the full path. `fit` forces it too: the caller wants the camera reframed.
     if (!fit && this.model && this.lastResult === result) {
       let anyChanged = false;
+      let anyShown = false;
       for (const b of this.model.bodies) {
         const vis = !hidden.has(b.id);
         if (b.mesh.visible !== vis) {
+          if (vis && !b.mesh.visible) anyShown = true;
           b.mesh.visible = vis;
           b.edges.setBodyVisible(vis);
           anyChanged = true;
         }
       }
       if (anyChanged) {
-        // hideFlushSeamsInner only ever HIDES (never un-hides), so re-running
-        // it here is idempotent for everything it already correctly hid — but
-        // it is NOT a no-op: a body that loaded hidden skips its own planar
-        // faces in the candidate scan, so a same-body seam on it is never
-        // computed until it is shown. Without this, showing that body left
-        // its own seam visible forever (field report 8c6ad338). Cheap on a
-        // huge assembly too: FLUSH_SEAM_MAX_EDGES bails before any per-
-        // triangle work, which is exactly the cost this fast path exists to
-        // dodge — see hideFlushSeams's own early return.
-        this.hideFlushSeams();
+        // hideFlushSeamsInner only ever HIDES (never un-hides), and a hidden
+        // body's faces are never a candidate (see its doc comment), so a
+        // hide-only change (Isolate's common case) can only ever SHRINK the
+        // candidate pool — nothing it could newly hide, nothing to recompute.
+        // Only a body going HIDDEN -> VISIBLE can expose a same-body seam
+        // that was skipped while it was off-screen (field report 8c6ad338),
+        // so only that transition re-runs the pass. Its candidate-matching
+        // cost scales with faces sharing a plane across the WHOLE model, not
+        // with edge count, so it is NOT bounded by FLUSH_SEAM_MAX_EDGES the
+        // way the full rebuild path is — gating on anyShown keeps the common
+        // eye-toggle/Isolate case (hide-only) back down to the flag flip this
+        // fast path exists for.
+        if (anyShown) this.hideFlushSeams();
         for (const d of edgeObjects(this.model)) d.flush();
         // Render-on-demand: flipping `visible` dirties nothing the loop can
         // see. Without this line the eye toggle repaints only because main.ts
