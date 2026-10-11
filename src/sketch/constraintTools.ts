@@ -51,6 +51,41 @@ interface Operand {
 
 const isRoundOp = (o: Operand) => o.kind === "circle" || o.kind === "arc";
 
+/** The two operand ids a plain two-operand relation constraint names, sorted
+ *  so the pair reads the same whichever order it was clicked in; null for
+ *  every other constraint type (points, holds, splines — those are not what
+ *  f3cb1331/X-double-tangent are about). */
+function relationPair(c: SketchConstraint): [string, string] | null {
+  switch (c.type) {
+    case "parallel": case "perpendicular": case "collinear": case "equal":
+      return [c.l1, c.l2].sort() as [string, string];
+    case "equalRadius": case "tangent2":
+      return [c.a, c.b].sort() as [string, string];
+    case "concentric":
+      return [c.c1, c.c2].sort() as [string, string];
+    default:
+      return null;
+  }
+}
+
+/** Whether `constraints` already holds a constraint of the SAME relation
+ *  between the same two operands as `c` (either pick order) — parallel,
+ *  perpendicular, collinear, equal, equalRadius, tangent2 and concentric all
+ *  mean the same thing a second time, so a repeat click (or a second route to
+ *  the same pair) should add nothing rather than an identical, redundant
+ *  constraint. Shared by every site that can create one of these: a tool
+ *  click, the right-click menu, and the tangent/perpendicular a line or arc
+ *  infers while being drawn (GH f3cb1331, X-double-tangent). */
+export function alreadyRelates(constraints: readonly SketchConstraint[], c: SketchConstraint): boolean {
+  const pair = relationPair(c);
+  if (!pair) return false;
+  return constraints.some((k) => {
+    if (k.type !== c.type) return false;
+    const kp = relationPair(k);
+    return !!kp && kp[0] === pair[0] && kp[1] === pair[1];
+  });
+}
+
 /** the ENTITY an operand id belongs to — `R~2` belongs to the rectangle `R` */
 const baseOf = (id: string) => { const t = id.indexOf("~"); return t < 0 ? id : id.slice(0, t); };
 
@@ -157,6 +192,27 @@ export interface TangentPick {
  *  curve's. */
 const JOINT_TOL = 1e-3;
 
+type XY = { x: number; y: number };
+
+/** A curve operand's geometry for joint-finding: how far a point sits off it
+ *  (0 when ON it), and its own addressable ends (empty for a circle, or for a
+ *  slot's side — a slot's ends are not mergeable there, sketchSolve). Shared
+ *  by splineTangentFor and lineArcEndJoint below: both ask the same two
+ *  questions of the curve a tangency is being made to — "does this point sit
+ *  on it" and "is it already one of the curve's own ends". */
+function curveGeom(id: string, ent: ResolvedEntity, entities: readonly ResolvedEntity[]): { dist: (p: XY) => number; ends: XY[] } {
+  const seg = lineOperand(new Map(entities.map((e) => [e.id, e])), id);
+  const round = seg ? null : asRound(ent);
+  const arc = ent.type === "arc" ? ent : ent.type === "projected" && ent.curve.kind === "arc" ? ent.curve : null;
+  const ends: XY[] = seg ? (ent.type === "slot" ? [] : [{ x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }])
+    : arc ? [{ x: arc.x1, y: arc.y1 }, { x: arc.x2, y: arc.y2 }]
+    : [];
+  const dist = (p: XY) => seg ? distToSeg({ x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }, p)
+    : round ? Math.abs(Math.hypot(p.x - round.x, p.y - round.y) - round.r)
+    : Infinity;
+  return { dist, ends };
+}
+
 type SplineTangent = Extract<SketchConstraint, { type: "splineTangent" }>;
 
 /** The `splineTangent` a spline pick and an `other` pick make, or the message
@@ -200,7 +256,6 @@ export function splineTangentFor(
   const why = unusable(s) ?? unusable(o);
   if (why) return { why };
   if (o.id === s.id) return { why: t("sketch.constraint.splineTangentSelf") };
-  type XY = { x: number; y: number };
   const endsOf = (e: Extract<ResolvedEntity, { type: "spline" }>) =>
     splineEndIndices(e).map((k, end) => ({ end: end as 0 | 1, pos: e.points[k]! }));
   const dist = (a: XY, b: XY) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -215,20 +270,9 @@ export function splineTangentFor(
       }
     }
   } else {
-    const seg = lineOperand(new Map(entities.map((e) => [e.id, e])), other.id);
-    const round = seg ? null : asRound(o);
-    // the curve's own ends, where the solver merges a spline end with it; a
-    // slot's sides and axis are not mergeable there (sketchSolve), a circle
-    // has none
-    const arc = o.type === "arc" ? o : o.type === "projected" && o.curve.kind === "arc" ? o.curve : null;
-    const curveEnds: XY[] = seg ? (o.type === "slot" ? [] : [{ x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }])
-      : arc ? [{ x: arc.x1, y: arc.y1 }, { x: arc.x2, y: arc.y2 }]
-      : [];
+    const { dist: offCurve, ends: curveEnds } = curveGeom(other.id, o, entities);
     for (const a of endsOf(s)) {
-      const off = seg ? distToSeg({ x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }, a.pos)
-        : round ? Math.abs(dist(a.pos, round) - round.r)
-        : Infinity;
-      if (off <= JOINT_TOL) joints.push({ end: a.end, score: dist(a.pos, spline.at), held: curveEnds.some((q) => merged(a.pos, q)) });
+      if (offCurve(a.pos) <= JOINT_TOL) joints.push({ end: a.end, score: dist(a.pos, spline.at), held: curveEnds.some((q) => merged(a.pos, q)) });
     }
   }
   const best = joints.reduce<(typeof joints)[number] | null>((x, y) => (!x || y.score < x.score ? y : x), null);
@@ -253,6 +297,40 @@ export function splineTangentFor(
     ? { type: "coincident", e1: s.id, p1: best.end, e2: o.id, p2: best.otherEnd }
     : { type: "pointOn", e: s.id, p: best.end, curve: other.id };
   return { c, hold };
+}
+
+/** The line/arc-endpoint equivalent of splineTangentFor's joint: a plain line
+ *  or arc has no `hold` machinery of its own, but a click landing at/near one
+ *  of ITS OWN ends, where that end already sits on the other curve, means the
+ *  same thing a spline's end does — anchor the tangency there instead of
+ *  leaving it free to touch anywhere (GH cdd04fd1: "I can't click an endpoint
+ *  on the line and make it tangential from that endpoint").
+ *
+ *  `pick` is whichever of the two curves this is finding the OWN endpoint on;
+ *  `other` is what it has to be a joint WITH. Null when `pick` is not a line
+ *  or arc (a circle has no end to anchor), when the click did not land near
+ *  one of its ends, or when that end is not actually on `other`: an endpoint
+ *  merely close to the curve is still a free, generic tangency, same as
+ *  clicking the line's middle. `held` means the end is already one point with
+ *  `other`'s own end (coincKey), which needs no extra hold to stay there. */
+function lineArcEndJoint(
+  pick: TangentPick,
+  other: TangentPick,
+  entities: readonly ResolvedEntity[],
+  clickTol: number,
+): { end: 0 | 1; pos: XY; held: boolean } | null {
+  const e = pick.ent;
+  const ends: { end: 0 | 1; pos: XY }[] =
+    e.type === "line" ? [{ end: 0, pos: { x: e.x1, y: e.y1 } }, { end: 1, pos: { x: e.x2, y: e.y2 } }]
+    : e.type === "arc" ? [{ end: 0, pos: { x: e.x1, y: e.y1 } }, { end: 1, pos: { x: e.x2, y: e.y2 } }]
+    : [];
+  if (!ends.length) return null;
+  const { dist: offOther, ends: otherEnds } = curveGeom(other.id, other.ent, entities);
+  const merged = (a: XY, b: XY) => coincKey(a.x, a.y) === coincKey(b.x, b.y);
+  const near = ends
+    .filter((q) => Math.hypot(q.pos.x - pick.at.x, q.pos.y - pick.at.y) <= clickTol)
+    .find((q) => offOther(q.pos) <= JOINT_TOL);
+  return near ? { end: near.end, pos: near.pos, held: otherEnds.some((q) => merged(near.pos, q)) } : null;
 }
 
 export class ConstraintTools {
@@ -317,29 +395,59 @@ export class ConstraintTools {
     if (tool === "tangent") return this.tangentClick(p);
     if (tool === "equal") return this.equalClick(p);
     if (tool === "concentric") return this.concentricClick(p);
+    if (tool === "horizontal" || tool === "vertical") return this.axisClick(p, tool);
 
-    // line-based constraints (horizontal/vertical/parallel/perpendicular/collinear)
+    // line-based constraints (parallel/perpendicular/collinear)
     const op = this.pickOperand(p);
     if (!op || op.kind !== "line") return this.missed();
-    if (tool === "horizontal" || tool === "vertical") {
-      // constraining the projected line ITSELF is meaningless — it's fixed.
-      // (Tested on the ENTITY, not on `kind`: a rect edge is a line operand and
-      // is perfectly constrainable, it just isn'tool a `line` entity.)
-      if (op.ent.type === "projected") return this.host.warn(PROJECTED_FIXED_MSG);
-      if (tool === "horizontal") this.addConstraint({ type: "horizontal", line: op.id });
-      else this.addConstraint({ type: "vertical", line: op.id });
-    } else {
-      // two-line constraints: first click stores, second applies. The FIRST pick
-      // is the one that moves (bug #86) — `ent.id` rather than the operand id,
-      // because a rect edge's mover is its rectangle.
-      const pair = this.holdPair(op);
-      if (!pair) return;
-      const [a, b] = pair;
-      const moves = a.ent.id;
-      if (tool === "parallel") this.addConstraint({ type: "parallel", l1: a.id, l2: b.id }, moves);
-      else if (tool === "perpendicular") this.addConstraint({ type: "perpendicular", l1: a.id, l2: b.id }, moves);
-      else if (tool === "collinear") this.addConstraint({ type: "collinear", l1: a.id, l2: b.id }, moves);
+    // two-line constraints: first click stores, second applies. The FIRST pick
+    // is the one that moves (bug #86) — `ent.id` rather than the operand id,
+    // because a rect edge's mover is its rectangle.
+    const pair = this.holdPair(op);
+    if (!pair) return;
+    const [a, b] = pair;
+    const moves = a.ent.id;
+    if (tool === "parallel") this.addConstraint({ type: "parallel", l1: a.id, l2: b.id }, moves);
+    else if (tool === "perpendicular") this.addConstraint({ type: "perpendicular", l1: a.id, l2: b.id }, moves);
+    else if (tool === "collinear") this.addConstraint({ type: "collinear", l1: a.id, l2: b.id }, moves);
+  }
+
+  /** Horizontal/Vertical: a line BODY makes the whole line square to that
+   *  axis, as it always did. Two POINTS instead level (or line up) the gap
+   *  between them on that axis, at zero — the existing `p2pDistanceX`/
+   *  `p2pDistanceY` the Dimension tool's point-to-point pick already emits
+   *  for any two points, just pinned to 0 instead of whatever gap they
+   *  happen to be apart. Nothing new is invented for this (ed07f912): "level
+   *  these two points" had no tool at all, since the whole-line reading only
+   *  ever answers for a SINGLE line's own two ends.
+   *
+   *  A point under the cursor wins over a line body — a line's own endpoint
+   *  is reachable both ways, and a lone line can still be squared by clicking
+   *  its BODY, away from either end. */
+  private axisClick(p: THREE.Vector2, tool: "horizontal" | "vertical") {
+    const ep = this.pickEndpoint(p, this.pendingEndpoint);
+    if (ep) {
+      if (!this.pendingEndpoint) {
+        this.pendingEndpoint = ep;
+        this.host.setPendingPoints(pts(this.endpointXY(ep)));
+        return;
+      }
+      const a = this.pendingEndpoint;
+      this.pendingEndpoint = null;
+      this.host.setPendingPoints([]);
+      if (a.id === ep.id && a.idx === ep.idx) return this.missed(); // the same point twice holds nothing
+      const type = tool === "horizontal" ? "p2pDistanceX" : "p2pDistanceY";
+      this.addConstraint({ type, e1: a.id, p1: a.idx, e2: ep.id, p2: ep.idx, value: 0 }, a.id);
+      return;
     }
+    if (this.pendingEndpoint) return this.missed(); // a point is armed; a miss must not silently drop it
+    const op = this.pickOperand(p);
+    if (!op || op.kind !== "line") return this.missed();
+    // constraining the projected line ITSELF is meaningless — it's fixed.
+    // (Tested on the ENTITY, not on `kind`: a rect edge is a line operand and
+    // is perfectly constrainable, it just isn'tool a `line` entity.)
+    if (op.ent.type === "projected") return this.host.warn(PROJECTED_FIXED_MSG);
+    this.addConstraint({ type: tool, line: op.id });
   }
 
   /** THE operand under the cursor. The shapes are the reason this exists: a
@@ -757,8 +865,8 @@ export class ConstraintTools {
     const pair = this.pickPair(p, () => true, true); // every operand is a tangency-capable curve
     if (!pair) return; // pickPair already said whatever needed saying
     const [first, e, firstAt] = pair;
+    const a = { id: first.id, ent: first.ent, at: firstAt }, b = { id: e.id, ent: e.ent, at: p };
     if (first.kind === "spline" || e.kind === "spline") {
-      const a = { id: first.id, ent: first.ent, at: firstAt }, b = { id: e.id, ent: e.ent, at: p };
       const ents = this.host.entities(), cons = this.host.constraints();
       const r = first.kind === "spline" ? splineTangentFor(a, b, ents, cons) : splineTangentFor(b, a, ents, cons);
       if ("why" in r) return this.host.warn(r.why);
@@ -766,6 +874,17 @@ export class ConstraintTools {
     }
     // two lines cannot be tangent — say so rather than swallowing the pick
     if (first.kind === "line" && e.kind === "line") return this.missed();
+    // A click at/near a line or arc's OWN endpoint, where that end already
+    // sits on the other curve, anchors the tangency there (cdd04fd1) — tried
+    // in both pick orders, since either curve can be the one with the end.
+    const tol = this.host.pickTol();
+    const ents = this.host.entities();
+    const onA = lineArcEndJoint(a, b, ents, tol);
+    const [owner, curve, joint] = onA ? [a, b, onA] : [b, a, lineArcEndJoint(b, a, ents, tol)];
+    if (joint) {
+      const hold: SketchConstraint = { type: "pointOn", e: owner.id, p: joint.end, curve: curve.id };
+      return this.addConstraint({ type: "tangent2", a: first.id, b: e.id }, first.ent.id, joint.held ? undefined : [hold]);
+    }
     this.addConstraint({ type: "tangent2", a: first.id, b: e.id }, first.ent.id);
   }
 
@@ -819,6 +938,13 @@ export class ConstraintTools {
   }
 
   private addConstraint(c: SketchConstraint, moves?: string, holds?: readonly SketchConstraint[]) {
+    // A relation this pair already has (parallel ×N, two tangents on the same
+    // pair) is refused with a word rather than piled on again — the duplicate
+    // was silent before, and read as the tool doing nothing the first time.
+    if (alreadyRelates(this.host.constraints(), c)) {
+      this.host.warn(t("sketch.constraint.alreadyRelated"));
+      return;
+    }
     this.host.addConstraint(c, moves, holds);
   }
 }

@@ -43,9 +43,15 @@ class MockHost implements ConstraintHost {
    *  moves" true (bug #86), and it is not carried by the constraint itself, so
    *  the only place it can be asserted is here. */
   moves: (string | undefined)[] = [];
-  addConstraint(c: SketchConstraint, moves?: string) {
+  /** holds added alongside each constraint (splineTangentFor/cdd04fd1's
+   *  anchor), 1:1 with `_cons` — kept separate rather than folded into
+   *  `_cons` so an assertion on "the constraint this click made" does not
+   *  also have to filter out what came along beside it. */
+  holds: (readonly SketchConstraint[] | undefined)[] = [];
+  addConstraint(c: SketchConstraint, moves?: string, holds?: readonly SketchConstraint[]) {
     this._cons.push(c);
     this.moves.push(moves);
+    this.holds.push(holds);
     this.solves++;
   }
 }
@@ -799,5 +805,141 @@ describe("Coincident and a polygon's CORNER", () => {
     const { h } = run(v(0, 0), v(25, 12));
     expect(h._cons).toEqual([{ type: "pointOn", e: "H", p: -1, curve: "l" }]);
     expect(run(CORNER, v(25, 12)).h._cons).toEqual([{ type: "pointOn", e: "H", p: 1, curve: "l" }]);
+  });
+});
+
+describe("a relation already between this pair is refused, not duplicated (f3cb1331, X-double-tangent)", () => {
+  const twoLines = (): ResolvedEntity[] => [
+    { type: "line", id: "l1", x1: 0, y1: 0, x2: 10, y2: 0 },
+    { type: "line", id: "l2", x1: 0, y1: 5, x2: 10, y2: 5 },
+  ];
+
+  it("Parallel clicked again on a pair already parallel adds nothing and says so", () => {
+    const h = new MockHost();
+    h._ents = twoLines();
+    h._cons = [{ type: "parallel", l1: "l1", l2: "l2" }];
+    h._tool = "parallel";
+    const ct = new ConstraintTools(h);
+    ct.click(v(5, 0));
+    ct.click(v(5, 5));
+    expect(h._cons).toEqual([{ type: "parallel", l1: "l1", l2: "l2" }]); // no second row
+    expect(h.warnings).toEqual([t("sketch.constraint.alreadyRelated")]);
+  });
+
+  it("catches the pair whichever order it was originally recorded in", () => {
+    const h = new MockHost();
+    h._ents = twoLines();
+    h._cons = [{ type: "parallel", l1: "l2", l2: "l1" }]; // reversed from the click order below
+    h._tool = "parallel";
+    const ct = new ConstraintTools(h);
+    ct.click(v(5, 0));
+    ct.click(v(5, 5));
+    expect(h._cons).toHaveLength(1);
+  });
+
+  it("Tangent clicked again over a pair already tangent (left by auto-infer-while-drawing or by Trim's keep-tangency) adds nothing", () => {
+    const h = new MockHost();
+    h._ents = [
+      { type: "line", id: "l1", x1: 0, y1: 10, x2: 20, y2: 10 },
+      { type: "arc", id: "a1", x1: 20, y1: 10, x2: 20, y2: 30, mx: 30, my: 20 },
+    ];
+    h._cons = [{ type: "tangent2", a: "l1", b: "a1" }]; // what autoConstrain/Trim already left
+    h._tool = "tangent";
+    const ct = new ConstraintTools(h);
+    ct.click(v(10, 10)); // the line, away from the shared joint
+    ct.click(v(30, 20)); // the arc's through-point, away from the shared joint
+    expect(h._cons).toEqual([{ type: "tangent2", a: "l1", b: "a1" }]);
+    expect(h.warnings).toEqual([t("sketch.constraint.alreadyRelated")]);
+  });
+});
+
+describe("Tangent anchors at a line's own endpoint when that end already sits on the other curve (cdd04fd1)", () => {
+  it("adds the tangent2 AND a pointOn hold pinning that end to the circle", () => {
+    const h = new MockHost();
+    h._ents = [
+      { type: "line", id: "l1", x1: 10, y1: 0, x2: 10, y2: 20 }, // (10,0) sits ON c1's rim
+      { type: "circle", id: "c1", radius: 10, x: 0, y: 0 },
+    ];
+    h._tool = "tangent";
+    const ct = new ConstraintTools(h);
+    ct.click(v(10, 0.3)); // near l1's own endpoint, not its middle
+    ct.click(v(0, 10));   // circle rim, away from the shared point
+    expect(h._cons).toEqual([{ type: "tangent2", a: "l1", b: "c1" }]);
+    expect(h.holds[0]).toEqual([{ type: "pointOn", e: "l1", p: 0, curve: "c1" }]);
+  });
+
+  it("works in the reverse pick order too: the circle first, then the line's endpoint", () => {
+    const h = new MockHost();
+    h._ents = [
+      { type: "circle", id: "c1", radius: 10, x: 0, y: 0 },
+      { type: "line", id: "l1", x1: 10, y1: 0, x2: 10, y2: 20 },
+    ];
+    h._tool = "tangent";
+    const ct = new ConstraintTools(h);
+    ct.click(v(0, 10));   // circle rim, first
+    ct.click(v(10, 0.3)); // l1's own endpoint, second
+    expect(h._cons).toEqual([{ type: "tangent2", a: "c1", b: "l1" }]);
+    expect(h.holds[0]).toEqual([{ type: "pointOn", e: "l1", p: 0, curve: "c1" }]);
+  });
+
+  it("falls back to the plain (touch-anywhere) tangent when the near endpoint is NOT on the other curve", () => {
+    const h = new MockHost();
+    h._ents = [
+      { type: "line", id: "l1", x1: 10, y1: 20, x2: 10, y2: 40 }, // neither end touches c1
+      { type: "circle", id: "c1", radius: 10, x: 0, y: 0 },
+    ];
+    h._tool = "tangent";
+    const ct = new ConstraintTools(h);
+    ct.click(v(10, 20.5)); // right on l1's endpoint, not its middle
+    ct.click(v(0, 10));
+    expect(h._cons).toEqual([{ type: "tangent2", a: "l1", b: "c1" }]);
+    expect(h.holds[0]).toBeUndefined();
+  });
+});
+
+describe("Horizontal/Vertical on two points levels them (p2pDistance = 0), not a whole line (ed07f912)", () => {
+  const twoLines = (): ResolvedEntity[] => [
+    { type: "line", id: "a", x1: 0, y1: 0, x2: 20, y2: 3 },
+    { type: "line", id: "b", x1: 30, y1: 10, x2: 50, y2: 14 },
+  ];
+
+  it("vertical on two different lines' endpoints emits p2pDistanceY = 0 between those points", () => {
+    const h = new MockHost();
+    h._ents = twoLines();
+    h._tool = "vertical";
+    const ct = new ConstraintTools(h);
+    ct.click(v(0, 0)); // a's first endpoint: arms it, adds nothing yet
+    expect(h._cons).toEqual([]);
+    ct.click(v(30, 10)); // b's first endpoint: completes the pair
+    expect(h._cons).toEqual([{ type: "p2pDistanceY", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }]);
+  });
+
+  it("horizontal on two points emits p2pDistanceX = 0", () => {
+    const h = new MockHost();
+    h._ents = twoLines();
+    h._tool = "horizontal";
+    const ct = new ConstraintTools(h);
+    ct.click(v(0, 0));
+    ct.click(v(50, 14)); // b's SECOND endpoint
+    expect(h._cons).toEqual([{ type: "p2pDistanceX", e1: "a", p1: 0, e2: "b", p2: 1, value: 0 }]);
+  });
+
+  it("still squares a whole line when the click lands on its body, away from either end", () => {
+    const h = new MockHost();
+    h._ents = [{ type: "line", id: "l1", x1: 0, y1: 0, x2: 10, y2: 1 }];
+    h._tool = "horizontal";
+    new ConstraintTools(h).click(v(5, 0.5)); // the middle
+    expect(h._cons).toEqual([{ type: "horizontal", line: "l1" }]);
+  });
+
+  it("the same point twice is refused, not turned into a constraint on itself", () => {
+    const h = new MockHost();
+    h._ents = [{ type: "line", id: "a", x1: 0, y1: 0, x2: 20, y2: 3 }];
+    h._tool = "vertical";
+    const ct = new ConstraintTools(h);
+    ct.click(v(0, 0));
+    ct.click(v(0, 0));
+    expect(h._cons).toEqual([]);
+    expect(h.warnings).toHaveLength(1);
   });
 });

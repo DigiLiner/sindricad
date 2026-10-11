@@ -1565,6 +1565,7 @@
     },
     "constraint": {
       "alreadyPicked": "That is the point you already picked — choose the second one to mirror.",
+      "alreadyRelated": "I already have that constraint between these two, so I didn't add it again.",
       "angle": "Angle",
       "boundField": {
         "angle": "angle",

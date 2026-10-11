@@ -66,7 +66,7 @@ import { isOriginGeometry, originGeometry } from "./origin";
 import { boxFromDrag, entitiesInBox } from "./boxSelect";
 import { applicableConstraints, constraintLabel, menuOperands, operandUnder, symmetricOperands, type MenuOperand } from "./constraintMenu";
 import { addKey, additiveClick, clickKey, dropOwner, pointKey, selOwner, selOwners, selPart } from "./selection";
-import { ConstraintTools, CONSTRAINT_TOOLS, splineTangentFor, type ConstraintHost } from "./constraintTools";
+import { ConstraintTools, CONSTRAINT_TOOLS, alreadyRelates, splineTangentFor, type ConstraintHost } from "./constraintTools";
 import { PatternFlow, PATTERN_TOOLS, ENTITY_PATTERNS, type PatternHost } from "./patternFlow";
 import { ProjectPanel } from "./projectPanel";
 import { checkSketch } from "./check";
@@ -2808,7 +2808,7 @@ export class SketchMode {
       // it (field report ecc3e0d6). The third click is the through-point, which
       // is not a solver point and so is never emitted for.
       this.emitSnapCoincidences(ent, this.arcStartRef, this.arcEndRef, null, this.arcStartCurve, this.arcEndCurve);
-      this.constraints.push(...tangents.map((other): SketchConstraint => ({ type: "tangent2", a: id, b: other })));
+      this.pushRelations(tangents.map((other): SketchConstraint => ({ type: "tangent2", a: id, b: other })));
       this.clearPendingGlyph();
       this.arcStart = null;
       this.arcEnd = null;
@@ -4656,7 +4656,7 @@ export class SketchMode {
       if (!closing) {
         const r = this.lineInference(entity, isGeometrySnap(this.lastSnapKind));
         Object.assign(entity, r.ends);
-        this.constraints.push(...relationConstraints(entity.id, r.relations));
+        this.pushRelations(relationConstraints(entity.id, r.relations));
       }
       this.clearPendingGlyph(); // added now: its own badge takes over
       if (closing) {
@@ -5022,10 +5022,30 @@ export class SketchMode {
    *  TRIAL: withdrawn together if that solve conflicts. `moves` arms the
    *  mover bias for that solve. */
   private addTrialConstraint(c: SketchConstraint, moves?: string, holds: readonly SketchConstraint[] = []) {
+    // A relation this pair already holds (parallel x N, two tangents on one
+    // pair) is refused with a word instead of piled on again — reached both by
+    // a constraint tool (ConstraintHost.addConstraint) and by the right-click
+    // menu (applyConstraintToSelection's push), the two EXPLICIT routes into a
+    // constraint, which is why this one warns (GH f3cb1331, X-double-tangent).
+    if (alreadyRelates(this.constraints, c)) {
+      toast(t("sketch.constraint.alreadyRelated"));
+      return;
+    }
     this.constraints.push(...holds, c);
     this.trial = { cons: [...holds, c], msg: SketchMode.CONSTRAINT_CONFLICT_MSG }; // withdrawn again if this solve conflicts
     if (moves) this.pendingBias = { moves: [moves] }; // before requestSolve — pump reads it synchronously
     this.requestSolve();
+  }
+
+  /** Append the relations a line or arc infers while being drawn (autoConstrain),
+   *  skipping any this pair already has: the fresh entity's own id can never
+   *  collide with an earlier constraint, but two inferences in the SAME batch
+   *  (or a later click through a constraint tool) can still name the same
+   *  pair, and this is the push that bypasses ConstraintTools entirely, so it
+   *  carries its own check. Silent — this path infers, it is not a tool the
+   *  user reached for, so there is nothing to warn about. */
+  private pushRelations(cs: readonly SketchConstraint[]) {
+    for (const c of cs) if (!alreadyRelates(this.constraints, c)) this.constraints.push(c);
   }
 
   /** Apply a constraint straight to an already-chosen selection, as the
