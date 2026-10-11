@@ -197,7 +197,14 @@ export function measuredLocks(constraints: SketchConstraint[], e: ResolvedEntity
  *  `value` is what to WRITE on the retyped constraint, which is not always the
  *  number typed: see retypeValue. */
 export type DimEdit =
-  | { kind: "upsert"; c: SketchConstraint; moves: string }
+  // writeFirst: this field used to be a direct write (no lockDimFor existed
+  // yet for it) and still needs everything a direct write does — the typed
+  // value landed straight in the entity, and an Offset tied to it followed
+  // (SketchMode.shapeFieldWrite) — BEFORE the new lock constraint goes on
+  // trial. A field that was already driven by drivingDimFor (a circle's
+  // diameter, a line's length) only ever moved through the solver and gets no
+  // such write.
+  | { kind: "upsert"; c: SketchConstraint; moves: string; writeFirst?: boolean }
   | { kind: "retype"; at: number; value: number }
   | { kind: "direct" };
 
@@ -223,6 +230,14 @@ export function planDimEdit(
   if (dim) return { kind: "upsert", c: dim, moves: e.id };
   const at = governingDimAt(constraints, e, field);
   if (typeof at === "number") return { kind: "retype", at, value: retypeValue(constraints[at]!, mm) };
+  // Typing a number into a badge that COULD be locked (lockDimFor) but isn't
+  // yet ("free") already means "this exact number" — auto-lock it the same
+  // way retyping an already-governed badge does, rather than making the user
+  // type it, then separately Lock it (71b9955e/75d4e294/e9742a4f: a
+  // rectangle's width/height). Same rule dimBindingFor already applies for
+  // naming a parameter on a free badge.
+  const lock = at === "free" ? lockDimFor(e, field, mm) : null;
+  if (lock) return { kind: "upsert", c: lock, moves: e.id, writeFirst: true };
   return { kind: "direct" };
 }
 

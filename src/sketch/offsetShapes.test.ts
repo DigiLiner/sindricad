@@ -403,7 +403,14 @@ describe("an offset that was turned into lines follows a size typed into the sha
     live.internals.editDimension(live.s.entities.findIndex((e) => e.id === "R"), "width", 60);
     await live.resolve();
     expect(live.internals.conflict).toBe(false);
-    expect(live.shapes("rectangle")).toEqual([{ ...RECT(), width: 60 }]);
+    // Now a real driving dimension (71b9955e/75d4e294/e9742a4f), so this edit
+    // goes through an actual solve — leaving the usual sub-nanometre residue
+    // toEqual would catch and a user never would.
+    const r = live.shapes("rectangle")[0]!;
+    expect(r).toMatchObject({ type: "rectangle", id: "R", width: 60 });
+    expect(r.height).toBeCloseTo(20, 9);
+    expect(r.x).toBeCloseTo(60, 9);
+    expect(r.y).toBeCloseTo(40, 9);
     const ls = drawn(live);
     const xs = ls.flatMap((l) => [l.x1, l.x2]);
     expect(Math.min(...xs)).toBeCloseTo(25, 9);

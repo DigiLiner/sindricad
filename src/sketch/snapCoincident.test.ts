@@ -337,7 +337,7 @@ describe("every commit path that can owe a coincident calls the emitter", () => 
     it(`${name} emits, with the refs its own gesture captured`, () => {
       const at = sketchSrc.indexOf(marker);
       expect(at, `${name} is gone — this test is pinning nothing`).toBeGreaterThan(-1);
-      const body = sketchSrc.slice(at, at + 1600);
+      const body = sketchSrc.slice(at, at + 2000);
       expect(body, `${name} pushes an entity but never emits its coincidences`).toContain(call);
     });
   }
@@ -346,14 +346,14 @@ describe("every commit path that can owe a coincident calls the emitter", () => 
     // pointer MOVES overwrite lastSnapRef between clicks, so reading it at
     // commit time would give the third click's ref for both ends
     const at = sketchSrc.indexOf("private arcClick(");
-    const body = sketchSrc.slice(at, at + 1600);
+    const body = sketchSrc.slice(at, at + 2000);
     expect(body).toContain("this.arcStartRef = this.lastSnapRef");
     expect(body).toContain("this.arcEndRef = this.lastSnapRef");
   });
 
   it("arcCenterClick captures a ref at its centre AND its start click", () => {
     const at = sketchSrc.indexOf("private arcCenterClick(");
-    const body = sketchSrc.slice(at, at + 1600);
+    const body = sketchSrc.slice(at, at + 2000);
     expect(body).toContain("this.arcCenterRef = this.lastSnapRef");
     expect(body).toContain("this.arcStartRef = this.lastSnapRef");
   });

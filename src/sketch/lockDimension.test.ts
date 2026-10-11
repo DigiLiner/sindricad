@@ -119,8 +119,16 @@ describe("editing a badge that is already locked", () => {
     expect(planDimEdit(cons, rect(100, 50), "width", 60)).toEqual({ kind: "retype", at: 0, value: 60 });
   });
 
-  it("an unlocked rectangle badge still writes straight into the geometry", () => {
-    expect(planDimEdit([], rect(100, 50), "width", 60)).toEqual({ kind: "direct" });
+  it("an unlocked rectangle badge now auto-locks instead of writing straight into the geometry (e9742a4f)", () => {
+    // Was `{ kind: "direct" }` — the asymmetry report e9742a4f called out: "in
+    // other dimensions that are not locked, if I change them they become
+    // locked", true for a circle's diameter (below) but not a rectangle's W/H.
+    expect(planDimEdit([], rect(100, 50), "width", 60)).toEqual({
+      kind: "upsert",
+      c: { type: "distance", line: "e11~0", value: 60 },
+      moves: "e11",
+      writeFirst: true, // was a direct write — still has to follow a tied Offset, then lock
+    });
   });
 
   it("a circle's diameter still becomes a driving constraint, and moves the circle", () => {

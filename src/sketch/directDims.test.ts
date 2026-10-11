@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { applyDrivingDimsDirect } from "./directDims";
+import { applyDrivingDimsDirect, planDimEdit } from "./directDims";
 import type { ResolvedEntity } from "./snap";
 import type { SketchConstraint } from "../types";
 
@@ -161,5 +161,51 @@ describe("applyDrivingDimsDirect", () => {
     expect(applyDrivingDimsDirect(ents, cons)).toBe(false);
     expect(ents[0]).toMatchObject({ radius: 10 });
     expect(ents[1]).toMatchObject({ x2: 6, y2: 8 });
+  });
+});
+
+describe("planDimEdit: typing a value into a free-but-lockable badge auto-locks it", () => {
+  // 71b9955e/75d4e294/e9742a4f: a rectangle's W/H used to be the one case left
+  // behind — typing a number always wrote the entity's coordinate directly and
+  // left the badge "free" until a separate Lock. A circle's diameter and a
+  // line's length never had this gap (drivingDimFor already covers them).
+  const r1 = { type: "rectangle" as const, id: "r1" };
+
+  it("upserts a rect-edge lock the first time a free width is typed", () => {
+    const plan = planDimEdit([], r1, "width", 60);
+    expect(plan).toMatchObject({
+      kind: "upsert",
+      c: { type: "distance", line: "r1~0", value: 60 },
+      moves: "r1",
+      writeFirst: true, // this field used to be a direct write — an Offset tied to it still has to follow
+    });
+  });
+
+  it("retypes the existing lock instead of stacking a second one", () => {
+    const cons: SketchConstraint[] = [{ type: "distance", line: "r1~0", value: 60 }];
+    const plan = planDimEdit(cons, r1, "width", 80);
+    expect(plan).toMatchObject({ kind: "retype", at: 0, value: 80 });
+  });
+
+  it("still auto-locks a circle's diameter through drivingDimFor (unchanged)", () => {
+    const plan = planDimEdit([], { type: "circle", id: "c1" }, "diameter", 20);
+    expect(plan).toMatchObject({ kind: "upsert", c: { type: "diameter", circle: "c1", value: 20 }, moves: "c1" });
+  });
+
+  // Slot width, polygon radius and line angle are explicitly OUT of scope —
+  // lockDimFor has no constraint form for them, so typing stays a direct write.
+  it("leaves a polygon's radius a direct write — no lock representation exists", () => {
+    const plan = planDimEdit([], { type: "polygon", id: "p1" }, "radius", 12);
+    expect(plan).toMatchObject({ kind: "direct" });
+  });
+
+  it("leaves a slot's width a direct write — no lock representation exists", () => {
+    const plan = planDimEdit([], { type: "slot", id: "s1" }, "width", 12);
+    expect(plan).toMatchObject({ kind: "direct" });
+  });
+
+  it("leaves a line's angle a direct write — no lock representation exists", () => {
+    const plan = planDimEdit([], { type: "line", id: "l1" }, "angle", 45);
+    expect(plan).toMatchObject({ kind: "direct" });
   });
 });

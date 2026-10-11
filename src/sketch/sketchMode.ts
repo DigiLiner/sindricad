@@ -1274,6 +1274,19 @@ export class SketchMode {
     if (!e) return;
     const plan = planDimEdit(this.constraints, e, field, mm);
     if (plan.kind === "upsert") {
+      if (plan.writeFirst) {
+        // This field was a direct write until just now (71b9955e/75d4e294/
+        // e9742a4f) — it still has to behave like one first: land the typed
+        // value in the geometry and carry any Offset tied to it along
+        // (shapeFieldWrite), refusing exactly as a direct edit would if that
+        // would collapse the offset. Only once that holds does the new lock
+        // go on trial, so retyping a free rectangle badge still follows its
+        // offsets the same as it always did.
+        const written = this.shapeFieldWrite(index, field, mm);
+        if (typeof written === "string") { toast(written); return; }
+        this.entities = written;
+        this.refreshActive();
+      }
       this.setDrivingDimension(plan.c, plan.moves);
       return;
     }
@@ -1503,6 +1516,32 @@ export class SketchMode {
     }
     this.refreshActive();
     this.onState?.();
+  }
+
+  /** Lock whichever of a freshly drawn entity's fields the user actually TYPED
+   *  (dim.isUserDriven), as one undo step — the draw-time twin of
+   *  entityDimLock/lockMeasuredDims, through the same lockDimFor. A field left
+   *  to the drag stays free, same as it always has; a typed field already
+   *  means "this exact number", so the commit should already hold it instead
+   *  of needing a separate Lock click afterwards (71b9955e/75d4e294/e9742a4f).
+   *  Nothing should move — the entity was just built AT the typed value —
+   *  so, like entityDimLock, no mover bias is armed. */
+  private lockTypedDrawDims(e: ResolvedEntity, fields: readonly DimField[]) {
+    const locks = fields.flatMap((f) => {
+      if (!this.dim.isUserDriven(f)) return [];
+      const d = entityDims(e).find((x) => x.field === f);
+      const c = d && lockDimFor(e, f, d.valueMm);
+      return c ? [c] : [];
+    });
+    if (!locks.length) return;
+    for (const c of locks) if (isDimConstraint(c) && !c.id) c.id = newConstraintId();
+    const before = this.constraints;
+    this.constraints = [...before, ...locks];
+    this.trial = {
+      cons: locks,
+      restore: before,
+      msg: (blamed, solved) => dimConflictMsg(locks[0]!, blamed, solved),
+    };
   }
 
   /** "Lock dimension" on a reference (driven) dim: keep the same dimension, at
@@ -3634,6 +3673,7 @@ export class SketchMode {
     const ent: ResolvedEntity = { type: "rectangle", id: newEntityId(), width: w, height: h, x: center.x, y: center.y };
     if (this.constructionMode) ent.construction = true;
     this.entities.push(ent);
+    this.lockTypedDrawDims(ent, ["width", "height"]);
     // This click placed a CORNER, so a corner snapped onto a point is joined to
     // it, as the corner-to-corner rectangle's are. The first click placed the
     // CENTRE, which is a point too now (point 4), so it joins what it was
@@ -4682,6 +4722,12 @@ export class SketchMode {
     if (this.constructionMode) entity.construction = true;
     entity.id = newEntityId(); // stamp a stable id (computeGeometry left it "")
     this.entities.push(entity);
+    // A typed width/height/diameter was already the committed value a line
+    // above (computeGeometry read it off the dim box) — lock it too, so it
+    // does not need a separate Lock click (71b9955e/75d4e294). Line
+    // length/angle are left alone: deferred, no lock representation decided.
+    if (entity.type === "rectangle") this.lockTypedDrawDims(entity, ["width", "height"]);
+    else if (entity.type === "circle") this.lockTypedDrawDims(entity, ["diameter"]);
     // Turn the snaps that PLACED this entity into real coincident constraints,
     // before anything else can move either side. Snapping used to copy the
     // coordinate and stop, so the join lasted exactly until the next solve —
