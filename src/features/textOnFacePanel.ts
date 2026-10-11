@@ -143,6 +143,17 @@ export class TextOnFacePanel {
     this.onCancel = handlers.onCancel;
     const init = opts.initial;
 
+    // Which mm value a length field's CURRENT text came from, so an untouched
+    // field can be read back exactly instead of re-parsed. fieldText() rounds
+    // to lengthDecimals() for display (4 decimals in inches), and that is a
+    // lossy round trip: 6mm -> "0.2362"in -> reparsed is 5.99948mm. Re-deriving
+    // a field the user never touched would silently drift it on every commit
+    // while the document unit isn't mm — the exact trap ui/units.ts's fieldText
+    // doc comment names ("an editor that prefilled this text must not write
+    // the text back when the user left it alone"), and the one inspector.ts's
+    // commitField avoids with `raw === shown` (X-doug-text-inches).
+    const shownLen = new Map<HTMLInputElement, { value: number; text: string }>();
+
     const root = document.createElement("div");
     this.root = root;
     root.className = "tool-panel";
@@ -181,6 +192,7 @@ export class TextOnFacePanel {
       // A length shows (and, in read()/badLenField, parses) in the DISPLAY
       // unit, same as a sketch dimension box; angle stays raw degrees.
       i.value = kind === "length" ? fieldText(v, "length") : fmtNumber(v);
+      if (kind === "length") shownLen.set(i, { value: v, text: i.value });
       i.step = step;
       // `min` is a hint only now that these are text inputs (it always was: a
       // number input marks an out-of-range value invalid, it does not refuse it,
@@ -351,6 +363,15 @@ export class TextOnFacePanel {
     op.addEventListener("change", syncStyle);
     syncStyle();
 
+    // Unchanged-text guard: if the field's text still reads exactly as it was
+    // shown, return the mm value it was shown FROM rather than re-parsing the
+    // rounded display text (see the shownLen comment above).
+    const typedLenField = (el: HTMLInputElement, dflt: number): number => {
+      const shown = shownLen.get(el);
+      if (shown && el.value === shown.text) return shown.value;
+      return typedLen(el, dflt);
+    };
+
     this.read = () => {
       const s =
         bold.checked && italic.checked ? "bolditalic" : bold.checked ? "bold" : italic.checked ? "italic" : "regular";
@@ -361,17 +382,19 @@ export class TextOnFacePanel {
         // means "use the default"; text the parser refuses shows the default
         // in the live preview and is refused at commit(), never modelled.
         // The lengths read through the document unit and accept a fraction or
-        // expression (X-doug-text-inches); angle stays raw degrees.
-        height: typedLen(height, 0),
+        // expression (X-doug-text-inches); angle stays raw degrees. An
+        // untouched field reads back its original mm value (typedLenField),
+        // not a re-parse of its rounded display text.
+        height: typedLenField(height, 0),
         style: s,
         align: align.value as TextOnFaceValues["align"],
         angle: typedNumber(angle, 0),
-        depth: typedLen(depth, 0),
+        depth: typedLenField(depth, 0),
         operation: op.value as TextOnFaceValues["operation"],
-        bevel: typedLen(bevel, 0),
+        bevel: typedLenField(bevel, 0),
         bevelStyle: bevelStyle.value as TextOnFaceValues["bevelStyle"],
-        u: typedLen(offU, 0),
-        v: typedLen(offV, 0),
+        u: typedLenField(offU, 0),
+        v: typedLenField(offV, 0),
         colorSlot: slot,
       };
       if (font.value) v.font = font.value;
@@ -390,7 +413,9 @@ export class TextOnFacePanel {
 
     this.setUV = (u, v) => {
       offU.value = fieldText(u, "length");
+      shownLen.set(offU, { value: u, text: offU.value });
       offV.value = fieldText(v, "length");
+      shownLen.set(offV, { value: v, text: offV.value });
     };
 
     const emit = () => this.onChange?.(this.read!());

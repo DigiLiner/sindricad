@@ -50,6 +50,7 @@ describe("autoGlyphSlot — a flat text must never start invisible", () => {
 
 import { FakeEl, installFakeDocument } from "../ui/fakeDom.testkit";
 import { t } from "../i18n";
+import { setUnit } from "../ui/units";
 import { TextOnFacePanel, type TextOnFaceValues } from "./textOnFacePanel";
 
 function makeEl(tag: string): FakeEl {
@@ -182,5 +183,64 @@ describe("TextOnFacePanel — a number the app cannot read never becomes a defau
     expect(p.committed()).toBeNull();
     p.ctrlEnter(false);
     expect(p.committed()?.text).toBe("にほんご");
+  });
+});
+
+// --- X-doug-text-inches: an untouched length field must not drift ----------
+//
+// fieldText() shows a length at lengthDecimals() precision (4 decimals in
+// inches), so 6mm is displayed as "0.2362"in. Re-parsing that rounded text on
+// every commit — even for a field the user never touched — silently writes
+// 5.99948mm over the stored 6mm. ui/units.ts's fieldText doc comment names this
+// trap outright and says every editor that prefills this text must guard
+// against writing it back unchanged; inspector.ts's commitField does
+// (`raw === shown`). This locks the same guard in textOnFacePanel.ts.
+
+function openPanelEditing(initial: Partial<TextOnFaceValues>) {
+  installPanelDom();
+  const panel = new TextOnFacePanel();
+  let committed: TextOnFaceValues | null = null;
+  panel.show(
+    { editing: true, fonts: ["DejaVu Sans"], initial: { text: "hi", ...initial } },
+    { onCommit: (v) => { committed = v; }, onChange: () => {}, onCancel: () => {} },
+  );
+  const body = (globalThis.document as unknown as { body: FakeEl }).body;
+  const root = body.children.at(-1)!;
+  const ok = buttons(root).at(-2)!;
+  return {
+    add: () => ok.dispatch("pointerdown", { preventDefault() {}, stopPropagation() {} }),
+    committed: () => committed as TextOnFaceValues | null,
+  };
+}
+
+describe("TextOnFacePanel — an untouched length field keeps its exact value in a non-mm unit (X-doug-text-inches)", () => {
+  it("commits height, depth, bevel and placement unchanged when editing in inch mode without touching any field", () => {
+    setUnit("in");
+    try {
+      const p = openPanelEditing({ height: 6, depth: 0.6, bevel: 0.3, u: 1.2, v: 2.4 });
+      p.add();
+      const v = p.committed();
+      expect(v?.height).toBe(6);
+      expect(v?.depth).toBe(0.6);
+      expect(v?.bevel).toBe(0.3);
+      expect(v?.u).toBe(1.2);
+      expect(v?.v).toBe(2.4);
+    } finally {
+      setUnit("mm");
+    }
+  });
+
+  it("still re-parses a field the user actually edited, in the document unit", () => {
+    setUnit("in");
+    try {
+      const p = openPanelEditing({ height: 6, depth: 0.6 });
+      const body = (globalThis.document as unknown as { body: FakeEl }).body;
+      const root = body.children.at(-1)!;
+      typeIn(field(root, "feature.text.size"), "1/16"); // 1/16 in
+      p.add();
+      expect(p.committed()?.height).toBeCloseTo(1.5875, 6);
+    } finally {
+      setUnit("mm");
+    }
   });
 });
