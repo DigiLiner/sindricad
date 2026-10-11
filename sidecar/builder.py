@@ -5861,6 +5861,17 @@ def _extrude_maybe_tapered(f, ctx, target, prof_faces, amount):
             raise ValueError(_taper_refusal(taper, len(bad), len(prof_faces)))
     solids = []
     for fc in prof_faces:
+        # A profile circle that picked up a vertex along the way (a tangent
+        # point to another curve, say) arrives as two edges, e.g. a 270 and a
+        # 90 degree arc, instead of one. _taper_solid tapers EDGE BY EDGE, so a
+        # split circle slopes as two disjoint cones that cross each other
+        # rather than one — refusing a taper that the same profile, merged
+        # back into one edge, builds fine (field report d106e42c: +1 degree
+        # refused, -1 degree built). _unify_if_valid merges coplanar/colinear
+        # edges back together, and — unlike a bare `_maybe_unify` — checks
+        # BRepCheck first, so it cannot SEGFAULT the worker on an invalid face
+        # (the GH #49 pattern).
+        fc = _unify_if_valid(fc)
         # Built AGAIN here rather than carried over from the probe: the probe ran
         # in another process and only ever returned a verdict, never geometry.
         out = _taper_solid(fc, amount, taper)

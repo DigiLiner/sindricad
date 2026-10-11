@@ -166,6 +166,40 @@ def test_taper_composes_with_start_offset():
     assert abs(part.volume - want) < 1.0, f"got {part.volume}, want {want}"
 
 
+def test_a_split_profile_circle_tapers_like_a_whole_one():
+    """Field report d106e42c: a profile circle that picked up a vertex along
+    the way (a tangent point to another sketch curve, in the report) arrives
+    at `_extrude_maybe_tapered` as TWO edges — a 270 and a 90 degree arc —
+    instead of one. `_taper_solid` tapers edge by edge, so the split circle
+    slopes as two disjoint cones that cross each other: +1 degree refused
+    ("the sloped walls run into themselves") while -1 degree built fine, on
+    the exact same profile. Merging the two arcs back into one edge first
+    fixes it; `_unify_if_valid`, not a bare `_maybe_unify` (SEGFAULTS the
+    worker on an invalid face — GH #49), is the existing helper for that."""
+    from build123d import CenterArc, Wire, Face
+
+    arcs = [
+        CenterArc((0, 0), 20.0, start_angle=0, arc_size=270),
+        CenterArc((0, 0), 20.0, start_angle=270, arc_size=90),
+    ]
+    face = Face(Wire(arcs))
+    assert len(face.edges()) == 2, "the repro depends on the split surviving to the face"
+
+    ctx = builder._RebuildCtx(
+        val=builder._make_val({}), datums={}, sketches={}, bodies=[],
+        diagnostics=None, hidden_bodies=frozenset(), new_body=None,
+        active=None, require_active=None, find_body=None,
+    )
+    f = {"id": "e1", "type": "extrude", "taper": 1}
+    out = builder._extrude_maybe_tapered(f, ctx, None, [face], 10)
+    # analytic circular cone frustum: (pi*h/3) * (R1^2 + R1*R2 + R2^2)
+    depth, r1 = 10.0, 20.0
+    r2 = r1 - depth * math.tan(math.radians(1))
+    want = math.pi * depth / 3.0 * (r1 * r1 + r1 * r2 + r2 * r2)
+    assert abs(out.volume - want) < 1.0, f"got {out.volume}, cone frustum says {want}"
+    assert out.volume < math.pi * r1 * r1 * depth, "a positive taper must remove material"
+
+
 def test_taper_on_a_holed_profile_keeps_the_hole():
     """A ring. Two things at once: the hole must survive, and it must slope the
     RIGHT WAY.
@@ -327,6 +361,7 @@ if __name__ == "__main__":
     test_a_taper_past_the_apex_is_refused_not_truncated()
     test_a_fold_flat_angle_is_refused_by_name()
     test_taper_composes_with_start_offset()
+    test_a_split_profile_circle_tapers_like_a_whole_one()
     test_taper_on_a_holed_profile_keeps_the_hole()
     test_up_to_ignores_taper_rather_than_fighting_it()
     test_a_plain_rectangle_tapers_at_the_speed_of_an_untapered_extrude()
