@@ -608,6 +608,8 @@ export class SketchMode {
       (i, f) => this.entityDimExpr(i, f),
     );
     this.dims.onOverlapPick = (e) => this.labelOverlapSelect(e);
+    this.dims.onOverlapPoint = (e) => this.labelOverlapPoint(e);
+    this.dims.onOverlapCurve = (e) => this.labelOverlapCurve(e);
     this.dims.onPlanePoint = (cx, cy) => this.planePointAt(cx, cy);
     this.dims.onEntityPlace = (i, f, ox, oy, done) => this.commitEntityPlace(i, f, ox, oy, done);
     this.dims.onEntityConstraint = (i, f) => this.entityDimConstraint(i, f);
@@ -2370,6 +2372,45 @@ export class SketchMode {
     return true;
   }
 
+  /** A drag handle under a badge's press claims the whole press immediately,
+   *  click or drag alike: a coincident's ⊙ or a fix's anchor is drawn ON its
+   *  point, about 18 px across against a 9 px pick radius, so it covered the
+   *  very handle it marks, and a label has no drag of its own that could
+   *  stand in for moving a sketch point. `onPointerDown` does what a press on
+   *  the bare canvas does there, pointer capture included, so the drag's
+   *  moves and release reach the canvas. Double-click delete is unaffected:
+   *  the badge recognises its second press before asking this. Shared by
+   *  `labelOverlapSelect` (glyphs: both halves decided together, always) and
+   *  wired directly as SketchDimensions.onOverlapPoint (labels: this half
+   *  decided immediately, the curve half below deferred past a drag — see
+   *  that class's addLabel/onDragEnd). */
+  private labelOverlapPoint(e: PointerEvent): boolean {
+    if (this.tool !== "select") return false;
+    const raw = this.planePoint(e);
+    if (!raw) return false;
+    if (!pickDragPoint(this.entities, raw, this.pickTol())) return false;
+    this.onPointerDown(e);
+    return true;
+  }
+
+  /** Pure query, no mutation: wired as SketchDimensions.onOverlapCurve, asked
+   *  only to decide whether to DEFER a press rather than resolve it right
+   *  away (see that class's addLabel). True only for a curve, with no point
+   *  ahead of it, in the select tool — the same two conditions
+   *  labelOverlapSelect itself checks below, just answered early and without
+   *  selecting anything, so asking twice (now, and again for real at
+   *  pointerup) costs nothing extra. Always false in the dimension tool: an
+   *  in-progress dimension's operand pick has to land immediately, the same
+   *  turn as the press, not after a drag threshold that a dimension click
+   *  never crosses anyway. */
+  private labelOverlapCurve(e: PointerEvent): boolean {
+    if (this.tool !== "select") return false;
+    const raw = this.planePoint(e);
+    if (!raw) return false;
+    if (pickDragPoint(this.entities, raw, this.pickTol())) return false; // the point branch owns this press
+    return pickEntity(this.ownEntities(), raw, this.pickTol()) >= 0;
+  }
+
   /** Geometry-beats-label: called from a dimension badge's pointerdown when the
    *  badge sits over sketch geometry (common at low zoom — the badge is a DOM
    *  element above the canvas, so the canvas never sees the click). Select the
@@ -2377,22 +2418,10 @@ export class SketchMode {
    *  value-edit. False = nothing underneath, the badge behaves normally. */
   private labelOverlapSelect(e: PointerEvent): boolean {
     if (this.tool === "dimension") return this.labelOverlapDimension(e);
+    if (this.labelOverlapPoint(e)) return true;
     if (this.tool !== "select") return false;
     const raw = this.planePoint(e);
     if (!raw) return false;
-    // A drag handle under the press: hand the whole press to the canvas. A
-    // coincident's ⊙ or a fix's anchor is drawn ON its point, about 18 px
-    // across against a 9 px pick radius, so it covered the very handle it
-    // marks: a press on a snapped join (and every snap makes one now) only
-    // selected, and neither a point drag nor the Shift-drag Break's toast
-    // describes could start from the dot. onPointerDown does what a press on
-    // the bare canvas does there, pointer capture included, so the drag's
-    // moves and release reach the canvas. Double-click delete is unaffected:
-    // the badge recognises its second press before asking this.
-    if (pickDragPoint(this.entities, raw, this.pickTol())) {
-      this.onPointerDown(e);
-      return true;
-    }
     // Only a CURVE under the badge is geometry it sits over. A shape's centre
     // is inside it, where badges sit (a polygon's radius, at 0.6 of it): a
     // press there opens the badge's editor, as it always did.

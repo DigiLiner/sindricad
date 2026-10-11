@@ -16,7 +16,20 @@ interface GlyphEl {
   el: HTMLDivElement;
   pos: THREE.Vector2;
   cIndex: number; // which constraint it names, so follow() can tell its list from another
+  label: string; // the glyph's own symbol, to pick it out of ON_POINT_LABELS below
 }
+
+/** Badges anchored exactly on the point they mark (glyphs.ts's `refPos`), rather
+ *  than on a curve's centre: Coincident and Point-On. Report 9e4c9bb5: "the
+ *  coincident symbol covers the point I am trying to target" — the 16px,
+ *  90%-opaque badge sits pixel-for-pixel on the one spot a FOLLOW-UP pick needs
+ *  to land on. Nudged a few screen pixels clear of it below, in loop(), so the
+ *  point still shows through; `constraintGlyphs()`'s own `pos` stays exactly on
+ *  the point (right-click-to-delete, and `follow()`'s drag tracking, both still
+ *  key off the real constraint geometry, not this display-only nudge). */
+const ON_POINT_LABELS = new Set(["⊙", "∈"]);
+/** screen pixels, clear of the 16px-square badge (styles.css .sketch-glyph) */
+const ON_POINT_OFFSET_PX = 12;
 
 export class SketchGlyphs {
   private root: HTMLDivElement;
@@ -89,7 +102,7 @@ export class SketchGlyphs {
         el.textContent = g.label;
         setTitle(el, "sketch.constraint.glyphPending");
         this.root.appendChild(el);
-        this.items.push({ el, pos: g.pos, cIndex: g.cIndex });
+        this.items.push({ el, pos: g.pos, cIndex: g.cIndex, label: g.label });
         continue;
       }
       const st = diagnosisOf(g.cIndex, conflicts, over);
@@ -134,7 +147,7 @@ export class SketchGlyphs {
         this.onMenu?.(e, g.cIndex);
       });
       this.root.appendChild(el);
-      this.items.push({ el, pos: g.pos, cIndex: g.cIndex });
+      this.items.push({ el, pos: g.pos, cIndex: g.cIndex, label: g.label });
     }
     this.lastCamHash = ""; // force a reposition next frame
     if (!this.raf) this.loop();
@@ -187,6 +200,10 @@ export class SketchGlyphs {
     for (const g of this.items) {
       this.plane.to3D(g.pos.x, g.pos.y, this.scratch);
       const p = this.viewport.projectToOverlay(this.scratch);
+      if (ON_POINT_LABELS.has(g.label)) {
+        p.x += ON_POINT_OFFSET_PX;
+        p.y -= ON_POINT_OFFSET_PX;
+      }
       // Same rule as SketchDimensions: a glyph whose anchor has left the canvas
       // is not drawn at all. Clipping alone would leave half a badge that still
       // deletes a constraint when the click was aimed at the panel behind it.

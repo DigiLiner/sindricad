@@ -264,6 +264,7 @@ describe("badges on the same spot sit side by side", () => {
     { type: "coincident", e1: "l", p1: 1, e2: "a", p2: 0 },
     { type: "tangent2", a: "l", b: "a" },
     { type: "horizontal", line: "l" },
+    { type: "fix", e: "a", p: 0 },
   ];
   /** screen px of a plane point: 3 px per mm, y up, origin at (100, 400) */
   const projecting = {
@@ -275,18 +276,23 @@ describe("badges on the same spot sit side by side", () => {
     return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
   };
 
-  it("the tangent beside the coincident on the joint, the H on its own spot untouched", () => {
+  it("the tangent beside the fix on the joint, the H on its own spot untouched", () => {
     body().innerHTML = "";
     const glyphs = new SketchGlyphs(projecting);
     glyphs.show(constraintGlyphs(ents, cons), plane, new Set(), new Set());
     (glyphs as unknown as { loop: () => void }).loop();
-    const [coinc, tan, h] = byClass(body(), "sketch-glyph");
-    expect([coinc?.textContent, tan?.textContent, h?.textContent]).toEqual(["⊙", "T", "H"]);
+    const [coinc, tan, h, fix] = byClass(body(), "sketch-glyph");
+    expect([coinc?.textContent, tan?.textContent, h?.textContent, fix?.textContent]).toEqual(["⊙", "T", "H", "⚓"]);
     const near = (x: number, y: number) => ({ x: expect.closeTo(x, 6), y: expect.closeTo(y, 6) });
     const joint = { x: 100 + 100 * 3, y: 400 };
-    expect(drawnAt(coinc!)).toEqual(near(joint.x, joint.y));
-    // beside it, not on it: a badge is at least 16 px across
-    expect(drawnAt(tan!)).toEqual(near(joint.x + 20, joint.y));
+    // Coincident sits ON the point it marks (9e4c9bb5: nudged clear of it on
+    // screen so the point still shows through), so it no longer shares the
+    // tangent's and fix's "same spot" screen position at all.
+    expect(drawnAt(coinc!)).toEqual(near(joint.x + 12, joint.y - 12));
+    // Tangent and fix both land exactly on the joint: the first drawn keeps it,
+    // the second sits beside it (a badge is at least 16 px across).
+    expect(drawnAt(tan!)).toEqual(near(joint.x, joint.y));
     expect(drawnAt(h!)).toEqual(near(100 + 50 * 3, 400));
+    expect(drawnAt(fix!)).toEqual(near(joint.x + 20, joint.y));
   });
 });

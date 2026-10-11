@@ -103,7 +103,81 @@ describe("dimension badge: which mouse button acts", () => {
   });
 });
 
-// Report ad6f8d54: "Trying to delete a dimension in a sketch... nothing
+// Report 4f6649d1: "When a dimension pill overlays a line underneath I cannot
+// click and drag the dimension... if I zoom in enough so the dimension does
+// not overlay the line I can then drag it." A CLICK still goes to the curve
+// underneath (unchanged); a DRAG now wins the label back, instead of the curve
+// claiming the whole press immediately at pointerdown before either is known.
+describe("4f6649d1: a draggable label defers to a drag, but a click still goes to the curve underneath", () => {
+  let dims: SketchDimensions;
+  let overlapPick: ReturnType<typeof vi.fn>;
+  let overlapCurve: ReturnType<typeof vi.fn>;
+  let badge: FakeEl;
+
+  const move = (dx: number, dy: number) => ({
+    clientX: 100 + dx,
+    clientY: 100 + dy,
+    pointerId: 1,
+    stopPropagation: () => {},
+  });
+  const up = () => ({ clientX: 100, clientY: 100, pointerId: 1, stopPropagation: () => {} });
+
+  beforeEach(() => {
+    body().innerHTML = "";
+    dims = new SketchDimensions(viewport, () => {});
+    overlapPick = vi.fn(() => true); // the old curve arbitration: "geometry claimed the click"
+    overlapCurve = vi.fn(() => true); // "a curve sits under the badge" — gates the deferral below
+    dims.onOverlapPick = overlapPick as unknown as (e: PointerEvent) => boolean;
+    dims.onOverlapCurve = overlapCurve as unknown as (e: PointerEvent) => boolean;
+    dims.onPlanePoint = () => new THREE.Vector2(0, 0);
+    dims.show([], plane, [
+      {
+        anchor: new THREE.Vector2(0, 0),
+        valueMm: 10,
+        commit: () => {},
+        place: new THREE.Vector2(0, 0),
+        placeCommit: () => new THREE.Vector2(0, 0),
+      },
+    ]);
+    const found = byClass(body(), "sketch-dim");
+    expect(found).toHaveLength(1);
+    badge = found[0]!;
+    // FakeEl has no pointer-capture or removeEventListener stubs (nothing else
+    // exercises a badge's own drag); add no-ops for just this badge.
+    const el = badge as unknown as Record<string, (...a: unknown[]) => void>;
+    el.setPointerCapture = () => {};
+    el.releasePointerCapture = () => {};
+    el.removeEventListener = () => {};
+    el.hasPointerCapture = () => false;
+  });
+
+  it("a plain click (press then release, no movement) still hands the curve the click", () => {
+    badge.dispatch("pointerdown", press(0));
+    // Not decided yet: the press is still tracking, in case it becomes a drag.
+    expect(overlapPick).not.toHaveBeenCalled();
+    expect(badge.classList.contains("is-selected")).toBe(false);
+    badge.dispatch("pointerup", up());
+    expect(overlapPick).toHaveBeenCalledTimes(1);
+    expect(badge.classList.contains("is-selected")).toBe(false); // the curve won, not the label
+  });
+
+  it("a real drag wins the label back from the curve underneath", () => {
+    badge.dispatch("pointerdown", press(0));
+    badge.dispatch("pointermove", move(10, 0)); // past DRAG_PX
+    expect(overlapPick).not.toHaveBeenCalled(); // the curve is never asked once this is a drag
+    expect(badge.classList.contains("is-selected")).toBe(true); // the label won it back
+    badge.dispatch("pointerup", up());
+    expect(overlapPick).not.toHaveBeenCalled();
+  });
+
+  it("nothing underneath: the label drags immediately, the same as always", () => {
+    overlapCurve.mockReturnValue(false);
+    overlapPick.mockReturnValue(false); // nothing claims the click either
+    badge.dispatch("pointerdown", press(0));
+    expect(overlapPick).toHaveBeenCalledTimes(1); // nothing to defer to, decided right away
+    expect(badge.classList.contains("is-selected")).toBe(true);
+  });
+});
 // happens." A line's driving length and a circle's driving diameter render
 // through the ENTITY's own badge (constraintDims deliberately skips them), and
 // that badge carried no onDelete at all — the right-click menu offered "Delete

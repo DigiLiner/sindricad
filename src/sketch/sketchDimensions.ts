@@ -138,8 +138,29 @@ export class SketchDimensions {
    *  and since it's a DOM element above the canvas it would swallow the click
    *  meant to SELECT that entity. The owner installs this hook; return true =
    *  "geometry under the cursor claimed the click" — the label then skips its
-   *  value-edit for that click. */
+   *  value-edit for that click.
+   *
+   *  Called at pointerdown when there is nothing to drag the label TO (below),
+   *  and otherwise deferred to the release of an un-moved press — see
+   *  onOverlapPoint and beginDrag/onDragEnd. A CLICK still goes to a curve
+   *  underneath, same as always; a real DRAG now wins back to the label.
+   *  Report 4f6649d1: a badge sitting on its own line could never be grabbed,
+   *  only clicked through to the line beneath it. */
   onOverlapPick: ((e: PointerEvent) => boolean) | null = null;
+  /** The POINT half of the same arbitration, asked immediately (never
+   *  deferred): there is no label-drag standing in for moving a sketch point,
+   *  so a point under the badge still claims the whole press at pointerdown,
+   *  click or drag alike, exactly as onOverlapPick alone used to for both. */
+  onOverlapPoint: ((e: PointerEvent) => boolean) | null = null;
+  /** A pure query, asked only to decide whether THIS press should be
+   *  deferred (see pointerdown below): true only for a curve, in the select
+   *  tool, under a draggable label. Kept separate from onOverlapPick because
+   *  that one is NOT pure — in the dimension tool it also picks the operand
+   *  (labelOverlapDimension), which must still happen immediately at
+   *  pointerdown, same as always; deferring it too would leave the
+   *  in-progress dimension's live preview captured by the label's own
+   *  pointer capture instead of tracking the canvas. */
+  onOverlapCurve: ((e: PointerEvent) => boolean) | null = null;
   /** Screen px → sketch-plane mm. The owner installs it (SketchMode's own
    *  unsnapped cursor→plane routine), so a label drag converts through the REAL
    *  plane — no guessed scale factor, and correct on an XZ/YZ/datum plane whose
@@ -348,6 +369,27 @@ export class SketchDimensions {
         this.beginEdit(label);
         return;
       }
+      // A point under the badge claims the whole press immediately, click or
+      // drag alike: there is no label-drag standing in for moving a sketch
+      // point, so there is nothing to defer here.
+      if (this.onOverlapPoint?.(e)) {
+        label.suppressEdit = true;
+        return;
+      }
+      const draggable = !!(label.placeCommit && label.place && this.onPlanePoint);
+      if (draggable && this.onOverlapCurve?.(e)) {
+        // A CURVE under the badge no longer claims the press right away
+        // (4f6649d1: "I cannot click and drag the dimension" when it
+        // overlays a line). beginDrag starts tracking regardless; onDragMove
+        // commits to the label once the press turns into a real drag, and
+        // onDragEnd arbitrates the old way — via onOverlapPick — only when
+        // the press turns out to be a plain, un-moved click.
+        this.beginDrag(label, e);
+        return;
+      }
+      // Nothing to defer to: either this label can't be dragged, or
+      // onOverlapCurve said no (nothing underneath, or the dimension tool —
+      // see its doc comment). The same immediate hand-off as always.
       label.suppressEdit = this.onOverlapPick?.(e) ?? false;
       // onOverlapPick rebuilds every label when geometry claims the pick, so
       // `el` may already be detached — never start a drag on top of that.
@@ -436,6 +478,10 @@ export class SketchDimensions {
       const dx = e.clientX - d.startClient.x, dy = e.clientY - d.startClient.y;
       if (dx * dx + dy * dy < SketchDimensions.DRAG_PX ** 2) return; // still a click
       d.moved = true;
+      // Past the threshold: a real drag, so the label wins it back from any
+      // curve underneath (4f6649d1) — mark it selected now, the same moment
+      // onOverlapPick would have run before this was deferred.
+      this.selectLabel(d.label);
     }
     e.stopPropagation();
     const p = this.placeAt(e.clientX, e.clientY);
@@ -455,7 +501,16 @@ export class SketchDimensions {
     const d = this.drag;
     if (!d) return;
     this.endDrag(d.label, e.pointerId);
-    if (!d.moved) return; // a plain click: leave it to the click handler
+    if (!d.moved) {
+      // An un-moved release: NOW decide whether a curve underneath claims
+      // this click after all — the same arbitration onOverlapPick always
+      // did, just no longer decided before the press had a chance to become
+      // a drag. Only reached when draggable was true at pointerdown, so a
+      // label that lost here is still selected at the NEXT un-moved press.
+      d.label.suppressEdit = this.onOverlapPick?.(e) ?? false;
+      if (!d.label.suppressEdit) this.selectLabel(d.label);
+      return; // a plain click: leave it to the click handler
+    }
     e.stopPropagation();
     this.suppressClick = true; // the click that follows this release is not an edit
     // a release whose cursor misses the plane (grazing view) falls back to the
