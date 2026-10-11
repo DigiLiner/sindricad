@@ -897,13 +897,33 @@ describe("Tangent anchors at a line's own endpoint when that end already sits on
   });
 });
 
+describe("a tangent's hold is not stacked when it is already there (f3cb1331, X-double-tangent)", () => {
+  it("does not re-add the pointOn Trim or autoConstrain already pinned at the joint", () => {
+    const h = new MockHost();
+    h._ents = [
+      { type: "line", id: "l1", x1: 10, y1: 0, x2: 10, y2: 20 }, // (10,0) sits ON c1's rim
+      { type: "circle", id: "c1", radius: 10, x: 0, y: 0 },
+    ];
+    h._cons = [{ type: "pointOn", e: "l1", p: 0, curve: "c1" }]; // already there
+    h._tool = "tangent";
+    const ct = new ConstraintTools(h);
+    ct.click(v(10, 0.3)); // near l1's own endpoint, not its middle
+    ct.click(v(0, 10));   // circle rim, away from the shared point
+    expect(h._cons).toEqual([
+      { type: "pointOn", e: "l1", p: 0, curve: "c1" },
+      { type: "tangent2", a: "l1", b: "c1" },
+    ]);
+    expect(h.holds[0]).toBeUndefined(); // stripped before it reached the host
+  });
+});
+
 describe("Horizontal/Vertical on two points levels them (p2pDistance = 0), not a whole line (ed07f912)", () => {
   const twoLines = (): ResolvedEntity[] => [
     { type: "line", id: "a", x1: 0, y1: 0, x2: 20, y2: 3 },
     { type: "line", id: "b", x1: 30, y1: 10, x2: 50, y2: 14 },
   ];
 
-  it("vertical on two different lines' endpoints emits p2pDistanceY = 0 between those points", () => {
+  it("vertical on two different lines' endpoints lines them up: p2pDistanceX = 0 between those points", () => {
     const h = new MockHost();
     h._ents = twoLines();
     h._tool = "vertical";
@@ -911,17 +931,17 @@ describe("Horizontal/Vertical on two points levels them (p2pDistance = 0), not a
     ct.click(v(0, 0)); // a's first endpoint: arms it, adds nothing yet
     expect(h._cons).toEqual([]);
     ct.click(v(30, 10)); // b's first endpoint: completes the pair
-    expect(h._cons).toEqual([{ type: "p2pDistanceY", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }]);
+    expect(h._cons).toEqual([{ type: "p2pDistanceX", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }]);
   });
 
-  it("horizontal on two points emits p2pDistanceX = 0", () => {
+  it("horizontal on two points levels them: p2pDistanceY = 0", () => {
     const h = new MockHost();
     h._ents = twoLines();
     h._tool = "horizontal";
     const ct = new ConstraintTools(h);
     ct.click(v(0, 0));
     ct.click(v(50, 14)); // b's SECOND endpoint
-    expect(h._cons).toEqual([{ type: "p2pDistanceX", e1: "a", p1: 0, e2: "b", p2: 1, value: 0 }]);
+    expect(h._cons).toEqual([{ type: "p2pDistanceY", e1: "a", p1: 0, e2: "b", p2: 1, value: 0 }]);
   });
 
   it("still squares a whole line when the click lands on its body, away from either end", () => {
@@ -941,5 +961,69 @@ describe("Horizontal/Vertical on two points levels them (p2pDistance = 0), not a
     ct.click(v(0, 0));
     expect(h._cons).toEqual([]);
     expect(h.warnings).toHaveLength(1);
+  });
+});
+
+describe("Horizontal/Vertical: a point only beats a closer line body in a tie (regression)", () => {
+  it("squares the line when its body is strictly closer than the end point, even near that end", () => {
+    const h = new MockHost();
+    h._ents = [{ type: "line", id: "l1", x1: 0, y1: 0, x2: 3, y2: 0.4 }];
+    h._tool = "horizontal";
+    // click (0.2, 0.05): the line's body passes ~0.023 away, its own end ~0.206 away
+    new ConstraintTools(h).click(v(0.2, 0.05));
+    expect(h._cons).toEqual([{ type: "horizontal", line: "l1" }]);
+  });
+
+  it("still arms the endpoint when the click falls behind it, off the line's body", () => {
+    const h = new MockHost();
+    h._ents = [
+      { type: "line", id: "a", x1: 0, y1: 0, x2: 20, y2: 3 },
+      { type: "line", id: "b", x1: 30, y1: 10, x2: 50, y2: 14 },
+    ];
+    h._tool = "vertical";
+    const ct = new ConstraintTools(h);
+    ct.click(v(-0.5, -0.1)); // behind a's start: outside the segment, so only the point is a candidate
+    expect(h._cons).toEqual([]);
+    expect(h.pendingSets).toBe(1);
+    ct.click(v(30, 10));
+    expect(h._cons).toEqual([{ type: "p2pDistanceX", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }]);
+  });
+
+  it("the highlight agrees with the click: hoverPoint is null exactly where the line wins", () => {
+    const h = new MockHost();
+    h._ents = [{ type: "line", id: "l1", x1: 0, y1: 0, x2: 3, y2: 0.4 }];
+    h._tool = "horizontal";
+    const ct = new ConstraintTools(h);
+    expect(ct.hoverPoint(v(0.2, 0.05))).toBeNull();
+  });
+});
+
+describe("a repeat Horizontal/Vertical on the same two points is refused, not stacked (ed07f912)", () => {
+  const twoLines = (): ResolvedEntity[] => [
+    { type: "line", id: "a", x1: 0, y1: 0, x2: 20, y2: 3 },
+    { type: "line", id: "b", x1: 30, y1: 10, x2: 50, y2: 14 },
+  ];
+
+  it("a second horizontal click on the same pair warns instead of stacking a second p2pDistanceY", () => {
+    const h = new MockHost();
+    h._ents = twoLines();
+    h._cons = [{ type: "p2pDistanceY", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }];
+    h._tool = "horizontal";
+    const ct = new ConstraintTools(h);
+    ct.click(v(0, 0));
+    ct.click(v(30, 10));
+    expect(h._cons).toEqual([{ type: "p2pDistanceY", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }]);
+    expect(h.warnings).toEqual([t("sketch.constraint.alreadyRelated")]);
+  });
+
+  it("catches it however the existing pair's points were ordered", () => {
+    const h = new MockHost();
+    h._ents = twoLines();
+    h._cons = [{ type: "p2pDistanceY", e1: "b", p1: 0, e2: "a", p2: 0, value: 0 }]; // reversed
+    h._tool = "horizontal";
+    const ct = new ConstraintTools(h);
+    ct.click(v(0, 0));
+    ct.click(v(30, 10));
+    expect(h._cons).toHaveLength(1);
   });
 });

@@ -51,10 +51,16 @@ interface Operand {
 
 const isRoundOp = (o: Operand) => o.kind === "circle" || o.kind === "arc";
 
-/** The two operand ids a plain two-operand relation constraint names, sorted
+/** The two operand keys a plain two-operand relation constraint names, sorted
  *  so the pair reads the same whichever order it was clicked in; null for
- *  every other constraint type (points, holds, splines — those are not what
- *  f3cb1331/X-double-tangent are about). */
+ *  every other constraint type (holds, splines — those are not what
+ *  f3cb1331/X-double-tangent are about).
+ *
+ *  p2pDistanceX/p2pDistanceY key on the POINT (`e#p`), not the entity, since
+ *  that is what Horizontal/Vertical's two-point pick names (ed07f912) — a
+ *  repeat click on the same pair of points must refuse the same way a repeat
+ *  Parallel does, rather than stacking a second zero-value constraint on top
+ *  of the first. */
 function relationPair(c: SketchConstraint): [string, string] | null {
   switch (c.type) {
     case "parallel": case "perpendicular": case "collinear": case "equal":
@@ -63,6 +69,8 @@ function relationPair(c: SketchConstraint): [string, string] | null {
       return [c.a, c.b].sort() as [string, string];
     case "concentric":
       return [c.c1, c.c2].sort() as [string, string];
+    case "p2pDistanceX": case "p2pDistanceY":
+      return [`${c.e1}#${c.p1}`, `${c.e2}#${c.p2}`].sort() as [string, string];
     default:
       return null;
   }
@@ -70,12 +78,13 @@ function relationPair(c: SketchConstraint): [string, string] | null {
 
 /** Whether `constraints` already holds a constraint of the SAME relation
  *  between the same two operands as `c` (either pick order) — parallel,
- *  perpendicular, collinear, equal, equalRadius, tangent2 and concentric all
- *  mean the same thing a second time, so a repeat click (or a second route to
- *  the same pair) should add nothing rather than an identical, redundant
- *  constraint. Shared by every site that can create one of these: a tool
- *  click, the right-click menu, and the tangent/perpendicular a line or arc
- *  infers while being drawn (GH f3cb1331, X-double-tangent). */
+ *  perpendicular, collinear, equal, equalRadius, tangent2, concentric and
+ *  p2pDistanceX/Y all mean the same thing a second time, so a repeat click
+ *  (or a second route to the same pair) should add nothing rather than an
+ *  identical, redundant constraint. Shared by every site that can create one
+ *  of these: a tool click, the right-click menu, and the tangent/
+ *  perpendicular a line or arc infers while being drawn (GH f3cb1331,
+ *  X-double-tangent, ed07f912). */
 export function alreadyRelates(constraints: readonly SketchConstraint[], c: SketchConstraint): boolean {
   const pair = relationPair(c);
   if (!pair) return false;
@@ -84,6 +93,41 @@ export function alreadyRelates(constraints: readonly SketchConstraint[], c: Sket
     const kp = relationPair(k);
     return !!kp && kp[0] === pair[0] && kp[1] === pair[1];
   });
+}
+
+/** Whether two constraints are literally the SAME one — same type, same
+ *  operands, same value — order-independent for `coincident` (a point-pair,
+ *  like the relations above). Used only to dedupe the `hold` a tangency
+ *  brings along (cdd04fd1): a line's own end already pinned to the other
+ *  curve by an earlier pick (Trim's keep-tangency, autoConstrain-while-
+ *  drawing, an earlier tangent click on the same joint) must not get a
+ *  second, identical pointOn/coincident stacked on top of the first — two
+ *  identical constraints solve the same as one, but only one of them is ever
+ *  reachable to delete. */
+function constraintEquals(a: SketchConstraint, b: SketchConstraint): boolean {
+  if (a.type !== b.type) return false;
+  if (a.type === "coincident" && b.type === "coincident") {
+    return (a.e1 === b.e1 && a.p1 === b.p1 && a.e2 === b.e2 && a.p2 === b.p2)
+      || (a.e1 === b.e2 && a.p1 === b.p2 && a.e2 === b.e1 && a.p2 === b.p1);
+  }
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/** `holds` with anything `constraints` already has stripped out — the same
+ *  "don't add it twice" protection `alreadyRelates` gives the constraint
+ *  itself, extended to the pointOn/coincident hold riding along with a
+ *  tangency (GH f3cb1331, X-double-tangent): a second tangent click onto a
+ *  joint Trim's keep-tangency or autoConstrain-while-drawing already pinned
+ *  used to add a second, identical hold on top of the first. Returns
+ *  `undefined` rather than `[]` once everything is filtered out, matching
+ *  the "no holds" shape the rest of this file already uses. */
+export function dedupeHolds(
+  constraints: readonly SketchConstraint[],
+  holds: readonly SketchConstraint[] | undefined,
+): SketchConstraint[] | undefined {
+  if (!holds || !holds.length) return undefined;
+  const kept = holds.filter((h) => !constraints.some((k) => constraintEquals(k, h)));
+  return kept.length ? kept : undefined;
 }
 
 /** the ENTITY an operand id belongs to — `R~2` belongs to the rectangle `R` */
@@ -421,26 +465,30 @@ export class ConstraintTools {
    *  these two points" had no tool at all, since the whole-line reading only
    *  ever answers for a SINGLE line's own two ends.
    *
-   *  A point under the cursor wins over a line body — a line's own endpoint
-   *  is reachable both ways, and a lone line can still be squared by clicking
-   *  its BODY, away from either end. */
+   *  A point under the cursor wins over a line body only when it is at
+   *  least as close as the line — see `axisPickPoint`. A lone line can still
+   *  be squared by clicking its BODY, away from either end. */
   private axisClick(p: THREE.Vector2, tool: "horizontal" | "vertical") {
-    const ep = this.pickEndpoint(p, this.pendingEndpoint);
-    if (ep) {
-      if (!this.pendingEndpoint) {
-        this.pendingEndpoint = ep;
-        this.host.setPendingPoints(pts(this.endpointXY(ep)));
-        return;
-      }
+    if (this.pendingEndpoint) {
+      // completing an armed two-point pick: a point under the cursor always
+      // finishes it (there is no line reading to fall back to mid-pick)
+      const ep = this.pickEndpoint(p, this.pendingEndpoint);
+      if (!ep) return this.missed(); // a point is armed; a miss must not silently drop it
       const a = this.pendingEndpoint;
       this.pendingEndpoint = null;
       this.host.setPendingPoints([]);
       if (a.id === ep.id && a.idx === ep.idx) return this.missed(); // the same point twice holds nothing
-      const type = tool === "horizontal" ? "p2pDistanceX" : "p2pDistanceY";
+      // horizontal LEVELS (equal Y), vertical LINES UP (equal X) — see sketchSolve
+      const type = tool === "horizontal" ? "p2pDistanceY" : "p2pDistanceX";
       this.addConstraint({ type, e1: a.id, p1: a.idx, e2: ep.id, p2: ep.idx, value: 0 }, a.id);
       return;
     }
-    if (this.pendingEndpoint) return this.missed(); // a point is armed; a miss must not silently drop it
+    const ep = this.axisPickPoint(p);
+    if (ep) {
+      this.pendingEndpoint = ep;
+      this.host.setPendingPoints(pts(this.endpointXY(ep)));
+      return;
+    }
     const op = this.pickOperand(p);
     if (!op || op.kind !== "line") return this.missed();
     // constraining the projected line ITSELF is meaningless — it's fixed.
@@ -448,6 +496,26 @@ export class ConstraintTools {
     // is perfectly constrainable, it just isn'tool a `line` entity.)
     if (op.ent.type === "projected") return this.host.warn(PROJECTED_FIXED_MSG);
     this.addConstraint({ type: tool, line: op.id });
+  }
+
+  /** Horizontal/Vertical's first-click precedence between a point and a line
+   *  body under the same cursor position: the point wins UNLESS a line is
+   *  strictly closer. A line's own endpoint sits on its own body too, so
+   *  without a tie-break, the common gesture — squaring a whole line by
+   *  clicking near its end, not its exact middle — silently armed a two-point
+   *  pick instead (regression: a point always won outright). Shared with
+   *  `hoverPoint` so the highlight never disagrees with the click. */
+  private axisPickPoint(p: THREE.Vector2): { id: string; idx: number } | null {
+    const ep = this.pickEndpoint(p, null);
+    if (!ep) return null;
+    const op = this.pickOperand(p);
+    if (!op || op.kind !== "line") return ep;
+    const seg = lineOperand(new Map(this.host.entities().map((e) => [e.id, e])), op.id);
+    const at = seg ? this.endpointXY(ep) : null;
+    if (!seg || !at) return ep;
+    const lineDist = distToSeg({ x: seg.x1, y: seg.y1 }, { x: seg.x2, y: seg.y2 }, p);
+    const pointDist = Math.hypot(at.x - p.x, at.y - p.y);
+    return lineDist < pointDist ? null : ep;
   }
 
   /** THE operand under the cursor. The shapes are the reason this exists: a
@@ -543,13 +611,16 @@ export class ConstraintTools {
   }
 
   /** Plane coords of the addressable point under `p`, or null. For the hover
-   *  highlight, and deliberately routed through the SAME pickEndpoint the click
-   *  flows use: if these two ever disagree the highlight becomes a lie, which is
-   *  the failure this whole affordance exists to remove (a target you can see
-   *  but not hit is the GH #17 shape, and one you can hit but not see is what
-   *  rectangle corners were until this release). */
+   *  highlight, and deliberately routed through the SAME pick the click flows
+   *  use (plain pickEndpoint, or axisPickPoint for Horizontal/Vertical's
+   *  first click): if these two ever disagree the highlight becomes a lie,
+   *  which is the failure this whole affordance exists to remove (a target
+   *  you can see but not hit is the GH #17 shape, and one you can hit but not
+   *  see is what rectangle corners were until this release). */
   hoverPoint(p: THREE.Vector2): { x: number; y: number } | null {
-    const ep = this.pickEndpoint(p, this.pendingEndpoint);
+    const tool = this.host.tool();
+    const axisFirstClick = (tool === "horizontal" || tool === "vertical") && !this.pendingEndpoint;
+    const ep = axisFirstClick ? this.axisPickPoint(p) : this.pickEndpoint(p, this.pendingEndpoint);
     return ep ? this.endpointXY(ep) : null;
   }
 
@@ -945,6 +1016,6 @@ export class ConstraintTools {
       this.host.warn(t("sketch.constraint.alreadyRelated"));
       return;
     }
-    this.host.addConstraint(c, moves, holds);
+    this.host.addConstraint(c, moves, dedupeHolds(this.host.constraints(), holds));
   }
 }

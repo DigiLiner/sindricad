@@ -363,6 +363,18 @@ describe("the joint stays where it is", () => {
     expect(Math.abs(dot(leaving(sp, 0), radial(ctr, sp.points[0]!)))).toBeLessThan(1e-7);
   });
 
+  it("does not re-add a hold that's already pinned there, through the real addTrialConstraint (f3cb1331, X-double-tangent)", async () => {
+    const l1 = L("l1", 10, 0, 10, 20); // (10,0) sits ON c1's rim
+    const c1: ResolvedEntity = { type: "circle", id: "c1", x: 0, y: 0, radius: 10 };
+    const live = tangentSketch([l1, c1], [{ type: "pointOn", e: "l1", p: 0, curve: "c1" }]);
+    live.click(10, 0.3); // near l1's own endpoint, not its middle
+    live.click(0, 10);   // circle rim, away from the shared point
+    expect(live.s.constraints).toEqual([
+      { type: "pointOn", e: "l1", p: 0, curve: "c1" },
+      { type: "tangent2", a: "l1", b: "c1" },
+    ]);
+  });
+
   it("from the menu too: the On comes with the tangency", async () => {
     const C: ResolvedEntity = { type: "circle", id: "C", x: 60, y: 50, radius: 20 };
     const live = liveSketch([C, SP("s", [[80, 50], [88, 62], [100, 64]])]);

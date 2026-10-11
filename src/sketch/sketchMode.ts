@@ -66,7 +66,7 @@ import { isOriginGeometry, originGeometry } from "./origin";
 import { boxFromDrag, entitiesInBox } from "./boxSelect";
 import { applicableConstraints, constraintLabel, menuOperands, operandUnder, symmetricOperands, type MenuOperand } from "./constraintMenu";
 import { addKey, additiveClick, clickKey, dropOwner, pointKey, selOwner, selOwners, selPart } from "./selection";
-import { ConstraintTools, CONSTRAINT_TOOLS, alreadyRelates, splineTangentFor, type ConstraintHost } from "./constraintTools";
+import { ConstraintTools, CONSTRAINT_TOOLS, alreadyRelates, dedupeHolds, splineTangentFor, type ConstraintHost } from "./constraintTools";
 import { PatternFlow, PATTERN_TOOLS, ENTITY_PATTERNS, type PatternHost } from "./patternFlow";
 import { ProjectPanel } from "./projectPanel";
 import { checkSketch } from "./check";
@@ -5031,8 +5031,12 @@ export class SketchMode {
       toast(t("sketch.constraint.alreadyRelated"));
       return;
     }
-    this.constraints.push(...holds, c);
-    this.trial = { cons: [...holds, c], msg: SketchMode.CONSTRAINT_CONFLICT_MSG }; // withdrawn again if this solve conflicts
+    // the `hold` a tangency brings along can already be sitting there (Trim's
+    // keep-tangency, autoConstrain-while-drawing, an earlier tangent click on
+    // the same joint) — stripped rather than stacked (cdd04fd1).
+    const kept = dedupeHolds(this.constraints, holds) ?? [];
+    this.constraints.push(...kept, c);
+    this.trial = { cons: [...kept, c], msg: SketchMode.CONSTRAINT_CONFLICT_MSG }; // withdrawn again if this solve conflicts
     if (moves) this.pendingBias = { moves: [moves] }; // before requestSolve — pump reads it synchronously
     this.requestSolve();
   }
