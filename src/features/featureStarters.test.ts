@@ -54,10 +54,14 @@ import mainSrc from "../main.ts?raw";
 // chooser is the strongest form of "said something" a tool can do. The dynamic
 // `await import("../ui/choice")` inside startCombine resolves to this mock too.
 const spoke: string[] = [];
+// startPrimitive's choice dialog defaults to "no shape picked" (null) for the
+// generic ratchet below; the dedicated primitive-hint tests further down set
+// this to "box" to drive the add-feature path.
+const { chooseResolution } = vi.hoisted(() => ({ chooseResolution: { value: null as string | null } }));
 vi.mock("../ui/choice", () => ({
   choose: (title: string) => {
     if (title) spoke.push(`choose(${title})`);
-    return Promise.resolve(null);
+    return Promise.resolve(chooseResolution.value);
   },
   chooseMulti: (title: string) => {
     if (title) spoke.push(`chooseMulti(${title})`);
@@ -68,6 +72,9 @@ vi.mock("../ui/prompt", () => ({
   setPrompt: (t: string | null) => {
     if (t) spoke.push(`prompt(${t})`);
   },
+}));
+vi.mock("../ui/toast", () => ({
+  toast: (m: string) => { spoke.push(`toast(${m})`); return () => {}; },
 }));
 
 // featureStarters registers its Escape handler on `window` (the plane picker and
@@ -594,5 +601,42 @@ describe("Extrude on a selected face", () => {
   it("pushes the face as before when no profile is parallel to it, or it is curved", () => {
     expect(faceWorld({ normal: [1, 0, 0] }).started.map((s) => s.tool)).toEqual(["pressPull"]);
     expect(faceWorld({ normal: [0, 0, 1], flat: false }).started.map((s) => s.tool)).toEqual(["pressPull"]);
+  });
+});
+
+// Field 3ff3dc1b: "I placed a primitive and could not figure out how to move
+// it, only resize it." Move (ribbon or the M key) already works on any body
+// regardless of what feature made it (moveTool.ts has no feature-type gate at
+// all) — the gap was purely that nothing on screen pointed there, since the
+// inspector only ever shows a primitive's Length/Width/Height resize fields.
+// Thomas's call: ship only the one-time hint, never change where primitives
+// rest (that is a backward-compatibility call on existing saved documents,
+// not an engineering one).
+describe("primitive placement points at Move", () => {
+  it("hints that Move repositions and rotates it, after the body is placed", async () => {
+    chooseResolution.value = "box";
+    const h = harness({ busy: false, bodies: [], features: [], regions: 0 });
+    const starters = h.starters as unknown as { startPrimitive: () => Promise<void> };
+    await starters.startPrimitive();
+    chooseResolution.value = null;
+    expect(
+      spoke.some((s) => s.startsWith("toast(")),
+      "placing a primitive did not hint that Move can reposition or rotate it",
+    ).toBe(true);
+  });
+
+  it("hints only once per session, not on every primitive placed", async () => {
+    chooseResolution.value = "box";
+    const h = harness({ busy: false, bodies: [], features: [], regions: 0 });
+    const starters = h.starters as unknown as { startPrimitive: () => Promise<void> };
+    await starters.startPrimitive();
+    spoke.length = 0;
+    chooseResolution.value = "cylinder";
+    await starters.startPrimitive();
+    chooseResolution.value = null;
+    expect(
+      spoke.filter((s) => s.startsWith("toast(")).length,
+      "hinted a second time in the same session — it should have spoken once and stayed quiet",
+    ).toBe(0);
   });
 });
