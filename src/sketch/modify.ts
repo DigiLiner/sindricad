@@ -18,6 +18,7 @@ import {
   circleLineIntersect,
   circleCircleIntersect,
   curveCrossings,
+  curveCurveIntersect,
   lineIntersect,
   paramOnSeg,
   distToSeg,
@@ -374,7 +375,7 @@ function arcGeom(e: { x1: number; y1: number; x2: number; y2: number; mx: number
 /** `o` as the crossing search sees it: exact for a line, circle or arc, native
  *  or projected, and the shared tessellation for everything else (a spline
  *  has no closed form here; rectangle and polygon edges are straight anyway). */
-function entityCurves(o: ResolvedEntity): Curve2[] {
+export function entityCurves(o: ResolvedEntity): Curve2[] {
   const seg = (x1: number, y1: number, x2: number, y2: number): Curve2 =>
     ({ kind: "seg", a: v(x1, y1), b: v(x2, y2) });
   const round = (x: number, y: number, r: number): Curve2 =>
@@ -852,6 +853,33 @@ export function tangencyPoints(ents: readonly ResolvedEntity[], cons: readonly S
     const at = sa && sb ? touchPoint(sa, sb) : null;
     if (!at || !reaches(a, at) || !reaches(b, at)) continue;
     if (!out.some((q) => q.distanceTo(at) < 1e-6)) out.push(at);
+  }
+  return out;
+}
+
+/** Every point where two DIFFERENT entities genuinely cross — a snap target
+ *  only (bfe23a4b: not a solver point, never a selectable sketch point in its
+ *  own right), found by intersecting their curves with both sides bounded
+ *  (curveCurveIntersect), unlike crossingsOn's one-side-bounded search for
+ *  Trim/Extend. Origin axes ARE included: crossingsOn excludes them only
+ *  because they are never a cut boundary, and that comment says itself they
+ *  stay snappable. A shared drawn endpoint between two entities also crosses
+ *  by this definition and is deduped like any other repeat, but it never wins
+ *  the snap itself — an "endpoint" candidate there outranks a "crossing" one. */
+export function crossingPoints(ents: readonly ResolvedEntity[]): THREE.Vector2[] {
+  const out: THREE.Vector2[] = [];
+  for (let i = 0; i < ents.length; i++) {
+    const curvesI = entityCurves(ents[i]!);
+    for (let j = i + 1; j < ents.length; j++) {
+      const curvesJ = entityCurves(ents[j]!);
+      for (const a of curvesI) {
+        for (const b of curvesJ) {
+          for (const p of curveCurveIntersect(a, b)) {
+            if (!out.some((q) => q.distanceTo(p) < 1e-6)) out.push(p);
+          }
+        }
+      }
+    }
   }
   return out;
 }

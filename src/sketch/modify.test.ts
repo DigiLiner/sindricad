@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as THREE from "three";
-import { trimEntity, breakAt, extendLine, chamferCorner, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, breakLink } from "./modify";
+import { trimEntity, breakAt, extendLine, chamferCorner, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, breakLink, crossingPoints } from "./modify";
 import type { ResolvedEntity } from "./snap";
 
 const v = (x: number, y: number) => new THREE.Vector2(x, y);
@@ -11,6 +11,34 @@ const arcRadius = (a: any) => {
   const uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
   return Math.hypot(ax - ux, ay - uy);
 };
+
+describe("crossingPoints", () => {
+  const line = (id: string, x1: number, y1: number, x2: number, y2: number): ResolvedEntity =>
+    ({ type: "line", id, x1, y1, x2, y2 });
+
+  it("finds where two lines actually cross (bfe23a4b)", () => {
+    const ents: ResolvedEntity[] = [line("a", -20, -20, 10, 10), line("b", -20, 10, 10, -20)];
+    const pts = crossingPoints(ents);
+    expect(pts).toHaveLength(1);
+    expect(pts[0]!.x).toBeCloseTo(-5);
+    expect(pts[0]!.y).toBeCloseTo(-5);
+  });
+
+  it("finds a line crossing a circle, and never counts a near miss", () => {
+    const ents: ResolvedEntity[] = [
+      line("a", -20, 0, 20, 0),
+      { type: "circle", id: "c", x: 0, y: 0, radius: 5 },
+    ];
+    expect(crossingPoints(ents).map((p) => p.x).sort((a, b) => a - b)).toEqual([expect.closeTo(-5), expect.closeTo(5)]);
+    expect(crossingPoints([line("a", -20, 20, 20, 20), { type: "circle", id: "c", x: 0, y: 0, radius: 5 }])).toEqual([]);
+  });
+
+  it("does not report a crossing beyond either curve's own extent", () => {
+    // these lines' extensions cross, but neither segment reaches that far
+    const ents: ResolvedEntity[] = [line("a", 0, 0, 1, 1), line("b", 0, 10, 1, 9)];
+    expect(crossingPoints(ents)).toEqual([]);
+  });
+});
 
 describe("chamferCorner", () => {
   it("bevels two perpendicular lines, keeping their ids", () => {

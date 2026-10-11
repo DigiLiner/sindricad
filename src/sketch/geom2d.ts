@@ -116,6 +116,23 @@ export type Curve2 =
  *  trim wants the inside of its curve, extend the outside. */
 export type Carrier2 = { kind: "line"; a: V; b: V } | { kind: "circle"; c: V; r: number };
 
+/** Whether `p` — already known to sit on `c`'s carrier, its line or circle —
+ *  is within `c`'s own bounds: a segment's ends, or an arc's sweep. Pulled out
+ *  of curveCrossings so a genuine two-curve crossing (both sides bounded,
+ *  curveCurveIntersect below) can reuse the exact same bound check Trim/Extend
+ *  already trust, rather than a second copy of the angle-slack arithmetic. */
+function inCurveExtent(c: Curve2, p: V): boolean {
+  if (c.kind === "seg") {
+    const t = paramOnSeg(c.a, c.b, p);
+    return t >= -1e-6 && t <= 1 + 1e-6;
+  }
+  if (c.sweep >= TAU) return true;
+  // the same touchTol along the rim, so a crossing AT an arc's end still counts
+  const slack = touchTol(c.r) / Math.max(c.r, 1e-9);
+  const at = ccwDelta(c.a0, Math.atan2(p.y - c.c.y, p.x - c.c.x));
+  return at <= c.sweep + slack || at >= TAU - slack;
+}
+
 /** Where `other` crosses or touches the carrier `on`.
  *
  *  Analytic for every pair a sketch draws: line-line, line-circle and
@@ -127,29 +144,28 @@ export type Carrier2 = { kind: "line"; a: V; b: V } | { kind: "circle"; c: V; r:
  *  Crossings beyond `other`'s own extent (a segment's ends, an arc's sweep) are
  *  dropped. */
 export function curveCrossings(on: Carrier2, other: Curve2): V[] {
-  if (other.kind === "seg") {
-    let pts: V[];
-    if (on.kind === "line") {
-      const x = lineIntersect(on.a, on.b, other.a, other.b);
-      pts = x ? [x] : [];
-    } else {
-      pts = circleLineIntersect(other.a, other.b, on.c, on.r);
-    }
-    return pts.filter((p) => {
-      const t = paramOnSeg(other.a, other.b, p);
-      return t >= -1e-6 && t <= 1 + 1e-6;
-    });
-  }
-  const pts = on.kind === "line"
-    ? circleLineIntersect(on.a, on.b, other.c, other.r)
-    : circleCircleIntersect(on.c, on.r, other.c, other.r);
-  if (other.sweep >= TAU) return pts;
-  // the same touchTol along the rim, so a crossing AT an arc's end still counts
-  const slack = touchTol(other.r) / Math.max(other.r, 1e-9);
-  return pts.filter((p) => {
-    const at = ccwDelta(other.a0, Math.atan2(p.y - other.c.y, p.x - other.c.x));
-    return at <= other.sweep + slack || at >= TAU - slack;
-  });
+  const pts =
+    other.kind === "seg"
+      ? on.kind === "line"
+        ? (() => { const x = lineIntersect(on.a, on.b, other.a, other.b); return x ? [x] : []; })()
+        : circleLineIntersect(other.a, other.b, on.c, on.r)
+      : on.kind === "line"
+        ? circleLineIntersect(on.a, on.b, other.c, other.r)
+        : circleCircleIntersect(on.c, on.r, other.c, other.r);
+  return pts.filter((p) => inCurveExtent(other, p));
+}
+
+const carrierOf = (c: Curve2): Carrier2 =>
+  c.kind === "seg" ? { kind: "line", a: c.a, b: c.b } : { kind: "circle", c: c.c, r: c.r };
+
+/** Where two bounded curves genuinely CROSS, each curve's own extent checked —
+ *  unlike curveCrossings, which bounds only `other` (right for Trim/Extend,
+ *  which always cuts one curve against another that keeps going). A snap
+ *  target for two curves that cross without sharing a drawn endpoint
+ *  (bfe23a4b): a coordinate neither curve names on its own, found rather than
+ *  assumed, and never a selectable sketch point in its own right. */
+export function curveCurveIntersect(a: Curve2, b: Curve2): V[] {
+  return curveCrossings(carrierOf(a), b).filter((p) => inCurveExtent(a, p));
 }
 
 /** parameter t in [0,1] of the closest point on segment p1p2 to q */

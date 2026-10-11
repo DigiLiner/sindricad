@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import * as THREE from "three";
-import { lineIntersect, segIntersect, segCircleIntersect, paramOnSeg, distToSeg } from "./geom2d";
+import { lineIntersect, segIntersect, segCircleIntersect, paramOnSeg, distToSeg, curveCurveIntersect } from "./geom2d";
 
 const v = (x: number, y: number) => new THREE.Vector2(x, y);
 
@@ -64,5 +64,28 @@ describe("paramOnSeg / distToSeg", () => {
   });
   it("distToSeg clamps to the nearest endpoint beyond the span", () => {
     expect(distToSeg(v(0, 0), v(10, 0), v(13, 4))).toBeCloseTo(5);
+  });
+});
+
+describe("curveCurveIntersect", () => {
+  it("finds where two crossing segments actually cross, both sides bounded", () => {
+    const a = { kind: "seg" as const, a: v(-20, -20), b: v(10, 10) };
+    const b = { kind: "seg" as const, a: v(-20, 10), b: v(10, -20) };
+    const pts = curveCurveIntersect(a, b);
+    expect(pts).toHaveLength(1);
+    expect(pts[0]!.x).toBeCloseTo(-5);
+    expect(pts[0]!.y).toBeCloseTo(-5);
+  });
+  it("drops a crossing that lands beyond EITHER curve's own extent", () => {
+    // these segments' carriers (infinite lines) cross, but neither segment reaches it
+    const a = { kind: "seg" as const, a: v(0, 0), b: v(1, 1) };
+    const b = { kind: "seg" as const, a: v(0, 10), b: v(1, 9) };
+    expect(curveCurveIntersect(a, b)).toEqual([]);
+  });
+  it("finds a line crossing a circle", () => {
+    const line = { kind: "seg" as const, a: v(-10, 0), b: v(10, 0) };
+    const circle = { kind: "round" as const, c: v(0, 0), r: 5, a0: 0, sweep: Math.PI * 2 };
+    const pts = curveCurveIntersect(line, circle);
+    expect(pts.map((p) => p.x).sort((x, y) => x - y)).toEqual([expect.closeTo(-5), expect.closeTo(5)]);
   });
 });

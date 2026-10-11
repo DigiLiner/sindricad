@@ -25,7 +25,7 @@ import {
   targetKey, unsupportedMessage,
   type DimOptions, type DimPlan, type DimTarget,
 } from "./dimensionTool";
-import { pickEntity, pointBeatsCurve, tangencyPoints, trimSpan, trimWithConstraints, detachEndpoint, detachableEnd, isBreakCut, filletCorner, chamferCorner, cornerJoins, explodeCompound, polygonRingHolds, rotationTie, translationTie, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, followOffsets, followRefusal, breakWithConstraints, joinLines, extendLine, breakLink, attachmentPoints, bodyDragBlocked, bodyDragFrame, fixPinnedIds, pickDragPoint, FIXED_POINT_MSG, PROJECTED_FIXED_MSG, type ExplodeResult, type OffsetResult, type TrimResult } from "./modify";
+import { pickEntity, pointBeatsCurve, tangencyPoints, crossingPoints, trimSpan, trimWithConstraints, detachEndpoint, detachableEnd, isBreakCut, filletCorner, chamferCorner, cornerJoins, explodeCompound, polygonRingHolds, rotationTie, translationTie, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, followOffsets, followRefusal, breakWithConstraints, joinLines, extendLine, breakLink, attachmentPoints, bodyDragBlocked, bodyDragFrame, fixPinnedIds, pickDragPoint, FIXED_POINT_MSG, PROJECTED_FIXED_MSG, type ExplodeResult, type OffsetResult, type TrimResult } from "./modify";
 import { newEntityId, newConstraintId, isDimConstraint, notePatternId } from "./id";
 import { SketchHistory, cloneSnapshot, type SketchSnapshot } from "./history";
 import { isPlainNumber, parseField, dimValueOk, fmtLength, fieldText, canonicalDecimal, storedDimExpr } from "../ui/units";
@@ -1011,7 +1011,13 @@ export class SketchMode {
     // snap away, Coincident and all.
     const touches = tangencyPoints(this.entities, this.constraints)
       .map((q): SnapCandidate => ({ p: q, kind: "tangent", priority: 80 }));
-    this.candidates = [...candidatesFromEntities([...this.entities, ...derived]), ...touches];
+    // Where two curves genuinely CROSS, a snap target only — never a solver
+    // point or a selectable sketch point (bfe23a4b). Ranked below a midpoint
+    // (80) and a tangent touch, same reasoning as those: a real endpoint or
+    // centre in reach must still win over a crossing that happens to sit near it.
+    const crossings = crossingPoints(this.entities)
+      .map((q): SnapCandidate => ({ p: q, kind: "crossing", priority: 75 }));
+    this.candidates = [...candidatesFromEntities([...this.entities, ...derived]), ...touches, ...crossings];
     // an in-progress dimension holds entity REFERENCES, and a solve replaces
     // every entity object — re-read the picks off the fresh list
     if (this.dimPicks.length) this.refreshDimPlan();
