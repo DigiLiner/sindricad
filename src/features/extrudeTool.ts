@@ -2123,7 +2123,14 @@ export class ExtrudeTool {
   // a symmetric extrude from a face of a body is half inside it, which is the
   // cut the feature was asked for. A majority of the selected areas decides.
   private operationFrom(r: SolidReading): Op {
-    if (!r.solid) return "new";
+    // r.solid only says a body exists SOMEWHERE in the document, not that
+    // THIS region is anywhere near it — a region whose every probe ray
+    // misses falls through to "join" below (inside=0 isn't a majority of
+    // anything, but it isn't "no hits" either). Catch that case first: no
+    // hit on either side is the same as no body at all (field report
+    // c191ee94: a disjoint circle defaulted to Join, and stayed Join on
+    // every re-edit since loadPanelValues() just restores the saved value).
+    if (!r.solid || (!r.plus.some(Boolean) && !r.minus.some(Boolean))) return "new";
     const forward = this.distance >= 0;
     const inside = r.plus.filter((plus, i) => {
       const minus = r.minus[i] === true;

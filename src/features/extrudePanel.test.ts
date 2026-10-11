@@ -381,8 +381,11 @@ describe("creating an extrude from the panel", () => {
   it("the operation is the panel's: no dialog after the click", () => {
     const h = harness({ hasSolid: true });
     h.create();
-    // pulled away from the (stubbed) body: the guess is Join
-    expect(h.chip("Join").classList.contains("on")).toBe(true);
+    // a body exists in the document (hasSolid), but the stub's pointInSolid
+    // always misses, so this area touches nothing — the guess is New Body
+    // (field report c191ee94: a region touching nothing used to default to
+    // Join, and stayed Join on every re-edit).
+    expect(h.chip("New Body").classList.contains("on")).toBe(true);
     h.chip("Cut").dispatch("click");
     expect(h.warning().textContent, "a cut where there is nothing to cut went unsaid").not.toBe("");
     h.ok();
