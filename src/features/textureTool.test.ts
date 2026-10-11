@@ -152,7 +152,7 @@ describe("TextureTool commit(): deferred while a rebuild is in flight", () => {
       getSelectedBodies: () => ["b1"],
       getSelectedFaceIds: () => faceIds,
       selectedFacesForPressPull: () => ({
-        selectors: faceIds.map((fid) => ({ kind: "face", by: "nearest", point: [-30.57, 22.39, z] })),
+        selectors: faceIds.map(() => ({ kind: "face", by: "nearest", point: [-30.57, 22.39, z] })),
         faceIds,
         bodyId: "b1",
       }),
