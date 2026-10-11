@@ -18,6 +18,83 @@ This file starts on 2026-08-03. For anything before that, see the
 
 ## Unreleased
 
+### Sketching
+
+- **Typing a number keeps the line where it is.** An angle dimension typed onto
+  a line that already sat at that angle could flip the line to the other side.
+  The number is now always the angle you see, and the line keeps its side.
+- **Angle dimensions read the angle you see.** A line drawn right to left used
+  to show the supplement (150 instead of 30). The angle now follows where the
+  label sits, and right-click on an angle offers **Flip side**.
+- **A typed size is locked.** A width or height typed for a rectangle, or a
+  diameter typed for a circle while drawing, becomes a locked dimension.
+- **No more duplicate constraints.** Clicking Parallel, Perpendicular, Equal,
+  Collinear, Concentric or Tangent on a pair that already has it does nothing
+  instead of stacking a redundant copy. This also covers a tangency kept by Trim
+  or added while drawing, which is where a second, amber Tangent came from.
+- **Tangent anchors at an end** that already touches the other curve; clicking
+  elsewhere still gives a free tangent.
+- **Horizontal and Vertical work on two points**, lining them up on that axis.
+- **Drag a dimension that sits on a line.** A click still picks the line, but a
+  drag now moves the dimension.
+- **The point under a Coincident or Point-on badge stays clickable.** Those
+  badges sit just beside the point now.
+- **Equal, Parallel and Perpendicular badges show on both lines or arcs.**
+- **A Legend in the Sketch Palette** names every constraint badge and explains
+  that amber means redundant and red means conflicting.
+- **Snapping:** a circle's centre wins over its rim, curves snap where they
+  cross, polygon and slot sides snap at their midpoints, and a midpoint snap has
+  its own triangle marker.
+- **Dimension arrowheads are one small size** at any length and zoom.
+- **Dragging a circle that is tangent to a slot** stops at the end of the side
+  whether you grab its centre or its rim.
+- **Naming a dimension is easier to find:** each unnamed row in Parameters has a
+  name button (typing name=value or double-clicking the label still works).
+- **A parameter no sketch can meet is refused.** I keep the old value and name
+  every sketch and constraint that blocks it, instead of leaving the model out
+  of step with the number.
+- **Parameter rows light up** when one side or point of a shape is selected.
+- **Toggling a sketch's eye** updates the screen straight away.
+- **Keep the sketch visible after Extrude** is a new setting (off by default).
+- **View > Side Panels** hides the Browser, Parameters and help for more room
+  on a small screen.
+- **The sketch Copy button** has a tooltip so it is easier to find.
+
+### Modelling
+
+- **Extrude at a touch point.** A closed shape that ends exactly on a circle or
+  arc now forms a region you can extrude, and the Extrude and Press/Pull
+  preview always matches what gets built.
+- **A small taper on a round extrude works** in both directions.
+- **A cut that would empty a body is refused**, naming the body, instead of
+  leaving it silently empty.
+- **Extrude defaults to New Body** when the sketch does not touch any solid.
+- **Fillet and Chamfer:** the radius box drags along the edges, and clicking a
+  selected edge anywhere along it deselects it.
+- **Saving a texture mid-rebuild** waits for the rebuild instead of saving off
+  the preview, and a texture is saved on the face you clicked, not on the
+  preview's crest (which could fail as an "ambiguous face reference").
+- **Edges between two different bodies** always stay drawn, and hiding a body no
+  longer erases a neighbour's outline.
+- **After placing a primitive**, a one-time hint says Move (M) repositions and
+  rotates it.
+
+### Units and messages
+
+- **Inch mode:** the right-hand panel and Text on Face take fractions like 1/16
+  and show your unit.
+- **Errors and warnings have a copy button.**
+- **A message you are reading** is no longer pushed away by new ones.
+
+### Installs
+
+- **Installed builds use the tuned selection settings**; they had been running
+  the defaults, and every build now fails if a file the engine needs is missing.
+- **On Windows, an engine that fails to start because a DLL would not load**
+  says that antivirus or a damaged install is the likely cause.
+
+## 0.1.244 (2026-10-09)
+
 ### Fixed
 
 - **The geometry engine starts again.** 0.1.241 left out a file the new Thread
