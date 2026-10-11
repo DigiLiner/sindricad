@@ -5672,6 +5672,7 @@ if __name__ == "__main__":
     test_delete_face_retarget()
     test_extrude_operation_multibody()
     test_extrude_noop_guards()
+    test_cut_that_empties_a_body_is_refused()
     test_primitives()
     test_modify_tools()
     test_offset_face_and_thicken()
