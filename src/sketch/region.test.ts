@@ -33,6 +33,11 @@ const loopArea = (pts: readonly THREE.Vector2[]): number => {
   return Math.abs(a) / 2;
 };
 
+/** order-independent entityIds comparison: the arrangement tracer makes no
+ *  promise about which entity it starts a loop from. */
+const sameSet = (a: readonly string[], b: readonly string[]) =>
+  a.length === b.length && [...a].sort().join(",") === [...b].sort().join(",");
+
 describe("entityPolyline", () => {
   it("a line is its two endpoints, open (no closing vertex)", () => {
     const p = entityPolyline(line("l1", 0, 0, 5, 0));
@@ -367,6 +372,106 @@ describe("detectRegions — parametric closed primitives (field c2a97cee)", () =
       expect(detectRegions("s1", [e]).length).toBeGreaterThanOrEqual(1);
     });
   }
+});
+
+// Field report 44177174 (Paul Crabb): two lines sharing an apex, each `pointOn`
+// a circle, "was expecting this to form an enclosed space between the lines and
+// the outside of the circle - it doesn't". ROOT CAUSE: anyCrossing/planarize
+// compared the circle's 64-chord TESSELLATION at a flat EPS=1e-4 mm, and a point
+// genuinely on the true circle sits outside that chord polygon by the
+// tessellation's sagitta (~0.024 mm at r=20) unless its angle happens to land on
+// a tessellation vertex — two orders of magnitude past EPS. Fixed by testing
+// against the exact circle/arc (roundGeometry, touchTol) instead of its chords.
+describe("detectRegions — touch points on a circle (field 44177174)", () => {
+  it("two lines sharing an apex, each ending ON the circle at a non-tessellation angle, cut a cone from it", () => {
+    // r=20 circle; touch angles 10° and 20° are nowhere near a 64-gon vertex
+    // (360/64 = 5.625° apart), so every chord-based test misses them.
+    const c = circle("e0", 0, 0, 20);
+    const e7 = line("e7", 24.148145657226706, 6.4704761275630185, 19.69615506024416, 3.4729635533386065);
+    const e8 = line("e8", 24.148145657226706, 6.4704761275630185, 18.79385241571817, 6.840402866513374);
+    const regions = detectRegions("s1", [c, e7, e8]);
+    // the untouched disk (the lines sit on its boundary, never inside it) AND
+    // the new cone the two lines cut against the circle's rim.
+    expect(regions).toHaveLength(2);
+    const disk = regions.find((r) => sameSet(r.entityIds, ["e0"]));
+    const cone = regions.find((r) => sameSet(r.entityIds, ["e0", "e7", "e8"]));
+    expect(disk, "the bare circle disk").toBeDefined();
+    expect(cone, "the cone the two lines cut against the circle").toBeDefined();
+    // close to the true circle's area (within the 64-gon's tessellation deficit)
+    expect(loopArea(disk!.loop)).toBeCloseTo(Math.PI * 20 * 20, -1);
+    // the cone is well short of the full disk — it's the sliver outside the rim
+    expect(loopArea(cone!.loop)).toBeGreaterThan(0);
+    expect(loopArea(cone!.loop)).toBeLessThan(loopArea(disk!.loop));
+  });
+
+  it("a line resting on an arc at a non-tessellation angle still closes a loop with it", () => {
+    // 90-degree arc from (20,0) through (14.142,14.142) to (0,20); a line from
+    // (20,0) out to a point ON the arc at 37 degrees (not a 48-segment vertex:
+    // 90/48 = 1.875 degrees apart) and back, forming a degenerate-free wedge with
+    // the short piece of arc between them once the line's end is recognized as
+    // touching the arc's true curve.
+    const d2r = Math.PI / 180;
+    const arcPt = { x: 20 * Math.cos(37 * d2r), y: 20 * Math.sin(37 * d2r) };
+    const a: ResolvedEntity = { type: "arc", id: "ea", x1: 20, y1: 0, x2: 0, y2: 20, mx: 14.142135623730951, my: 14.142135623730951 };
+    const l: ResolvedEntity = { type: "line", id: "el", x1: 20, y1: 0, x2: arcPt.x, y2: arcPt.y };
+    const regions = detectRegions("s1", [a, l]);
+    expect(regions.length).toBeGreaterThanOrEqual(1);
+    const wedge = regions.find((r) => sameSet(r.entityIds, ["ea", "el"]));
+    expect(wedge, "the wedge bounded by the arc and the line touching it").toBeDefined();
+  });
+});
+
+// Field report 03306e49 (MadSciSlack): Press/Pull and Extrude preview highlighted
+// a cropped partial tube, but the committed build produced the full ring.
+// MEASURED against the reporter's own document (~/.cache/beta-next/rows/03306e49.json,
+// sketch f7): the two "crop" lines e22/e23 were never actually made coincident
+// with either circle (no coincident constraint was recorded) -- both endpoints
+// sit 0.025-0.054 mm off the true circles, the kind of gap a user gets by
+// snapping onto the RENDERED 64-gon rather than the exact curve. Before this
+// fix, detectRegions's flat-EPS chord comparison was forgiving of that gap and
+// traced two big, nearly-equal wedges (matching what the preview showed); the
+// sidecar's exact-curve splitter was not forgiving of it and left the ring
+// whole (matching what the committed build produced) -- the disagreement this
+// report is about. Decision: make detectRegions test against the exact curve
+// too (the same fix as 44177174), not add a snap-at-draw-time feature.
+// RESULT: the frontend now finds the ring effectively whole as well -- a single
+// cell named by all four entities, its area within ~0.2% of the sidecar's
+// committed 885.1325829523473 mm^2 (re-measured via
+// sidecar/.venv/bin/python against this exact document: _subdivide_faces
+// returns the pure untouched annulus and the pure untouched inner disk, no
+// split at all). The hairline residual (a sliver far smaller than anything
+// visible in the viewport) traces to OCCT's own edge tolerances in the
+// sketch-to-3D pipeline being looser than touchTol(); it no longer produces a
+// user-visible mismatch, so it is not worth chasing further here.
+describe("detectRegions — crop lines a hair off the true circle (field 03306e49)", () => {
+  const cx = 53.30344772338867;
+  const cy = 60.26847076416016;
+  const rOuter = 22.5;
+  const rInner = 14.98344247036954;
+  const entities: ResolvedEntity[] = [
+    circle("e19", cx, cy, rOuter),
+    circle("e20", cx, cy, rInner),
+    line("e22", 56.437426479401914, 74.87232698271615, 56.437426479401914, 82.52367232834926),
+    line("e23", 53.29327357792184, 45.33911014859059, 56.46431631538807, 37.955317993256855),
+  ];
+
+  it("no longer carves two roughly-equal wedges out of the ring", () => {
+    const regions = detectRegions("f7", entities);
+    const wedges = regions.filter((r) => sameSet(r.entityIds, ["e19", "e20", "e22", "e23"]));
+    // exactly one cell now carries this id set (not two, like the old bug) --
+    // regionsByEntities can resolve it without the old exact-match ambiguity
+    expect(wedges).toHaveLength(1);
+  });
+
+  it("the resolved cell is within a hair of the sidecar's committed full annulus", () => {
+    const regions = detectRegions("f7", entities);
+    const named = regionsByEntities(regions, ["e19", "e20", "e22", "e23"]);
+    expect(named).toHaveLength(1);
+    const fullAnnulus = Math.PI * (rOuter ** 2 - rInner ** 2);
+    // measured against the real sidecar build: 885.1325829523473 mm^2, uncut
+    expect(loopArea(named[0]!.loop)).toBeGreaterThan(fullAnnulus - 5);
+    expect(loopArea(named[0]!.loop)).toBeLessThanOrEqual(fullAnnulus);
+  });
 });
 
 // regionsByEntities is how a stored region reference is resolved once the sketch

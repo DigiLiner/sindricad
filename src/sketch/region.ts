@@ -6,8 +6,9 @@
 
 import * as THREE from "three";
 import type { ResolvedEntity } from "./snap";
-import { arcPolyline } from "./arc";
+import { arcCenterRadius, arcPolyline } from "./arc";
 import { splinePolyline } from "./spline";
+import { circleCircleIntersect, circleLineIntersect, paramOnSeg, touchTol } from "./geom2d";
 
 export interface Region {
   sketchId: string;
@@ -39,6 +40,8 @@ const CIRCLE_SEGS = 64;
 const ARC_SEGS = 48;
 const SPLINE_SEGS = 16;
 const v = (x: number, y: number) => new THREE.Vector2(x, y);
+const TAU = Math.PI * 2;
+const ccwDelta = (from: number, to: number) => (((to - from) % TAU) + TAU) % TAU;
 
 /** append the first vertex to close a polygon; an empty input stays empty */
 function closed(pts: THREE.Vector2[]): THREE.Vector2[] {
@@ -159,6 +162,44 @@ export function slotOutline(x1: number, y1: number, x2: number, y2: number, w: n
   return out;
 }
 
+type RoundGeom = { c: THREE.Vector2; r: number; a0: number; sweep: number };
+
+/** Exact circle/arc geometry for an entity, independent of its tessellation —
+ *  null for anything else (line, rectangle, polygon, slot, spline, point, text,
+ *  or a projected curve of one of those kinds). A full circle's sweep is TAU;
+ *  an arc's is its true CCW sweep from a0. This is what lets the crossing/touch
+ *  tests below work against the curve the solver actually placed points on,
+ *  instead of its 64- (circle) or 48-segment (arc) polyline. */
+function roundGeometry(e: ResolvedEntity): RoundGeom | null {
+  if (e.type === "circle") return { c: v(e.x, e.y), r: e.radius, a0: 0, sweep: TAU };
+  if (e.type === "arc") return arcRoundGeometry(e);
+  if (e.type === "projected") {
+    if (e.curve.kind === "circle") return { c: v(e.curve.x, e.curve.y), r: e.curve.r, a0: 0, sweep: TAU };
+    if (e.curve.kind === "arc") return arcRoundGeometry(e.curve);
+  }
+  return null;
+}
+
+/** An arc's centre, radius and CCW sweep from its start — the direction
+ *  `through` actually sweeps, which may be the short or the long way round.
+ *  Same computation as modify.ts's local (unexported) arcGeom for trim;
+ *  duplicated rather than imported to avoid a circular import (modify.ts
+ *  already imports entitySegments/rectCorners/polygonPoints from this file). */
+function arcRoundGeometry(
+  e: { x1: number; y1: number; x2: number; y2: number; mx: number; my: number },
+): RoundGeom | null {
+  const cr = arcCenterRadius(e);
+  if (!cr) return null;
+  const { c, r } = cr;
+  const aS = Math.atan2(e.y1 - c.y, e.x1 - c.x);
+  const aE = Math.atan2(e.y2 - c.y, e.x2 - c.x);
+  const aT = Math.atan2(e.my - c.y, e.mx - c.x);
+  const throughFwd = ccwDelta(aS, aT) <= ccwDelta(aS, aE);
+  return throughFwd
+    ? { c, r, a0: aS, sweep: ccwDelta(aS, aE) }
+    : { c, r, a0: aE, sweep: ccwDelta(aE, aS) };
+}
+
 export function detectRegions(
   sketchId: string,
   allEntities: ResolvedEntity[],
@@ -172,7 +213,7 @@ export function detectRegions(
     const segs = entitySegments(e).map(
       ([a, b]) => ({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, eid: e.id }) as Seg,
     );
-    return { e, segs, box: segsBBox(segs) };
+    return { e, segs, box: segsBBox(segs), round: roundGeometry(e) };
   });
 
   // 1. collect every closed loop. Do any two entities' curves actually CROSS at
@@ -616,7 +657,68 @@ export function pointOnSegInterior(px: number, py: number, s: Seg): number | nul
   return dx * dx + dy * dy > EPS * EPS ? null : t;
 }
 
-type EntSegs = { segs: Seg[]; box: Box };
+type EntSegs = { segs: Seg[]; box: Box; round: RoundGeom | null };
+
+/** Is point p (already known to lie on rnd's circle) within rnd's own sweep? A
+ *  full circle's sweep is TAU so it always is; an arc's uses the same
+ *  touchTol-scaled slack geom2d.ts's curveCrossings does, so a crossing AT an
+ *  arc's own end still counts. */
+function inSweep(rnd: RoundGeom, p: THREE.Vector2): boolean {
+  if (rnd.sweep >= TAU) return true;
+  const slack = touchTol(rnd.r) / Math.max(rnd.r, 1e-9);
+  const at = ccwDelta(rnd.a0, Math.atan2(p.y - rnd.c.y, p.x - rnd.c.x));
+  return at <= rnd.sweep + slack || at >= TAU - slack;
+}
+
+/** Where segment s crosses or touches the round curve rnd, filtered to the
+ *  segment's own span and (for an arc) rnd's sweep. The analytic counterpart
+ *  of segCross/pointOnSegInterior, which only ever sees a round entity's
+ *  TESSELLATION: a touch can sit outside that chord polygon by its sagitta
+ *  (measured 0.0037-0.0145mm — see geom2d.ts's touchTol doc — well past the
+ *  flat EPS=1e-4 both those tests use), so a solver-placed touch was missed
+ *  entirely. Mirrors modify.ts's entityCurves/curveCrossings pattern for trim. */
+function roundSegIntersect(rnd: RoundGeom, s: Seg): THREE.Vector2[] {
+  const a = v(s.x1, s.y1), b = v(s.x2, s.y2);
+  return circleLineIntersect(a, b, rnd.c, rnd.r).filter((p) => {
+    const t = paramOnSeg(a, b, p);
+    return t >= -1e-6 && t <= 1 + 1e-6 && inSweep(rnd, p);
+  });
+}
+
+/** Where two round curves touch or cross, filtered to each one's own sweep. */
+function roundRoundIntersect(a: RoundGeom, b: RoundGeom): THREE.Vector2[] {
+  return circleCircleIntersect(a.c, a.r, b.c, b.r).filter((p) => inSweep(a, p) && inSweep(b, p));
+}
+
+/** Analytic touch/crossing points between two entities where at least one is a
+ *  circle or arc, tested against the TRUE curve rather than its tessellation.
+ *  Empty when neither is round — that pair is left to the plain chord tests,
+ *  which are already exact for straight-vs-straight geometry. */
+function roundTouchPoints(pi: EntSegs, pj: EntSegs): THREE.Vector2[] {
+  if (pi.round && pj.round) return roundRoundIntersect(pi.round, pj.round);
+  if (pi.round) return pj.segs.flatMap((s) => roundSegIntersect(pi.round!, s));
+  if (pj.round) return pi.segs.flatMap((s) => roundSegIntersect(pj.round!, s));
+  return [];
+}
+
+/** Does point p (on pi's true curve) belong on THIS tessellated chord of pi,
+ *  rather than a neighbour? For a round entity, by angle about its centre — p
+ *  need not lie ON the chord's line at all; it sits outside the inscribed
+ *  polygon by the tessellation's sagitta, which is the entire reason it was
+ *  missed. For anything else, the ordinary segment parameter. */
+function onThisChord(pi: EntSegs, a: Seg, p: THREE.Vector2): boolean {
+  if (pi.round) {
+    const c = pi.round.c;
+    const a0 = Math.atan2(a.y1 - c.y, a.x1 - c.x);
+    const a1 = Math.atan2(a.y2 - c.y, a.x2 - c.x);
+    const ap = ccwDelta(a0, Math.atan2(p.y - c.y, p.x - c.x));
+    return ap <= ccwDelta(a0, a1) + 1e-9;
+  }
+  const rx = a.x2 - a.x1, ry = a.y2 - a.y1;
+  const len2 = rx * rx + ry * ry || 1;
+  const t = ((p.x - a.x1) * rx + (p.y - a.y1) * ry) / len2;
+  return t > -1e-6 && t < 1 + 1e-6;
+}
 
 /** Do any two entities' curves meet at a point that isn't a shared endpoint —
  *  an interior crossing (X) or a vertex-on-edge touch (T)? Entity-bbox broad-phase
@@ -629,6 +731,10 @@ function anyCrossing(per: EntSegs[]): boolean {
     for (let j = i + 1; j < per.length; j++) {
       const pj = per[j];
       if (!pj || !boxesOverlap(pi.box, pj.box)) continue;
+      if (pi.round || pj.round) {
+        if (roundTouchPoints(pi, pj).length) return true;
+        continue; // analytic test already covers this pair exhaustively
+      }
       for (const a of pi.segs)
         for (const b of pj.segs) {
           if (segCross(a, b)) return true;
@@ -645,12 +751,24 @@ function anyCrossing(per: EntSegs[]): boolean {
 /** Split every segment at its interior intersections AND at any other entity's
  *  vertex that lands on its interior, so each crossing/touch becomes a shared
  *  vertex the half-edge tracer can split at. Same entity-bbox broad-phase as
- *  anyCrossing. */
+ *  anyCrossing. A pair involving a round (circle/arc) entity is cut solely from
+ *  its analytic touch/crossing points (roundTouchPoints), never from its chord
+ *  tessellation — mixing both risks a second, near-duplicate cut a sagitta
+ *  apart and a sliver edge the tracer would have to make sense of. */
 function planarize(per: EntSegs[]): Seg[] {
   const out: Seg[] = [];
   for (let i = 0; i < per.length; i++) {
     const pi = per[i];
     if (!pi) continue;
+    // Found once per pair, not per chord: the point is a property of the whole
+    // circle/arc, not of one tessellated chord. Assigned below (onThisChord) to
+    // whichever chord's own span brackets it.
+    const roundPts: THREE.Vector2[] = [];
+    for (let j = 0; j < per.length; j++) {
+      const pj = per[j];
+      if (j === i || !pj || !boxesOverlap(pi.box, pj.box)) continue;
+      if (pi.round || pj.round) roundPts.push(...roundTouchPoints(pi, pj));
+    }
     for (const a of pi.segs) {
       const rx = a.x2 - a.x1, ry = a.y2 - a.y1;
       const len2 = rx * rx + ry * ry;
@@ -660,6 +778,7 @@ function planarize(per: EntSegs[]): Seg[] {
       for (let j = 0; j < per.length; j++) {
         const pj = per[j];
         if (j === i || !pj || !boxesOverlap(pi.box, pj.box)) continue;
+        if (pi.round || pj.round) continue; // handled analytically below
         for (const b of pj.segs) {
           const p = segCross(a, b);
           if (p) addCut(p.x, p.y);
@@ -667,6 +786,7 @@ function planarize(per: EntSegs[]): Seg[] {
           if (pointOnSegInterior(b.x2, b.y2, a) !== null) addCut(b.x2, b.y2);
         }
       }
+      for (const p of roundPts) if (onThisChord(pi, a, p)) addCut(p.x, p.y);
       if (!cuts.length) { out.push(a); continue; }
       cuts.sort((p, q) => p.t - q.t);
       let px = a.x1, py = a.y1;
