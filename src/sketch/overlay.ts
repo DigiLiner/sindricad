@@ -207,6 +207,23 @@ function nearestOn(a: THREE.Vector3, b: THREE.Vector3, t: number): THREE.Vector3
   return a.clone().lerp(b, Math.max(0, Math.min(1, t)));
 }
 
+/** A small flat triangle, same footprint as the snap ring (radius 1, point up
+ *  in the marker's own local XY — camera-facing, like the ring): the distinct
+ *  glyph for a midpoint snap (3615a366), so it reads differently from the
+ *  ring every other snap kind shares. */
+function triangleMarkerGeometry(): THREE.BufferGeometry {
+  const shape = new THREE.Shape();
+  const r = 1.0;
+  for (let i = 0; i < 3; i++) {
+    const a = Math.PI / 2 + (i * 2 * Math.PI) / 3; // first point straight up
+    const x = r * Math.cos(a), y = r * Math.sin(a);
+    if (i === 0) shape.moveTo(x, y);
+    else shape.lineTo(x, y);
+  }
+  shape.closePath();
+  return new THREE.ShapeGeometry(shape);
+}
+
 export class SketchOverlay {
   readonly group = new THREE.Group();
   private committed = new THREE.Group();
@@ -216,6 +233,7 @@ export class SketchOverlay {
   private previewGroup = new THREE.Group(); // the rubber-band, rebuilt per move
   private linkGroup = new THREE.Group(); // geometry of the parameters-panel row being pointed at
   private snapMarker: THREE.Mesh;
+  private snapMarkerMidpoint: THREE.Mesh;
   /** The endpoint(s) a constraint flow is holding. A POOL rather than one mesh:
    *  symmetric holds two points before it asks for the axis, and with a single
    *  marker its middle click left no trace at all. Grown on demand and capped —
@@ -251,6 +269,19 @@ export class SketchOverlay {
     this.snapMarker.renderOrder = 30;
     this.snapMarker.visible = false;
     this.group.add(this.snapMarker);
+
+    // a line's MIDPOINT snap gets its own symbol, a triangle, not the same
+    // ring every other kind shares — a midpoint silently looked identical to
+    // an endpoint or a centre and there was no way to tell, by eye, which one
+    // a drawn end had actually joined (3615a366). Same scale/orientation
+    // handling as the ring so setSnapScale keeps both in lockstep.
+    this.snapMarkerMidpoint = new THREE.Mesh(
+      triangleMarkerGeometry(),
+      new THREE.MeshBasicMaterial({ color: 0xffaa33, depthTest: true }),
+    );
+    this.snapMarkerMidpoint.renderOrder = 30;
+    this.snapMarkerMidpoint.visible = false;
+    this.group.add(this.snapMarkerMidpoint);
 
   }
 
@@ -773,18 +804,23 @@ export class SketchOverlay {
     this.setLinkHighlight(objs);
   }
 
-  setSnap(world: THREE.Vector3 | null, _kind: SnapKind = "free", camera?: THREE.Camera) {
+  setSnap(world: THREE.Vector3 | null, kind: SnapKind = "free", camera?: THREE.Camera) {
     if (!world) {
       this.snapMarker.visible = false;
+      this.snapMarkerMidpoint.visible = false;
       return;
     }
-    this.snapMarker.visible = true;
-    this.snapMarker.position.copy(world);
-    if (camera) this.snapMarker.quaternion.copy(camera.quaternion); // face camera
+    const isMidpoint = kind === "midpoint";
+    const marker = isMidpoint ? this.snapMarkerMidpoint : this.snapMarker;
+    this.snapMarker.visible = !isMidpoint;
+    this.snapMarkerMidpoint.visible = isMidpoint;
+    marker.position.copy(world);
+    if (camera) marker.quaternion.copy(camera.quaternion); // face camera
   }
 
   setSnapScale(s: number) {
     this.snapMarker.scale.setScalar(s);
+    this.snapMarkerMidpoint.scale.setScalar(s);
   }
 
   /** Show the endpoint a constraint flow is holding, or clear it with null. */

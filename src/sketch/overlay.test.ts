@@ -271,3 +271,47 @@ describe("curveObjects — construction is dashed in the colour of the pass (3f1
     expect(dashedOf(curveOf())).toBe(true);
   });
 });
+
+// A line's midpoint snap used the same ring every other snap kind shares, so
+// there was no way to tell, by eye, which kind a drawn end had actually joined
+// (3615a366). A midpoint now shows a distinct triangle glyph instead.
+describe("setSnap — a midpoint gets a triangle, not the ring every other kind shares", () => {
+  const visibleMeshes = (o: SketchOverlay): THREE.Mesh[] =>
+    (o.group.children as THREE.Object3D[]).filter(
+      (c) => c.visible && (c as THREE.Mesh).isMesh,
+    ) as THREE.Mesh[];
+
+  it("shows the ring (not a triangle) for an ordinary snap kind", () => {
+    const o = new SketchOverlay();
+    o.setSnap(new THREE.Vector3(3, 4, 0), "endpoint");
+    const shown = visibleMeshes(o);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.geometry).not.toBeInstanceOf(THREE.ShapeGeometry);
+    expect([shown[0]!.position.x, shown[0]!.position.y]).toEqual([3, 4]);
+  });
+
+  it("shows a triangle (not the ring) for a midpoint snap, at the same position", () => {
+    const o = new SketchOverlay();
+    o.setSnap(new THREE.Vector3(3, 4, 0), "midpoint");
+    const shown = visibleMeshes(o);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.geometry).toBeInstanceOf(THREE.ShapeGeometry);
+    expect([shown[0]!.position.x, shown[0]!.position.y]).toEqual([3, 4]);
+  });
+
+  it("hides both markers when the snap clears", () => {
+    const o = new SketchOverlay();
+    o.setSnap(new THREE.Vector3(3, 4, 0), "midpoint");
+    o.setSnap(null);
+    expect(visibleMeshes(o)).toHaveLength(0);
+  });
+
+  it("switching from a midpoint to an ordinary kind swaps which marker shows", () => {
+    const o = new SketchOverlay();
+    o.setSnap(new THREE.Vector3(3, 4, 0), "midpoint");
+    o.setSnap(new THREE.Vector3(1, 2, 0), "center");
+    const shown = visibleMeshes(o);
+    expect(shown).toHaveLength(1);
+    expect(shown[0]!.geometry).not.toBeInstanceOf(THREE.ShapeGeometry);
+  });
+});
