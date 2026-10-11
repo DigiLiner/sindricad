@@ -421,6 +421,44 @@ describe("detectRegions — touch points on a circle (field 44177174)", () => {
   });
 });
 
+// Two circles touching at exactly one point, one nested inside the other, with
+// no line involved — the 44177174 fix's own analytic touch detection now flags
+// this pair as "crossing" (it's a touch, not a crossing) and routes them into
+// the arrangement tracer, which used to collapse both loops into one zero-area
+// face and silently return NO regions at all, blocking extrude the same way
+// 44177174 did for a line tangent to a circle. None of the 40 cases above ever
+// exercised a bare round-round touch, so the regression shipped unnoticed.
+describe("detectRegions — internally tangent circles (no line involved)", () => {
+  it("a smaller circle nested inside a larger one, touching on the x-axis, still yields two regions", () => {
+    const outer = circle("a", 0, 0, 20);
+    const inner = circle("b", 10, 0, 10);
+    const regions = detectRegions("s1", [outer, inner]);
+    expect(regions).toHaveLength(2);
+    const disk = regions.find((r) => sameSet(r.entityIds, ["b"]));
+    const annulus = regions.find((r) => sameSet(r.entityIds, ["a", "b"]));
+    expect(disk, "the inner circle's own disk").toBeDefined();
+    expect(annulus, "the outer disk pinched by the inner one").toBeDefined();
+    expect(loopArea(disk!.loop)).toBeCloseTo(Math.PI * 10 * 10, -1);
+    expect(loopArea(annulus!.loop)).toBeCloseTo(Math.PI * (20 * 20 - 10 * 10), -1);
+  });
+
+  it("still works off-axis, where the touch doesn't land on a shared tessellation vertex", () => {
+    const d2r = Math.PI / 180;
+    const rA = 20, rB = 7;
+    const ang = 37 * d2r;
+    const outer = circle("a", 0, 0, rA);
+    const inner = circle("b", (rA - rB) * Math.cos(ang), (rA - rB) * Math.sin(ang), rB);
+    const regions = detectRegions("s1", [outer, inner]);
+    expect(regions).toHaveLength(2);
+    const disk = regions.find((r) => sameSet(r.entityIds, ["b"]));
+    const annulus = regions.find((r) => sameSet(r.entityIds, ["a", "b"]));
+    expect(disk, "the inner circle's own disk").toBeDefined();
+    expect(annulus, "the outer disk pinched by the inner one").toBeDefined();
+    expect(loopArea(disk!.loop)).toBeCloseTo(Math.PI * rB * rB, -1);
+    expect(loopArea(annulus!.loop)).toBeCloseTo(Math.PI * (rA * rA - rB * rB), -1);
+  });
+});
+
 // Field report 03306e49 (MadSciSlack): Press/Pull and Extrude preview highlighted
 // a cropped partial tube, but the committed build produced the full ring.
 // MEASURED against the reporter's own document (~/.cache/beta-next/rows/03306e49.json,

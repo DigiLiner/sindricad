@@ -210,10 +210,12 @@ export function detectRegions(
 
   // Per-entity polyline segments + bbox, for cheap crossing detection and tracing.
   const perEntity = entities.map((e) => {
+    const round = roundGeometry(e);
+    const roundInfo = round ? { cx: round.c.x, cy: round.c.y, r: round.r } : undefined;
     const segs = entitySegments(e).map(
-      ([a, b]) => ({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, eid: e.id }) as Seg,
+      ([a, b]) => ({ x1: a.x, y1: a.y, x2: b.x, y2: b.y, eid: e.id, round: roundInfo }) as Seg,
     );
-    return { e, segs, box: segsBBox(segs), round: roundGeometry(e) };
+    return { e, segs, box: segsBBox(segs), round };
   });
 
   // 1. collect every closed loop. Do any two entities' curves actually CROSS at
@@ -603,7 +605,20 @@ function interiorPoint(
 }
 
 // --- line-chain loop tracing ---
-type Seg = { x1: number; y1: number; x2: number; y2: number; eid?: string | undefined };
+type Seg = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  eid?: string | undefined;
+  // Set only when this chord approximates a round (circle/arc) entity. Lets
+  // traceLoops sort half-edges by the curve's TRUE tangent direction, with
+  // curvature as a tie-break, instead of the tessellation chord's own angle —
+  // needed so two curves that are genuinely tangent at a shared point (an
+  // internally-tangent circle pair, a line tangent to a circle) don't produce
+  // an angle tie that scrambles which minimal face each half-edge belongs to.
+  round?: { cx: number; cy: number; r: number } | undefined;
+};
 type Box = { minx: number; miny: number; maxx: number; maxy: number };
 
 export function segsBBox(segs: Seg[]): Box {
@@ -792,16 +807,60 @@ function planarize(per: EntSegs[]): Seg[] {
       let px = a.x1, py = a.y1;
       for (const c of cuts) {
         if (Math.abs(c.x - px) > EPS || Math.abs(c.y - py) > EPS)
-          out.push({ x1: px, y1: py, x2: c.x, y2: c.y, eid: a.eid });
+          out.push({ x1: px, y1: py, x2: c.x, y2: c.y, eid: a.eid, round: a.round });
         px = c.x; py = c.y;
       }
       if (Math.abs(a.x2 - px) > EPS || Math.abs(a.y2 - py) > EPS)
-        out.push({ x1: px, y1: py, x2: a.x2, y2: a.y2, eid: a.eid });
+        out.push({ x1: px, y1: py, x2: a.x2, y2: a.y2, eid: a.eid, round: a.round });
     }
   }
   return out;
 }
 
+
+// Half-edges whose true tangent direction (not just their tessellation chord)
+// coincide at a node are tied within this many radians before curvature breaks
+// the tie. Comfortably above float noise, comfortably below any real angular
+// gap between genuinely distinct directions.
+const ANGLE_TIE_EPS = 1e-7;
+
+/**
+ * The sort key traceLoops uses for a half-edge from `from` to `to`: the curve's
+ * TRUE tangent direction at `from` (not the tessellation chord's own angle, which
+ * is only an approximation of it), plus the signed curvature bending that
+ * direction (positive = bending left/CCW, as seen walking from `from` to `to`;
+ * zero for a straight segment).
+ *
+ * Why: two tessellated curves that are genuinely tangent at a shared point (an
+ * internally-tangent circle pair, a line tangent to a circle) can have chords
+ * whose raw angle differs only by tessellation noise — ambiguous for sorting.
+ * Using the true tangent collapses that noise to an EXACT tie, and curvature
+ * then orders them correctly: a point an infinitesimal arc-length along each
+ * curve lands at an angle (from the node) that is the tangent angle plus a
+ * second-order term proportional to curvature, so the more sharply curving
+ * side (e.g. the smaller of two internally-tangent circles) genuinely sits
+ * further around the CCW order — matching how the regions actually nest.
+ */
+function roundHalfEdgeAngle(
+  from: THREE.Vector2,
+  to: THREE.Vector2,
+  round: { cx: number; cy: number; r: number } | undefined,
+): { angle: number; curv: number } {
+  const chordAngle = Math.atan2(to.y - from.y, to.x - from.x);
+  if (!round || round.r <= 0) return { angle: chordAngle, curv: 0 };
+  const outward = Math.atan2(from.y - round.cy, from.x - round.cx);
+  const ccw = outward + Math.PI / 2;
+  const cw = outward - Math.PI / 2;
+  const diff = (a: number) => {
+    let d = (a - chordAngle) % (2 * Math.PI);
+    if (d > Math.PI) d -= 2 * Math.PI;
+    if (d < -Math.PI) d += 2 * Math.PI;
+    return Math.abs(d);
+  };
+  return diff(ccw) <= diff(cw)
+    ? { angle: ccw, curv: 1 / round.r }
+    : { angle: cw, curv: -1 / round.r };
+}
 
 /** One minimal face of the planar arrangement, plus the entities that bound it. */
 type TracedLoop = { loop: THREE.Vector2[]; eids: string[] };
@@ -826,7 +885,7 @@ function traceLoops(segs: Seg[]): TracedLoop[] {
   // `eid` rides along so a traced face can name the entities that bound it. Where
   // two entities lay down a coincident edge the dedupe keeps the first — a shared
   // boundary genuinely belongs to both, and either id re-derives the same point.
-  const he: { from: string; to: string; angle: number; eid?: string | undefined }[] = [];
+  const he: { from: string; to: string; angle: number; curv: number; eid?: string | undefined }[] = [];
   const seen = new Set<string>();
   for (const s of segs) {
     const a = nodeKey(s.x1, s.y1), b = nodeKey(s.x2, s.y2);
@@ -835,16 +894,26 @@ function traceLoops(segs: Seg[]): TracedLoop[] {
     if (seen.has(ek)) continue;
     seen.add(ek);
     const pa = nodes.get(a)!, pb = nodes.get(b)!;
-    he.push({ from: a, to: b, angle: Math.atan2(pb.y - pa.y, pb.x - pa.x), eid: s.eid });
-    he.push({ from: b, to: a, angle: Math.atan2(pa.y - pb.y, pa.x - pb.x), eid: s.eid });
+    const fwd = roundHalfEdgeAngle(pa, pb, s.round);
+    const bwd = roundHalfEdgeAngle(pb, pa, s.round);
+    he.push({ from: a, to: b, angle: fwd.angle, curv: fwd.curv, eid: s.eid });
+    he.push({ from: b, to: a, angle: bwd.angle, curv: bwd.curv, eid: s.eid });
   }
   if (he.length < 6) return [];
 
-  // outgoing half-edge indices per node, sorted CCW by angle
+  // outgoing half-edge indices per node, sorted CCW by angle. Ties (within
+  // ANGLE_TIE_EPS) are broken by signed curvature — see roundHalfEdgeAngle:
+  // two curves that are genuinely tangent at this node share an exact angle,
+  // and the one bending away MORE SHARPLY (larger curvature) sits strictly
+  // further along the CCW order, same as it would an instant past this point.
   const out = new Map<string, number[]>();
   he.forEach((h, i) => (out.get(h.from) ?? out.set(h.from, []).get(h.from)!).push(i));
   for (const idxs of out.values())
-    idxs.sort((i, j) => (he[i]?.angle ?? 0) - (he[j]?.angle ?? 0));
+    idxs.sort((i, j) => {
+      const d = (he[i]?.angle ?? 0) - (he[j]?.angle ?? 0);
+      if (Math.abs(d) > ANGLE_TIE_EPS) return d;
+      return (he[i]?.curv ?? 0) - (he[j]?.curv ?? 0);
+    });
   // next half-edge in the same minimal face = the edge just clockwise of this edge's twin
   const next = (i: number): number | undefined => {
     const h = he[i];
