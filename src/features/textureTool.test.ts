@@ -156,6 +156,11 @@ describe("TextureTool commit(): deferred while a rebuild is in flight", () => {
         faceIds,
         bodyId: "b1",
       }),
+      selectorsForFaceIds: (ids: number[]) => ({
+        selectors: ids.map(() => ({ kind: "face", by: "nearest", point: [-30.57, 22.39, z] })),
+        faceIds: ids,
+        bodyId: "b1",
+      }),
       faceIdToBodyId: () => "b1",
       clearSelection: () => {},
       setSelectedBodies: () => {},
@@ -196,5 +201,80 @@ describe("TextureTool commit(): deferred while a rebuild is in flight", () => {
     h.t.commit();
     expect(h.saved.length).toBe(1);
     expect(h.saved[0]!.faces.point[2]).toBeCloseTo(25, 5);
+  });
+});
+
+// Deferring commit() behind the building gate fixed the stale-mesh bug above,
+// but the retry in tick() called this.commit() -> buildFeature() again, which
+// reads the LIVE ambient selection (and this.mode) at RETRY time rather than a
+// snapshot of what was actually targeted when Apply was clicked. The viewport
+// keeps taking face/body clicks while "waiting to apply" is shown, so a user
+// who clicks a different face (or switches Faces<->Body) during the wait had
+// their Apply silently retarget to whatever is selected when the rebuild
+// lands, with no warning the target changed.
+describe("TextureTool commit(): the deferred target survives a selection change during the wait", () => {
+  function retargetHarness() {
+    // face 4 (z=25) is what's selected when Apply is clicked; face 7 (z=99) is
+    // what the user clicks next, while still waiting on the in-flight rebuild.
+    let selected = [4];
+    const zByFace: Record<number, number> = { 4: 25, 7: 99 };
+    const selectorsFor = (ids: number[]) => ({
+      selectors: ids.map((fid) => ({ kind: "face", by: "nearest", point: [-30.57, 22.39, zByFace[fid]!] })),
+      faceIds: [...ids],
+      bodyId: "b1",
+    });
+    const viewport = {
+      selecting: "faces",
+      setSelectionMode: () => {},
+      getSelectedBodies: () => ["b1"],
+      getSelectedFaceIds: () => selected,
+      selectedFacesForPressPull: () => selectorsFor(selected),
+      selectorsForFaceIds: (ids: number[]) => selectorsFor(ids),
+      faceIdToBodyId: () => "b1",
+      clearSelection: () => {},
+      setSelectedBodies: () => {},
+    };
+    const saved: { faces?: { point: number[] }; body?: string }[] = [];
+    const store = {
+      buildState: { building: true, result: {} },
+      nextId: () => "f1",
+      onBuild: () => () => {},
+      setPreview: () => {},
+      addFeature: (f: unknown) => saved.push(f as { faces?: { point: number[] }; body?: string }),
+    };
+    const tool = new TextureTool(viewport as never, store as never);
+    const t = tool as unknown as { mode: string; active: boolean; raf: number; commit: () => void; tick: () => void };
+    t.mode = "faces";
+    t.active = true;
+    return {
+      t,
+      saved,
+      selectFace: (id: number) => { selected = [id]; },
+      landBuild: () => { store.buildState.building = false; },
+      tick: () => { t.tick(); cancelAnimationFrame(t.raf); },
+    };
+  }
+
+  it("commits the face Apply was clicked on, not the one selected when the rebuild lands", () => {
+    const h = retargetHarness();
+    h.t.commit(); // Apply clicked on face 4 (z=25) while a rebuild is in flight
+    expect(h.saved.length).toBe(0);
+    h.selectFace(7); // user clicks a different face while "waiting to apply" is shown
+    h.landBuild();
+    h.tick(); // the tool's own retry
+    expect(h.saved.length).toBe(1);
+    expect(h.saved[0]!.faces!.point[2]).toBeCloseTo(25, 5); // face 4, not face 7
+  });
+
+  it("commits in the mode Apply was clicked in, not one switched to while waiting", () => {
+    const h = retargetHarness();
+    h.t.commit(); // Apply clicked in Faces mode on face 4 (z=25)
+    expect(h.saved.length).toBe(0);
+    h.t.mode = "body"; // user switches to Body mode while waiting
+    h.landBuild();
+    h.tick();
+    expect(h.saved.length).toBe(1);
+    expect(h.saved[0]!.faces).toBeTruthy(); // still a faces feature, not a body one
+    expect(h.saved[0]!.faces!.point[2]).toBeCloseTo(25, 5);
   });
 });

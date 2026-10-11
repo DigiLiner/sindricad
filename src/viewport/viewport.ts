@@ -1270,17 +1270,27 @@ export class Viewport {
    *  of the first face to anchor the drag arrow. Null if nothing is selected. */
   selectedFacesForPressPull(): { selectors: Selector[]; faceIds: number[]; normal: THREE.Vector3; anchor: THREE.Vector3; bodyId: string | null } | null {
     if (!this.highlighter || !this.model) return null;
-    const faces = this.highlighter.getSelectedFaces();
-    if (faces.length === 0) return null;
-    const selectors: Selector[] = faces.map((fid) => {
+    return this.selectorsForFaceIds(this.highlighter.getSelectedFaces());
+  }
+
+  /** Same selectors as selectedFacesForPressPull(), but for an explicit list of
+   *  face ids rather than the live highlighter selection. The texture tool uses
+   *  this to resolve a deferred commit against the face ids it snapshotted when
+   *  Apply was clicked — the ambient selection can drift while a rebuild is in
+   *  flight, and re-reading it at retry time would silently commit to whatever
+   *  is selected when the rebuild lands rather than what the user actually
+   *  clicked Apply on. */
+  selectorsForFaceIds(faceIds: number[]): { selectors: Selector[]; faceIds: number[]; normal: THREE.Vector3; anchor: THREE.Vector3; bodyId: string | null } | null {
+    if (!this.model || faceIds.length === 0) return null;
+    const selectors: Selector[] = faceIds.map((fid) => {
       const c = this.faceCentroidWorld(fid);
       return { kind: "face", by: "nearest", point: [c.x, c.y, c.z] };
     });
-    const first = faces[0];
+    const first = faceIds[0];
     if (first === undefined) return null;
     return {
       selectors,
-      faceIds: [...faces],
+      faceIds: [...faceIds],
       normal: this.faceNormalWorld(first),
       anchor: this.faceCentroidWorld(first),
       bodyId: this.faceIdToBodyId(first),

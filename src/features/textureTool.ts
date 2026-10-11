@@ -59,6 +59,15 @@ export class TextureTool {
   // set when Apply was clicked mid-rebuild; tick() retries commit() once
   // store.buildState.building clears (see commit()'s building gate).
   private pendingCommit = false;
+  // Snapshot of WHAT was targeted at the moment Apply was clicked (while
+  // deferred). buildFeature() normally reads the live ambient selection, but
+  // the viewport keeps taking clicks while "waiting to apply" is shown, so by
+  // the time the rebuild lands and tick() retries, the live selection (or even
+  // this.mode) may no longer be what the user clicked Apply on. Non-null
+  // pendingMode means "resolve against this snapshot, not the live selection".
+  private pendingMode: TextureMode | null = null;
+  private pendingFaceIds: number[] = [];
+  private pendingBodyId: string | null = null;
 
   // --- ambient-selection diffing (rAF tick, not viewport.onSelectionChange —
   // that single callback slot belongs to main.ts) ---
@@ -395,6 +404,20 @@ export class TextureTool {
 
   private buildFeature(): Feature | null {
     const v = this.values;
+    // A deferred commit (see commit()'s building gate) must resolve against
+    // what was actually targeted when Apply was clicked, not the live ambient
+    // selection — the viewport keeps taking face/body clicks while "waiting to
+    // apply" is shown, and this.mode can also change (Faces<->Body) before the
+    // retry fires. Consume the snapshot (if any) once, here.
+    const usingSnapshot = this.pendingMode != null;
+    const mode = this.pendingMode ?? this.mode;
+    const snapshotFaceIds = this.pendingFaceIds;
+    const snapshotBodyId = this.pendingBodyId;
+    if (usingSnapshot) {
+      this.pendingMode = null;
+      this.pendingFaceIds = [];
+      this.pendingBodyId = null;
+    }
     const base = {
       id: this.previewId,
       type: "texture" as const,
@@ -404,8 +427,14 @@ export class TextureTool {
       ...(v.colorSlot != null ? { colorSlot: v.colorSlot } : {}), // two-tone inlay slot (any kind)
       ...this.kindFields(v),
     };
-    if (this.mode === "faces") {
-      const sel = this.viewport.selectedFacesForPressPull();
+    if (mode === "faces") {
+      // Live path reads the ambient selection fresh (selectedFacesForPressPull,
+      // as before); the deferred/snapshot path resolves the SAME face ids the
+      // user had selected when Apply was clicked, via the live mesh (which by
+      // retry time is the clean, undisplaced one — see commit()'s comment).
+      const sel = usingSnapshot
+        ? this.viewport.selectorsForFaceIds(snapshotFaceIds)
+        : this.viewport.selectedFacesForPressPull();
       if (!sel || !sel.faceIds.length) return null;
       // Bind the target body. Without it the sidecar falls back to the ACTIVE
       // (last-created) body and resolves the face selector against the wrong
@@ -424,7 +453,7 @@ export class TextureTool {
       if (!selectors.length) return null;
       return { ...base, ...(body ? { body } : {}), faces: selectors.length === 1 ? selectors[0]! : selectors } as Feature;
     }
-    const body = this.viewport.getSelectedBodies()[0];
+    const body = usingSnapshot ? snapshotBodyId : this.viewport.getSelectedBodies()[0];
     if (!body) return null;
     return { ...base, body } as Feature;
   }
@@ -440,14 +469,22 @@ export class TextureTool {
     // heal it). Defer instead: tick() already polls building every frame,
     // so retry once it clears.
     if (this.store.buildState.building) {
+      // This branch only runs from an explicit Apply click (tick()'s own
+      // retry never calls commit() while building is true), so it's safe to
+      // always re-snapshot here: each click re-captures the CURRENT target,
+      // overwriting any earlier one still waiting on the same in-flight build.
+      this.pendingMode = this.mode;
+      this.pendingFaceIds = this.mode === "faces" ? this.viewport.getSelectedFaceIds() : [];
+      this.pendingBodyId = this.mode === "body" ? (this.viewport.getSelectedBodies()[0] ?? null) : null;
       this.pendingCommit = true;
       setPrompt(t("feature.texture.waitingToApply"));
       return;
     }
+    const mode = this.pendingMode ?? this.mode; // buildFeature() consumes the snapshot
     const feature = this.buildFeature();
     if (!feature) {
       setPrompt(
-        this.mode === "faces"
+        mode === "faces"
           ? t("feature.texture.noFaces")
           : t("feature.texture.noBody"),
       );
@@ -486,6 +523,9 @@ export class TextureTool {
     this.editId = null;
     this.awaitingRollback = false;
     this.pendingCommit = false;
+    this.pendingMode = null;
+    this.pendingFaceIds = [];
+    this.pendingBodyId = null;
     this.savedFaceSelectors = [];
     this.savedBodyId = null;
     this.lastFaceIds = [];
