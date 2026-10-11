@@ -634,7 +634,13 @@ export class EdgeFeatureTool {
       }
     }
     this.anchor.copy(anchor);
-    this.tangent = tangent;
+    // A pre-selection (Ctrl-click, no chainSource) arrives with tangent=null —
+    // the caller has no single picked edge to derive it from — so fall back
+    // to the same ghost-averaging enterEditUI/afterMembershipChange use,
+    // rather than leaving the axis pinned to the camera-right fallback for
+    // the whole drag (the pre-selection entry point to this same "stuck
+    // axis" bug, 194fcda1).
+    this.tangent = tangent ?? this.tangentFromGhosts();
     this.phase = "drag";
     this.value = this.kind === "fillet" ? 2 : 1;
     this.previewId = this.store.nextId();
@@ -847,12 +853,18 @@ export class EdgeFeatureTool {
    *  vector. A chain's tangent direction (first point -> last point) is
    *  arbitrary per edge, so each is flipped to agree with the running total
    *  before adding; otherwise two anti-parallel-but-parallel edges would
-   *  cancel out. Returns null (computeAxis's own fallback) with no ghosts, or
-   *  when the averaged direction is degenerate. */
+   *  cancel out. A ghost whose matched chord is degenerate (coincident
+   *  first/last point — midAndTangent's own null) carries no direction and
+   *  is skipped rather than folded in as a fake axis: averaging in a made-up
+   *  direction is worse than omitting it, and in the proven case (194fcda1)
+   *  landed the drag axis 90° from where the mouse motion actually is.
+   *  Returns null (computeAxis's own camera-right fallback) with no ghosts,
+   *  no ghost with a usable tangent, or a degenerate average. */
   private tangentFromGhosts(): THREE.Vector3 | null {
     const acc = new THREE.Vector3();
     for (const g of this.ghosts) {
       const { tan } = midAndTangent(g.points);
+      if (!tan) continue;
       if (acc.lengthSq() > 1e-9 && acc.dot(tan) < 0) tan.negate();
       acc.add(tan);
     }
@@ -869,17 +881,22 @@ function distToSegment(x: number, y: number, a: { x: number; y: number }, b: { x
   return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
 }
 
-/** midpoint + unit tangent (first→last) of an edge polyline */
+/** midpoint + unit tangent (first→last) of an edge polyline. tan is null when
+ *  the chord is degenerate (coincident first/last points — a mismatched or
+ *  not-yet-resolved edge) — that's "no direction data", not a direction, and
+ *  must never be papered over with a made-up axis: a caller that treats it as
+ *  real can land a drag axis 90° from the one its math and the user's mouse
+ *  motion are aligned with (194fcda1). */
 function midAndTangent(pts: [number, number, number][]): {
   mid: THREE.Vector3;
-  tan: THREE.Vector3;
+  tan: THREE.Vector3 | null;
 } {
   const m = polylineMid(pts);
   const a = pts[0];
   const b = pts[pts.length - 1];
-  if (!a || !b || !m) return { mid: new THREE.Vector3(), tan: new THREE.Vector3(1, 0, 0) };
+  if (!a || !b || !m) return { mid: new THREE.Vector3(), tan: null };
   const tan = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
-  if (tan.lengthSq() < 1e-9) tan.set(1, 0, 0);
-  else tan.normalize();
+  if (tan.lengthSq() < 1e-9) return { mid: new THREE.Vector3(m[0], m[1], m[2]), tan: null };
+  tan.normalize();
   return { mid: new THREE.Vector3(m[0], m[1], m[2]), tan };
 }
