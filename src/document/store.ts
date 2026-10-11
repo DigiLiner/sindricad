@@ -12,6 +12,7 @@ import { applyDrivingDimsDirect, dimBindingFor, planDimEdit, upsertDrivingDim, t
 import { rowConstraintAt, type SketchDimRow } from "../sketch/dimRows";
 import { entityDims, rebindPolygonSides } from "../sketch/entityDims";
 import { followOffsets, followRefusal, type FollowRefusal } from "../sketch/modify";
+import { dimConflictMsg } from "../sketch/dimConflict";
 import { isDimConstraint, newConstraintId } from "../sketch/id";
 import { resolveRealEntities, toSketchEntity } from "../sketch/resolve";
 import type { ResolvedEntity } from "../sketch/snap";
@@ -775,6 +776,7 @@ export class DocumentStore {
     sketch: Extract<Feature, { type: "sketch" }>,
     parameters: CadDocument["parameters"],
     bound?: ReadonlySet<string>,
+    onConflict?: (blamed: Set<number>) => void,
   ) => Promise<{ entities: Extract<Feature, { type: "sketch" }>["entities"] } | null>;
   /** Injected: the sketch feature id currently OPEN in the sketch editor (it
    *  re-solves itself live and must not be overwritten headlessly). */
@@ -814,6 +816,17 @@ export class DocumentStore {
     fn(draft);
     const r = params.recompute(draft);
     const open = this.openSketchId?.() ?? null;
+    // Trial every affected sketch BEFORE committing anything (report
+    // X-param-refuse): a value a bound sketch CANNOT SATISFY — the solver
+    // itself came back unsatisfiable — must leave the parameter at its old
+    // value, not a live number next to geometry that quietly stopped
+    // following it. followParamEdit's refusal is a different, older case (an
+    // offset copy the new size leaves nothing of): the parameter's own value
+    // is perfectly satisfiable and already applies, only that downstream copy
+    // couldn't follow, so it keeps today's "said as it is, not as left
+    // unchanged" wording and does not block the rest of the edit.
+    let blocked = false;
+    const issues: string[] = [];
     for (const sid of r.affectedSketches) {
       if (sid === open) continue;
       const f = draft.features.find((x): x is Extract<Feature, { type: "sketch" }> => isSketch(x) && x.id === sid);
@@ -821,21 +834,58 @@ export class DocumentStore {
       const pre = preOf.get(sid) ?? f;
       const refused = followParamEdit(pre, preParams, f, draft.parameters);
       if (refused) {
-        // Nothing satisfies the sketch now, and the parameter has already set
-        // the shape: said as it is, not as "geometry left unchanged".
         this.onWarning?.(t("status.sketchNote", { id: sid, note: followRefusal(refused, true) }));
         continue;
       }
-      const solved = await this.solveParamEdit(pre, f, draft.parameters);
-      if (solved) f.entities = solved;
+      const outcome = await this.solveParamEdit(pre, f, draft.parameters);
+      if (outcome.kind === "solved") f.entities = outcome.entities;
+      else if (outcome.kind === "issue") issues.push(sid);
+      else if (outcome.kind === "refused") {
+        const note = this.paramRefusalNote(sid, pre, f, draft, outcome.blamed);
+        this.onWarning?.(t("status.sketchNote", { id: sid, note }));
+        blocked = true;
+      }
     }
+    if (blocked) return;
     this.mutate((d) => {
       d.parameters = draft.parameters;
       if (draft.paramDefs) d.paramDefs = draft.paramDefs;
       else delete d.paramDefs;
       d.features = draft.features;
     });
+    for (const sid of issues) this.onParamSolveIssue?.(sid);
     this.onParamsApplied?.();
+  }
+
+  /** The dimConflictMsg wording for a sketch whose re-solve a parameter edit
+   *  left unsatisfiable (report X-param-refuse): the constraint a paramDef
+   *  targets in this sketch, and its value before the edit if it had one —
+   *  the same two things dimConflictMsg already asks for an open-sketch
+   *  dimension trial, so the wording (and which Fix it names) is identical. */
+  private paramRefusalNote(
+    sid: string,
+    pre: Extract<Feature, { type: "sketch" }>,
+    post: Extract<Feature, { type: "sketch" }>,
+    draft: CadDocument,
+    blamed: Set<number>,
+  ): string {
+    const targets = Object.values(draft.paramDefs ?? {})
+      .map((p) => p.target)
+      .filter((tg): tg is Extract<ParamTarget, { kind: "constraint" }> => tg?.kind === "constraint" && tg.sketch === sid);
+    const constraints = post.constraints ?? [];
+    const edited = targets
+      .map((tg) => constraints.find((k) => isDimConstraint(k) && k.id === tg.constraint))
+      .find((k): k is SketchConstraint => !!k);
+    if (!edited) {
+      // Every affected sketch came from a bound dimension (recompute's
+      // affectedSketches), so this is not expected — fall back to the generic
+      // wording rather than say nothing.
+      return t("sketch.dimConflict.changeConflicts", { what: t("sketch.dimConflict.kind.dimension") });
+    }
+    const editedId = isDimConstraint(edited) ? edited.id : undefined;
+    const prevC = (pre.constraints ?? []).find((k) => isDimConstraint(k) && k.id === editedId);
+    const prevValue = prevC && isDimConstraint(prevC) ? paramValueOfDim(prevC) : undefined;
+    return dimConflictMsg(edited, blamed, constraints, prevValue);
   }
 
   // --- associative projection refresh (plan step 4) ---
@@ -1013,14 +1063,23 @@ export class DocumentStore {
    *  that turns a line past a right angle is told from a mirror image. A walk
    *  that cannot finish on the right side hands over to the single solve,
    *  judged against `pre`'s geometry wherever a line kept its direction.
-   *  Returns the entities to write, or null to keep the coordinates (nothing
-   *  to solve, unsolvable, or still on the far side; the last two are reported
-   *  through onParamSolveIssue). */
+   *  Returns `solved` entities to write; `ok` for nothing to solve (true) or
+   *  the walk/solve left the coordinates untouched for a reason the caller
+   *  already reports elsewhere, same as before (unsolvable, no solver, or
+   *  still on the far side — `issue`); or `refused` with the solver's own
+   *  blamed constraints when a plain (non-walked) solve RAN and came back
+   *  genuinely unsatisfiable — report X-param-refuse: that one, unlike the
+   *  others, is a reason to reject the whole parameter edit rather than leave
+   *  this one sketch behind it. */
   private async solveParamEdit(
     pre: Extract<Feature, { type: "sketch" }>,
     post: Extract<Feature, { type: "sketch" }>,
     parameters: CadDocument["parameters"],
-  ): Promise<Extract<Feature, { type: "sketch" }>["entities"] | null> {
+  ): Promise<
+    | { kind: "solved"; entities: Extract<Feature, { type: "sketch" }>["entities"] }
+    | { kind: "ok" | "issue" }
+    | { kind: "refused"; blamed: Set<number> }
+  > {
     // the old geometry under the new constraint list, which is what the side
     // check compares index by index
     const before = { ...pre, constraints: post.constraints ?? [] };
@@ -1029,15 +1088,14 @@ export class DocumentStore {
       const keepsSide = (a: Extract<Feature, { type: "sketch" }>, b: Extract<Feature, { type: "sketch" }>) =>
         !p2lSideFlipped(a, b, parameters);
       const walked = await this.walkSolve(post, (cur, t) => paramStep(cur, pre, post, t), parameters, steps, keepsSide);
-      if (walked) return walked.entities;
+      if (walked) return { kind: "solved", entities: walked.entities };
     }
-    const solved = await this.solveConstrainedSketch(post, parameters);
-    if (!solved) return null;
-    if (p2lSideFlipped(before, { ...post, entities: solved }, parameters, "unknown")) {
-      this.onParamSolveIssue?.(post.id);
-      return null;
-    }
-    return solved;
+    const r = await this.solveSketchOutcome(post, parameters);
+    if (r.status === "nothing") return { kind: "ok" };
+    if (r.status === "unavailable") return { kind: "issue" };
+    if (r.status === "failed") return { kind: "refused", blamed: r.blamed };
+    if (p2lSideFlipped(before, { ...post, entities: r.entities }, parameters, "unknown")) return { kind: "issue" };
+    return { kind: "solved", entities: r.entities };
   }
 
   /** `start` re-solved at each of `steps` fractions of a change in turn (`at`
@@ -1097,14 +1155,17 @@ export class DocumentStore {
     parameters: CadDocument["parameters"],
   ): Promise<
     | { status: "solved"; entities: Extract<Feature, { type: "sketch" }>["entities"] }
-    | { status: "nothing" | "failed" | "unavailable" }
+    | { status: "nothing" }
+    | { status: "unavailable" }
+    | { status: "failed"; blamed: Set<number> }
   > {
     if (!(f.constraints ?? []).length) return { status: "nothing" };
     if (!this.headlessSolve) return { status: "unavailable" };
     try {
+      let blamed = new Set<number>();
       // a polygon's or slot's number a parameter sets is held where it is
-      const solved = await this.headlessSolve(f, parameters, boundShapeFields(this.doc, f.id));
-      return solved ? { status: "solved", entities: solved.entities } : { status: "failed" };
+      const solved = await this.headlessSolve(f, parameters, boundShapeFields(this.doc, f.id), (b) => (blamed = b));
+      return solved ? { status: "solved", entities: solved.entities } : { status: "failed", blamed };
     } catch (e) {
       // solveSketchFeature only lets SolverUnavailable out; anything else is a
       // bug on our side. Either way there is no solved geometry, and this must
