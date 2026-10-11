@@ -873,9 +873,19 @@ export class DocumentStore {
       .map((p) => p.target)
       .filter((tg): tg is Extract<ParamTarget, { kind: "constraint" }> => tg?.kind === "constraint" && tg.sketch === sid);
     const constraints = post.constraints ?? [];
-    const edited = targets
-      .map((tg) => constraints.find((k) => isDimConstraint(k) && k.id === tg.constraint))
-      .find((k): k is SketchConstraint => !!k);
+    // Two different paramDefs can each target a constraint in this SAME
+    // sketch, but only one of them is the dimension the solver actually
+    // failed on. `blamed` always includes the dimension it was trying to
+    // satisfy (dimConflictMsg's doc comment above), so the right target is
+    // the one whose constraint index is IN blamed — not merely the first
+    // target that happens to resolve to a constraint here (that named the
+    // wrong dimension kind, the wrong "held by" list and the wrong previous
+    // value whenever a sketch had more than one bound paramDef).
+    const resolved = targets
+      .map((tg) => constraints.findIndex((k) => isDimConstraint(k) && k.id === tg.constraint))
+      .filter((i) => i >= 0);
+    const editedIndex = resolved.find((i) => blamed.has(i)) ?? resolved[0];
+    const edited = editedIndex != null ? constraints[editedIndex] : undefined;
     if (!edited) {
       // Every affected sketch came from a bound dimension (recompute's
       // affectedSketches), so this is not expected — fall back to the generic
