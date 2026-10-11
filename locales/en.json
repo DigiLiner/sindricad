@@ -1398,6 +1398,7 @@
     },
     "hint": {
       "cancelSketch": "Leave the sketch and discard it. An offset plane you just made stays.",
+      "copySketch": "Duplicates what's selected: click once for the point you're copying from, again for where the copy goes.",
       "datumPlane": "Creates the plane only — no sketch.",
       "import": "Brings in a STEP, STL, 3MF, OBJ or GLB file as a body.",
       "insertPart": "Copies the visible bodies of another SindriCAD document into this one. Later changes to that file do not follow.",

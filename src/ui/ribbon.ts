@@ -199,7 +199,7 @@ export const SKETCH: Group[] = [
       { action: "join-sketch", label: t("tool.join"), iconName: "join", hint: t("ribbon.hint.join") },
       { action: "mirror-sketch", label: t("tool.mirror"), iconName: "mirror" },
       { action: "move-sketch", label: t("tool.move"), iconName: "move" },
-      { action: "copy-sketch", label: t("tool.copy"), iconName: "copy" },
+      { action: "copy-sketch", label: t("tool.copy"), iconName: "copy", hint: t("ribbon.hint.copySketch") },
       { action: "rotate-sketch", label: t("tool.rotate"), iconName: "rotate" },
       { action: "scale-sketch", label: t("tool.scale"), iconName: "scale" },
       { action: "dimension", label: t("tool.dimension"), iconName: "dimension", key: "D" },
