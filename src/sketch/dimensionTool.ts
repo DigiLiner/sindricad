@@ -914,10 +914,19 @@ function lineLine(l1: LineOp, l2: LineOp, forceDriven: boolean, cursor?: THREE.V
         // already shown — supplement or not — moves nothing, the same
         // invariant the comment above protects for the direct case.
         const asStored = quadrantAt(labelPos) === "direct" ? value : 180 - value;
+        // Always persist an explicit `place` (even {ox:0,oy:0} when none was
+        // frozen), unlike every other dim kind here: X-angle-supplement needs
+        // a reliable way to tell "a document saved before this feature
+        // existed" (place absent) from "a freshly placed dim that happens to
+        // sit at its default anchor" (place present, {0,0}) — see
+        // entityDims.constraintDims and sketchMode.angleAsStoredValue, which
+        // both read a MISSING place as the pre-feature plain-magnitude
+        // convention.
+        const storedPlace = place ?? { ox: labelPos.x - labelAnchor.x, oy: labelPos.y - labelAnchor.y };
         return {
           type: "angle", l1: id1, l2: id2,
           value: dimValueFromParam({ type: "angle", value: measured }, asStored),
-          ...(place ? { place } : {}),
+          place: storedPlace,
         };
       },
     });

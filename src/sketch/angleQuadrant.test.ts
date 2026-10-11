@@ -70,9 +70,14 @@ describe("X-angle-supplement: a right-to-left line's angle to the X axis", () =>
   });
 
   it("displaying an existing placed dim reads the same wedge (entityDims.constraintDims)", () => {
-    // What dimensionTool stored for the reversed-line case above: the raw
-    // signedAngleDeg magnitude (~150), not the 30 the badge shows.
-    const cons: SketchConstraint[] = [{ type: "angle", l1: "b", l2: ORIGIN_X_ID, value: 150 }];
+    // What dimensionTool stores for the reversed-line case above: the raw
+    // signedAngleDeg magnitude (~150), not the 30 the badge shows — plus an
+    // explicit `place` (even {0,0} at the default anchor), which is what
+    // distinguishes this from a document saved before X-angle-supplement
+    // existed (see the "legacy document" describe block below).
+    const cons: SketchConstraint[] = [
+      { type: "angle", l1: "b", l2: ORIGIN_X_ID, value: 150, place: { ox: 0, oy: 0 } },
+    ];
     const dims = constraintDims([bReversed, axisX], cons);
     expect(dims).toHaveLength(1);
     expect(dims[0]!.valueMm).toBeCloseTo(30, 0);
@@ -135,7 +140,8 @@ describe("retyping an existing placed angle badge is a no-op (sketchMode.writeDi
   it("retyping the shown magnitude (30) reproduces the same stored value", () => {
     const l1e = line("b", 36, 25, 10, 10);
     const axis = line(ORIGIN_X_ID, -10_000, 0, 10_000, 0);
-    const c: SketchConstraint & { value: number } = { type: "angle", l1: "b", l2: ORIGIN_X_ID, value: 150 };
+    const c: SketchConstraint & { value: number } =
+      { type: "angle", l1: "b", l2: ORIGIN_X_ID, value: 150, place: { ox: 0, oy: 0 } };
     const s = makeMode([l1e, axis], [c]);
     const stored = s.angleAsStoredValue(c, 30);
     expect(Math.abs(stored)).toBeCloseTo(150, 0);
@@ -144,7 +150,8 @@ describe("retyping an existing placed angle badge is a no-op (sketchMode.writeDi
   it("Flip side reclassifies the quadrant without touching the stored value", () => {
     const l1e = line("b", 36, 25, 10, 10);
     const axis = line(ORIGIN_X_ID, -10_000, 0, 10_000, 0);
-    const c: SketchConstraint & { value: number } = { type: "angle", l1: "b", l2: ORIGIN_X_ID, value: 150 };
+    const c: SketchConstraint & { value: number } =
+      { type: "angle", l1: "b", l2: ORIGIN_X_ID, value: 150, place: { ox: 0, oy: 0 } };
     const s = makeMode([l1e, axis], [c]);
     const before = constraintDims([l1e, axis], s.constraints)[0]!;
     expect(before.valueMm).toBeCloseTo(30, 0);
@@ -152,5 +159,24 @@ describe("retyping an existing placed angle badge is a no-op (sketchMode.writeDi
     expect((s.constraints[0] as SketchConstraint & { value: number }).value).toBe(150); // untouched
     const after = constraintDims([l1e, axis], s.constraints)[0]!;
     expect(after.valueMm).toBeCloseTo(150, 0); // now reads the other wedge
+  });
+});
+
+describe("a legacy document (saved before X-angle-supplement) keeps its old reading", () => {
+  // Code review finding: a document saved under the OLD plain abs(value)
+  // convention (no quadrant concept, no `place` field at all) must load
+  // showing exactly the value it was saved with — not its supplement — even
+  // though the new quadrant machinery, left ungated, would recompute off the
+  // DEFAULT (unplaced) anchor and can disagree with what the old convention
+  // showed. l1 is horizontal, l2 is at 150 degrees to it; an old-style save
+  // of a 30-degree constraint stored the plain magnitude, 30, with no place.
+  const l1 = line("l1", -60, 0, -40, 0);
+  const l2 = line("l2", 0, 0, -10 * Math.cos((150 * Math.PI) / 180), -10 * Math.sin((150 * Math.PI) / 180));
+
+  it("constraintDims reads the saved value verbatim, not its supplement", () => {
+    const cons: SketchConstraint[] = [{ type: "angle", l1: "l1", l2: "l2", value: 30 }];
+    const dims = constraintDims([l1, l2], cons);
+    expect(dims).toHaveLength(1);
+    expect(dims[0]!.valueMm).toBeCloseTo(30, 0);
   });
 });

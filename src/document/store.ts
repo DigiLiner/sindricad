@@ -1261,7 +1261,27 @@ export class DocumentStore {
     // in applyDrivingDimsDirect exists for — silently doing nothing here.
     let direct: SketchConstraint | null = dim;
     if (dim) {
-      next = { ...cur, constraints: upsertDrivingDim(cur.constraints ?? [], dim) };
+      if (plan?.kind === "upsert" && plan.writeFirst) {
+        // This field was a direct write until a lock went on it (directDims'
+        // planDimEdit) — it still has to behave like one first: land the
+        // typed value in the geometry and carry any Offset tied to it along
+        // (followOffsets), refusing exactly as a direct edit would if that
+        // would collapse the offset. Only once that holds does the new lock
+        // go on trial, so a free rectangle's badge keeps following its
+        // offsets the same as it always did (sketchMode.ts's editDimension
+        // takes the same two-step fork for the in-canvas editor).
+        const was = { ...e };
+        entityDims(e).find((x) => x.field === field)?.write(mm);
+        if (docId) {
+          const follow = followOffsets(resolved, cur.constraints ?? [], docId, was);
+          if ("refused" in follow) {
+            this.onWarning?.(followRefusal(follow.refused));
+            return;
+          }
+          followed = new Map(follow.entities.flatMap((f, j) => (j !== entityIndex && f !== resolved[j] ? [[j, f] as const] : [])));
+        }
+      }
+      next = { ...cur, constraints: upsertDrivingDim(cur.constraints ?? [], dim), entities: withEdited() };
     } else if (plan?.kind === "retype") {
       // plan.value, not mm: a signed X/Y dim keeps the sign it already had
       const constraints = (cur.constraints ?? []).map((c, i) =>

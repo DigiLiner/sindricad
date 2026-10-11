@@ -1649,16 +1649,23 @@ export class SketchMode {
    *  signedAngleDeg convention dimValueFromParam expects (X-angle-supplement).
    *  Undo that relabelling using the dim's CURRENT label position — the same
    *  wedge the badge was just read from — so retyping the value already shown
-   *  moves nothing. Every other dim type passes `val` straight through. */
+   *  moves nothing. Every other dim type passes `val` straight through.
+   *
+   *  A MISSING `place` means a document saved before X-angle-supplement
+   *  existed (every dim created since always carries one, even {ox:0,oy:0}):
+   *  it always read as "direct", so keep reading it that way here too — the
+   *  same gate entityDims.constraintDims applies to the badge this `val` was
+   *  copied from. */
   private angleAsStoredValue(c: SketchConstraint & { value: number }, val: number): number {
     if (c.type !== "angle") return val;
+    const place = (c as { place?: PlaceOffset }).place;
+    if (!place) return val;
     const byId = new Map(this.entities.map((e) => [e.id, e]));
     const s1 = lineOperand(byId, c.l1), s2 = lineOperand(byId, c.l2);
     if (!s1 || !s2) return val;
-    const place = (c as { place?: PlaceOffset }).place;
     const labelPos = {
-      x: (s1.x1 + s1.x2 + s2.x1 + s2.x2) / 4 + (place?.ox ?? 0),
-      y: (s1.y1 + s1.y2 + s2.y1 + s2.y2) / 4 + (place?.oy ?? 0),
+      x: (s1.x1 + s1.x2 + s2.x1 + s2.x2) / 4 + place.ox,
+      y: (s1.y1 + s1.y2 + s2.y1 + s2.y2) / 4 + place.oy,
     };
     return angleQuadrant(s1, s2, labelPos) === "direct" ? val : 180 - val;
   }
@@ -1667,7 +1674,17 @@ export class SketchMode {
    *  supplement, 150) by moving the label across one of its two lines —
    *  never by touching `c.value`, so neither line moves. Reusing the `place`
    *  slot angle dims already carry (entityDims.constraintDims always gives
-   *  them one) means this needs no new stored field. */
+   *  them one) means this needs no new stored field.
+   *
+   *  A MISSING `place` (a document saved before X-angle-supplement existed)
+   *  reads forced "direct" regardless of the default anchor's true wedge
+   *  (angleAsStoredValue / entityDims.constraintDims) — so reflecting the
+   *  anchor is only the right move when the anchor's true wedge IS "direct"
+   *  (then reflecting lands in the supplement, the flip the user asked for).
+   *  When the anchor's true wedge is already "supplement", the forced
+   *  "direct" reading was already wrong for that geometry; simply pinning
+   *  `place` at the anchor (no move at all) switches to the real wedge and
+   *  already reads as the flip, with no reflection needed. */
   private flipAngleSide(cIndex: number) {
     const c = this.constraints[cIndex];
     if (!c || c.type !== "angle") return;
@@ -1679,7 +1696,14 @@ export class SketchMode {
       y: (s1.y1 + s1.y2 + s2.y1 + s2.y2) / 4,
     };
     const place = (c as { place?: PlaceOffset }).place;
-    const labelPos = { x: anchor.x + (place?.ox ?? 0), y: anchor.y + (place?.oy ?? 0) };
+    if (!place) {
+      const target = angleQuadrant(s1, s2, anchor) === "direct" ? reflectAcrossLine(s1, anchor) : anchor;
+      this.constraints[cIndex] = { ...c, place: { ox: target.x - anchor.x, oy: target.y - anchor.y } } as SketchConstraint;
+      this.refreshActive();
+      this.onState?.();
+      return;
+    }
+    const labelPos = { x: anchor.x + place.ox, y: anchor.y + place.oy };
     const flipped = reflectAcrossLine(s1, labelPos);
     const p = clampPlace(flipped.x - anchor.x, flipped.y - anchor.y, this.viewport.pixelWorldSize(this.plane.origin));
     this.constraints[cIndex] = (p ? { ...c, place: p } : c) as SketchConstraint;
@@ -2145,8 +2169,17 @@ export class SketchMode {
     if (bad) return bad;
     const held = key.startsWith("c:") ? this.constraints.find((c) => isDimConstraint(c) && c.id === key!.slice(2)) : undefined;
     // the value it holds now, as a literal: the constraint's own number when
-    // there is one, so an X/Y distance keeps its sign
-    const expr = this.exprFor(key) ?? String(held && isDimConstraint(held) ? paramValueOfDim(held) : row.valueMm);
+    // there is one, so an X/Y distance keeps its sign. An angle is the one
+    // exception — paramValueOfDim's Math.abs(c.value) is the raw,
+    // quadrant-unaware magnitude, not the quadrant-corrected number the badge
+    // (row.valueMm) actually shows (X-angle-supplement); naming the parameter
+    // off the raw value made the Params panel disagree with the sketch and
+    // inverted later edits. writeDimValue (angleAsStoredValue) undoes the same
+    // quadrant relabelling the other way for every other angle write.
+    const heldValue = held && isDimConstraint(held)
+      ? (held.type === "angle" ? row.valueMm : paramValueOfDim(held))
+      : row.valueMm;
+    const expr = this.exprFor(key) ?? String(heldValue);
     this.pendingBindings.set(key, { expr, kind: row.kind, name });
     this.refreshActive();
     this.onState?.();

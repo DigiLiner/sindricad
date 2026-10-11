@@ -741,6 +741,24 @@ describe("inspector: the open sketch's dimensions, live", () => {
     expect(labels(o.root)).toContain("wallRectangle 1 · Width mm");
   });
 
+  it("code review: names an X-angle-supplement dim in the session at the badge's value, not the raw stored one", async () => {
+    // Same "b reversed" geometry as sketch/angleQuadrant.test.ts: l1 was drawn
+    // right-to-left, so its angle to l2 stores 150 (signedAngleDeg's raw
+    // convention), but the badge — and this dim's place — reads the other
+    // wedge, 30. This exercises namePanelDim directly, the live, open-sketch
+    // path Finding 2 cites.
+    const l1: ResolvedEntity = { id: "l1", type: "line", x1: 36, y1: 25, x2: 10, y2: 10 } as ResolvedEntity;
+    const l2: ResolvedEntity = { id: "l2", type: "line", x1: -10_000, y1: 0, x2: 10_000, y2: 0 } as ResolvedEntity;
+    const ca: SketchConstraint = { type: "angle", id: "ca", l1: "l1", l2: "l2", value: 150, place: { ox: 0, oy: 0 } } as SketchConstraint;
+    const o = openSession([l1, l2], [ca]);
+    nameRow(o.root, "Line 1 to Line 2 · Angle°", "tilt");
+    await o.settle();
+    const pending = (o.s as unknown as { pendingBindings: Map<string, unknown> }).pendingBindings;
+    expect([...pending]).toEqual([["c:ca", { expr: "30", kind: "angle", name: "tilt" }]]);
+    const held = o.s.constraints.find((c) => (c as { id?: string }).id === "ca") as SketchConstraint & { value: number };
+    expect(held.value).toBe(150); // naming moves nothing
+  });
+
   it("keeps an inward offset inward when its parameter changes with the sketch open", async () => {
     // Modify > Parameters while the sketch is open: the session takes the new
     // value (syncParamValues), which wrote it straight onto the offset, so

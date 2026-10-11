@@ -55,7 +55,7 @@ describe("angle dimension to the X origin axis keeps the line's sign", () => {
     // keeps the measurement's sign (-30): typing the magnitude shown moves
     // nothing.
     const constraint = res.make(30);
-    expect(constraint).toEqual({ type: "angle", l1: "b", l2: ORIGIN_X_ID, value: -30 });
+    expect(constraint).toEqual({ type: "angle", l1: "b", l2: ORIGIN_X_ID, value: -30, place: { ox: 0, oy: 0 } });
 
     const r = await compileAndSolve([axisX, b], [constraint]);
     expect(r.ok).toBe(true);
@@ -74,7 +74,7 @@ describe("angle dimension to the X origin axis keeps the line's sign", () => {
     const res = resolveDim(picks);
     if (isDimError(res)) throw new Error(`expected a plan, got error "${res.error}"`);
     const constraint = res.make(45);
-    expect(constraint).toEqual({ type: "angle", l1: "b", l2: ORIGIN_X_ID, value: -45 });
+    expect(constraint).toEqual({ type: "angle", l1: "b", l2: ORIGIN_X_ID, value: -45, place: { ox: 0, oy: 0 } });
 
     const r = await compileAndSolve([axisX, b], [constraint]);
     expect(r.ok).toBe(true);
@@ -92,6 +92,6 @@ describe("angle dimension to the X origin axis keeps the line's sign", () => {
     if (isDimError(res)) throw new Error(`expected a plan, got error "${res.error}"`);
     expect(res.measure()).toBeCloseTo(30, 0);
     const constraint = res.make(30);
-    expect(constraint).toEqual({ type: "angle", l1: ORIGIN_X_ID, l2: "b", value: 30 });
+    expect(constraint).toEqual({ type: "angle", l1: ORIGIN_X_ID, l2: "b", value: 30, place: { ox: 0, oy: 0 } });
   });
 });

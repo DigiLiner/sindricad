@@ -986,8 +986,13 @@ export function constraintDims(ents: ResolvedEntity[], constraints: SketchConstr
       // angle or its 180-degree supplement depending on which end it was
       // drawn from (see dimensionTool.ts's lineLine, same rule applied here
       // so a loaded document's badge reads exactly as it did when placed).
+      // Every angle constraint created since that fix always carries an
+      // explicit `place` (even {ox:0,oy:0}); a MISSING `place` is therefore
+      // an exclusive signal for a document saved before the fix existed,
+      // under the old plain-magnitude convention — read it as "direct" so
+      // it keeps displaying the value it was saved with, unchanged.
       const base = driven ? (angleDimMeasure(byId, c) ?? c.value) : c.value;
-      const quadrant = angleQuadrant(s1, s2, labelPos);
+      const quadrant = place ? angleQuadrant(s1, s2, labelPos) : "direct";
       const valueMm = quadrant === "direct" ? Math.abs(base) : 180 - Math.abs(base);
       out.push({ cIndex: i, valueMm, labelPos, lines: [], kind: "angle", driven, place: off });
       return;

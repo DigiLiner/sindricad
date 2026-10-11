@@ -236,7 +236,7 @@ describe("resolveDim — pair matrix", () => {
     const res = resolveDim([T.entity(line("a", 0, 0, 10, 0)), T.entity(line("b", 0, 0, 0, 10))]);
     expect(plan(res).kind).toBe("angle");
     expect(plan(res).measure()).toBeCloseTo(90);
-    expect(made(res, 90)).toEqual({ type: "angle", l1: "a", l2: "b", value: 90 });
+    expect(made(res, 90)).toEqual({ type: "angle", l1: "a", l2: "b", value: 90, place: { ox: 0, oy: 0 } });
   });
 
   it("two PARALLEL lines → distance, never a 0° angle", () => {
@@ -293,7 +293,7 @@ describe("resolveDim — pair matrix", () => {
     const r = rect("r", 0, 0, 20, 10);
     const res = resolveDim([T.edge(r, 0, -10, -5, 10, -5), T.edge(r, 1, 10, -5, 10, 5)]);
     expect(plan(res).kind).toBe("angle");
-    expect(made(res, 90)).toEqual({ type: "angle", l1: "r~0", l2: "r~1", value: 90 });
+    expect(made(res, 90)).toEqual({ type: "angle", l1: "r~0", l2: "r~1", value: 90, place: { ox: 0, oy: 0 } });
   });
 
   it("rect edge + circle → centre-to-edge distance", () => {
