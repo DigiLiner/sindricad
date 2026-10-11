@@ -620,12 +620,14 @@ export class SketchMode {
       // a circle's diameter is a property of the circle, so there is nothing to
       // delete until a dimension governs it, and saying so beats a right-click
       // that appears to do nothing. Lock is the discoverable way to turn a
-      // measurement into a dimension that HOLDS (report dff87040).
+      // measurement into a dimension that HOLDS (report dff87040). Flip side is
+      // the exception: it only means something on an angle, so it is offered
+      // there and nowhere else, after the three every badge shares.
       contextMenu(e.clientX, e.clientY, [
         { label: t("sketch.dimension.lock"), disabled: !a.lock, onClick: () => a.lock?.() },
         { label: t("sketch.dimension.unlock"), disabled: !a.unlock, onClick: () => a.unlock?.() },
-        { label: t("sketch.dimension.flipSide"), disabled: !a.flipSide, onClick: () => a.flipSide?.() },
         { label: t("sketch.dimension.delete"), danger: true, disabled: !a.del, shortcut: "Del", onClick: () => a.del?.() },
+        ...(a.flipSide ? [{ label: t("sketch.dimension.flipSide"), onClick: () => a.flipSide?.() }] : []),
       ]);
     };
     this.glyphs = new SketchGlyphs(viewport);
