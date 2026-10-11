@@ -735,14 +735,14 @@
       "toolBusy": "Finish or cancel the current tool first (Esc)"
     },
     "text": {
-      "across": "Across mm",
+      "across": "Across",
       "align": {
         "center": "center",
         "left": "left",
         "right": "right"
       },
       "angle": "Angle °",
-      "bevel": "Bevel mm",
+      "bevel": "Bevel",
       "bevelStyle": {
         "auto": "auto",
         "chamfer": "chamfer",
@@ -750,7 +750,7 @@
         "taper": "sloped"
       },
       "bevelStyleTitle": "Which edges the bevel uses. 'auto' picks whichever one this font can actually manage on every letter — that differs by font, so it is usually the right choice.",
-      "bevelTitle": "0 = sharp edges. Measured in mm, not degrees.",
+      "bevelTitle": "0 = sharp edges. A length, not degrees.",
       "boldItalic": "B / I",
       "color": "Color",
       "defaultFont": "Default font",
@@ -764,7 +764,7 @@
       "inheritColor": "Use the body's colour",
       "pickPrompt": "Click the face to put text on · Esc to cancel",
       "placeholder": "Type your text",
-      "size": "Size mm",
+      "size": "Size",
       "style": "Style",
       "title": "Text on face",
       "typePrompt": "Type the text · Ctrl+Enter to apply · Esc to cancel",
@@ -2135,6 +2135,10 @@
       "prompt": "Sign out of TinkerAtlas ({user})?"
     },
     "signedInAs": "Signed in as {name}"
+  },
+  "toast": {
+    "copied": "Copied",
+    "copy": "Copy message"
   },
   "tool": {
     "analyze": "Analyze",

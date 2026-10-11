@@ -10,7 +10,30 @@ import { icon, type IconName } from "../ui/icons";
 import { t, setText, setTitle } from "../i18n";
 import { isImeComposing } from "../ui/focus";
 import { setPrompt } from "../ui/prompt";
-import { badNumberField, fmtNumber, numericInput, parseNumber, typedNumber } from "../ui/units";
+import {
+  badNumberField, dimValueOk, fieldParams, fieldText, fmtNumber, getUnit, numericInput, parseFieldExpr,
+  typedNumber, type FieldKind,
+} from "../ui/units";
+
+/** The number in a length field, honouring the document unit and accepting a
+ *  fraction or arithmetic ("1/16", "wall*2") exactly like a sketch dimension
+ *  box does — `dflt` (in mm) when the field is EMPTY or unreadable, same `??`
+ *  contract as `typedNumber` (ui/units). X-doug-text-inches: this panel used
+ *  to read every field as a bare millimetre with `typedNumber`/`parseNumber`,
+ *  so an inch user's "1/16" was refused outright. */
+function typedLen(el: { value: string }, dflt: number): number {
+  return parseFieldExpr(el.value, "length", fieldParams()) ?? dflt;
+}
+
+/** Like `badNumberField`, but for a length field: readable text that is not a
+ *  bare number (a fraction, an expression) must not count as bad. */
+function badLenField(el: { value: string }, positive = false): boolean {
+  const raw = el.value.trim();
+  if (raw === "") return false;
+  const v = parseFieldExpr(raw, "length", fieldParams());
+  if (v === null) return true;
+  return positive && !dimValueOk(v, "length");
+}
 
 /** True when the user typed something into `el` that the app cannot read
  *  ("3.14.15", "1.2.3" — ui/units refuses those rather than guessing 314.15 and
@@ -62,6 +85,9 @@ export class TextOnFacePanel {
   private numFields: HTMLInputElement[] = [];
   /** The one field whose value must be > 0 — see the commit guard. */
   private heightField: HTMLInputElement | null = null;
+  /** The one field read as a bare angle (degrees), not a length — see the
+   *  commit guard, which parses every other numeric field as a length. */
+  private angleField: HTMLInputElement | null = null;
   private onCommit: ((v: TextOnFaceValues) => void) | null = null;
   private onChange: ((v: TextOnFaceValues) => void) | null = null;
   private onCancel: (() => void) | null = null;
@@ -132,9 +158,17 @@ export class TextOnFacePanel {
       root.appendChild(d);
       return d;
     };
-    const label = (key: string) => {
+    // Live document unit, baked into a length label's text once at open — this
+    // panel is not kept open across a unit change, same as the rest of its DOM.
+    const unit = getUnit();
+    const label = (key: string, kind?: FieldKind) => {
       const l = document.createElement("label");
       setText(l, key);
+      // A length label gets the live unit appended (X-doug-text-inches: these
+      // used to say "mm" baked into the English string, regardless of the
+      // document unit). Angle stays whatever its own key already says
+      // ("Angle °") — angles never convert.
+      if (kind === "length") l.textContent = `${l.textContent} ${unit}`;
       // nowrap: a two-word label ("Across mm") otherwise wraps to two lines and
       // shoves the rest of its row sideways.
       Object.assign(l.style, {
@@ -142,9 +176,11 @@ export class TextOnFacePanel {
       });
       return l;
     };
-    const num = (v: number, step: string, min?: string) => {
+    const num = (v: number, step: string, min?: string, kind: FieldKind = "length") => {
       const i = numericInput(document.createElement("input"), Number(step));
-      i.value = fmtNumber(v);
+      // A length shows (and, in read()/badLenField, parses) in the DISPLAY
+      // unit, same as a sketch dimension box; angle stays raw degrees.
+      i.value = kind === "length" ? fieldText(v, "length") : fmtNumber(v);
       i.step = step;
       // `min` is a hint only now that these are text inputs (it always was: a
       // number input marks an out-of-range value invalid, it does not refuse it,
@@ -189,15 +225,15 @@ export class TextOnFacePanel {
 
     const height = num(init.height ?? 6, "0.5", "0.01");
     const depth = num(init.depth ?? 0.6, "0.1", "0.01");
-    const depthLabel = label("feature.text.depth");
-    row(label("feature.text.size"), height, depthLabel, depth);
+    const depthLabel = label("feature.text.depth", "length");
+    row(label("feature.text.size", "length"), height, depthLabel, depth);
 
     // Placement. Seeded from where the click landed, so these open showing the
     // spot the user already chose rather than 0/0 — a field that disagrees with
     // what is on screen is worse than no field.
     const offU = num(init.u ?? 0, "0.5");
     const offV = num(init.v ?? 0, "0.5");
-    row(label("feature.text.across"), offU, label("feature.text.up"), offV);
+    row(label("feature.text.across", "length"), offU, label("feature.text.up", "length"), offV);
 
     const op = document.createElement("select");
     op.style.flex = "1";
@@ -229,10 +265,10 @@ export class TextOnFacePanel {
     align.value = init.align ?? "left";
     row(label("feature.text.boldItalic"), bold, italic, align);
 
-    const angle = num(init.angle ?? 0, "5");
+    const angle = num(init.angle ?? 0, "5", undefined, "angle");
     const boxWidth = num(init.boxWidth ?? 0, "1", "0");
     setTitle(boxWidth, "feature.text.wrapTitle");
-    row(label("feature.text.angle"), angle, label("feature.text.wrap"), boxWidth);
+    row(label("feature.text.angle"), angle, label("feature.text.wrap", "length"), boxWidth);
 
     const bevel = num(init.bevel ?? 0, "0.05", "0");
     setTitle(bevel, "feature.text.bevelTitle");
@@ -245,7 +281,7 @@ export class TextOnFacePanel {
     }
     bevelStyle.value = init.bevelStyle ?? "auto";
     setTitle(bevelStyle, "feature.text.bevelStyleTitle");
-    const bevelRow = row(label("feature.text.bevel"), bevel, bevelStyle);
+    const bevelRow = row(label("feature.text.bevel", "length"), bevel, bevelStyle);
 
     // Filament slot for the letters. Chips rather than a <select> because the
     // thing being chosen IS a colour — the same swatch vocabulary the body
@@ -289,7 +325,7 @@ export class TextOnFacePanel {
     });
     paintChips();
     const syncBevel = () => {
-      bevelStyle.style.visibility = (parseNumber(bevel.value) ?? 0) > 0 ? "visible" : "hidden";
+      bevelStyle.style.visibility = (parseFieldExpr(bevel.value, "length", fieldParams()) ?? 0) > 0 ? "visible" : "hidden";
     };
     bevel.addEventListener("input", syncBevel);
     syncBevel();
@@ -320,24 +356,26 @@ export class TextOnFacePanel {
         bold.checked && italic.checked ? "bolditalic" : bold.checked ? "bold" : italic.checked ? "italic" : "regular";
       const v: TextOnFaceValues = {
         text: text.value,
-        // parseNumber, not Number(): Number("12,5") is NaN, so a comma-decimal
-        // size silently became the 0 below. An EMPTY field still means "use the
-        // default"; text the parser refuses shows the default in the live
-        // preview and is refused at commit(), never modelled.
-        height: typedNumber(height, 0),
+        // typedLen/typedNumber, not Number(): Number("12,5") is NaN, so a
+        // comma-decimal size silently became the 0 below. An EMPTY field still
+        // means "use the default"; text the parser refuses shows the default
+        // in the live preview and is refused at commit(), never modelled.
+        // The lengths read through the document unit and accept a fraction or
+        // expression (X-doug-text-inches); angle stays raw degrees.
+        height: typedLen(height, 0),
         style: s,
         align: align.value as TextOnFaceValues["align"],
         angle: typedNumber(angle, 0),
-        depth: typedNumber(depth, 0),
+        depth: typedLen(depth, 0),
         operation: op.value as TextOnFaceValues["operation"],
-        bevel: typedNumber(bevel, 0),
+        bevel: typedLen(bevel, 0),
         bevelStyle: bevelStyle.value as TextOnFaceValues["bevelStyle"],
-        u: typedNumber(offU, 0),
-        v: typedNumber(offV, 0),
+        u: typedLen(offU, 0),
+        v: typedLen(offV, 0),
         colorSlot: slot,
       };
       if (font.value) v.font = font.value;
-      const box = parseNumber(boxWidth.value);
+      const box = parseFieldExpr(boxWidth.value, "length", fieldParams());
       if (box !== null && box > 0) v.boxWidth = box;
       return v;
     };
@@ -348,10 +386,11 @@ export class TextOnFacePanel {
     // one unreadable number and quietly defaults another.
     this.numFields = [height, depth, angle, boxWidth, bevel, offU, offV];
     this.heightField = height;
+    this.angleField = angle;
 
     this.setUV = (u, v) => {
-      offU.value = fmtNumber(Math.round(u * 1000) / 1000);
-      offV.value = fmtNumber(Math.round(v * 1000) / 1000);
+      offU.value = fieldText(u, "length");
+      offV.value = fieldText(v, "length");
     };
 
     const emit = () => this.onChange?.(this.read!());
@@ -402,7 +441,11 @@ export class TextOnFacePanel {
     // dimension fields give, and the panel stays up so it can be fixed.
     // `height` is passed as must-be-positive for the same reason the sketch text
     // panel does: 0 or less segfaults the geometry engine through the preview.
-    if (this.numFields.some((el) => badNumberField(el, el === this.heightField))) {
+    // Every field but `angle` is a length, parsed in the document unit and
+    // accepting a fraction (X-doug-text-inches).
+    if (this.numFields.some((el) =>
+      el === this.angleField ? badNumberField(el) : badLenField(el, el === this.heightField),
+    )) {
       setPrompt(t("feature.badNumber"));
       return;
     }
