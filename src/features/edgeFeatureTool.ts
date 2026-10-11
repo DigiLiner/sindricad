@@ -281,12 +281,21 @@ export class EdgeFeatureTool {
 
   /** Screen-space hit test against the ghost polylines (Line2 raycast is
    *  finicky with tool-owned materials; a projected-point distance check is
-   *  robust and cheap at ghost counts). */
+   *  robust and cheap at ghost counts). Tests distance to each SEGMENT, not
+   *  just the sample points — a straight edge tessellates as exactly its two
+   *  endpoints, so a point-only test left its entire visible middle (the
+   *  natural place to click a long edge) unhittable. */
   private ghostAt(clientX: number, clientY: number): GhostEdge | null {
     for (const g of this.ghosts) {
-      for (const p of g.points) {
-        const s = this.viewport.projectToScreen(new THREE.Vector3(p[0], p[1], p[2]));
-        if (Math.hypot(s.x - clientX, s.y - clientY) < 8) return g;
+      const screen = g.points.map((p) => this.viewport.projectToScreen(new THREE.Vector3(p[0], p[1], p[2])));
+      if (screen.length < 2) {
+        if (screen.some((s) => Math.hypot(s.x - clientX, s.y - clientY) < 8)) return g;
+        continue;
+      }
+      for (let i = 0; i < screen.length - 1; i++) {
+        const a = screen[i];
+        const b = screen[i + 1];
+        if (a && b && distToSegment(clientX, clientY, a, b) < 8) return g;
       }
     }
     return null;
@@ -449,6 +458,7 @@ export class EdgeFeatureTool {
   private enterEditUI() {
     const sels = this.currentSelectors();
     this.anchor.copy(this.anchorFromSelectors(sels));
+    this.tangent = this.tangentFromGhosts();
     this.axis.copy(this.computeAxis());
     this.quat.setFromUnitVectors(Y_AXIS, this.axis);
     this.buildGizmo();
@@ -716,6 +726,7 @@ export class EdgeFeatureTool {
     const mode = this.editId ? "editing" : "creating";
     if (sels.length) {
       this.anchor.copy(this.anchorFromSelectors(sels));
+      this.tangent = this.tangentFromGhosts();
       this.axis.copy(this.computeAxis());
       this.quat.setFromUnitVectors(Y_AXIS, this.axis);
       this.pushPreview();
@@ -828,6 +839,34 @@ export class EdgeFeatureTool {
     }
     return acc;
   }
+
+  /** Average unit tangent across the current ghost members, the same
+   *  geometry-anchored direction CREATE mode's direct-pick beginDrag seeds
+   *  from a single edge (midAndTangent) — lets computeAxis() take its
+   *  edge-aware branch instead of always falling back to the camera's right
+   *  vector. A chain's tangent direction (first point -> last point) is
+   *  arbitrary per edge, so each is flipped to agree with the running total
+   *  before adding; otherwise two anti-parallel-but-parallel edges would
+   *  cancel out. Returns null (computeAxis's own fallback) with no ghosts, or
+   *  when the averaged direction is degenerate. */
+  private tangentFromGhosts(): THREE.Vector3 | null {
+    const acc = new THREE.Vector3();
+    for (const g of this.ghosts) {
+      const { tan } = midAndTangent(g.points);
+      if (acc.lengthSq() > 1e-9 && acc.dot(tan) < 0) tan.negate();
+      acc.add(tan);
+    }
+    return acc.lengthSq() > 1e-6 ? acc.normalize() : null;
+  }
+}
+
+/** distance from (x,y) to the nearest point on segment a-b, in screen px */
+function distToSegment(x: number, y: number, a: { x: number; y: number }, b: { x: number; y: number }): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const lenSq = dx * dx + dy * dy;
+  const t = lenSq < 1e-9 ? 0 : Math.max(0, Math.min(1, ((x - a.x) * dx + (y - a.y) * dy) / lenSq));
+  return Math.hypot(x - (a.x + t * dx), y - (a.y + t * dy));
 }
 
 /** midpoint + unit tangent (first→last) of an edge polyline */
