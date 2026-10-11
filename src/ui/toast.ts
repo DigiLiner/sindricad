@@ -18,7 +18,7 @@ export interface ToastOptions {
 
 import { crumb } from "../diagnostics/breadcrumbs";
 import { icon } from "./icons";
-import { sourceOf } from "../i18n";
+import { sourceOf, t } from "../i18n";
 
 let stack: HTMLDivElement | null = null;
 
@@ -59,8 +59,16 @@ export function toast(message: string, opts: ToastOptions = {}): () => void {
   // locale; text that did not come through t() is logged as shown.
   const src = sourceOf(message);
   crumb(src ? `[${kind}] ${src.english} <${src.key}>` : `[${kind}] ${message}`);
-  // keep the stack short — oldest goes first
-  while (host.children.length >= 3) host.firstElementChild?.remove();
+  // keep the stack short — oldest goes first, but never evict one the user is
+  // actually reading (hovered or focused): a burst of toasts used to yank a
+  // held one out from under the pointer (812d934a, "I had 19 notifications").
+  // If every toast on screen is held, let the stack grow past the cap rather
+  // than evict one mid-read.
+  while (host.children.length >= 3) {
+    const victim = Array.from(host.children).find((c) => !c.classList.contains("toast-held"));
+    if (!victim) break;
+    victim.remove();
+  }
 
   const el = document.createElement("div");
   el.className = `toast toast-${kind}`;
@@ -87,6 +95,26 @@ export function toast(message: string, opts: ToastOptions = {}): () => void {
       if (!opts.keepOnAction) dismiss();
     });
     el.appendChild(btn);
+  }
+  // A copy icon on error/warning only: those are the toasts with substantial
+  // text worth pasting into a bug report or Discord (9a902591). An info toast
+  // is a 3.5 s glance ("Saved") with nothing worth copying.
+  if (kind === "error" || kind === "warning") {
+    const copyBtn = document.createElement("button");
+    copyBtn.className = "toast-copy";
+    copyBtn.setAttribute("aria-label", t("toast.copy"));
+    copyBtn.innerHTML = icon("copy");
+    copyBtn.addEventListener("click", () => {
+      void navigator.clipboard.writeText(message).then(() => {
+        copyBtn.innerHTML = icon("check");
+        copyBtn.setAttribute("aria-label", t("toast.copied"));
+        window.setTimeout(() => {
+          copyBtn.innerHTML = icon("copy");
+          copyBtn.setAttribute("aria-label", t("toast.copy"));
+        }, 1000);
+      });
+    });
+    el.appendChild(copyBtn);
   }
   const close = document.createElement("button");
   close.className = "toast-close";
@@ -117,20 +145,27 @@ export function toast(message: string, opts: ToastOptions = {}): () => void {
     timer = 0;
     left = Math.max(RESUME_MIN_MS, left - (Date.now() - since));
   };
+  // Marks the element as held independent of the dismiss timer, so the 3-cap
+  // eviction above can skip it even for a sticky (timeout: 0) toast.
+  const updateHeld = () => el.classList.toggle("toast-held", hovered || focused);
   el.addEventListener("mouseenter", () => {
     hovered = true;
+    updateHeld();
     hold();
   });
   el.addEventListener("mouseleave", () => {
     hovered = false;
+    updateHeld();
     run();
   });
   el.addEventListener("focusin", () => {
     focused = true;
+    updateHeld();
     hold();
   });
   el.addEventListener("focusout", () => {
     focused = false;
+    updateHeld();
     run();
   });
   run();

@@ -17,6 +17,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FakeEl, installFakeDocument } from "./fakeDom.testkit";
 import { toast, toastTimeout } from "./toast";
+import { t } from "../i18n";
 import mainSrc from "../main.ts?raw";
 
 /** fakeDom's element plus what toast() needs: remove() and firstElementChild. */
@@ -154,6 +155,81 @@ describe("Show leaves the message up (4875dacc)", () => {
     toastEl(REFUSAL).children.find((c) => c.className === "toast-close")!.dispatch("click");
     vi.advanceTimersByTime(200);
     expect(onScreen()).not.toContain(REFUSAL);
+  });
+});
+
+// Feature request 9a902591: "wherever an error message or just a message is
+// displayed... it would be good to have a 'copy' icon next to it so it can be
+// easily copied and pasted". Built for error and warning only — those carry
+// substantial text worth pasting into a bug report or Discord; an info toast
+// ("Saved") is a 3.5 s glance with nothing worth copying.
+describe("copy icon on error/warning toasts (9a902591)", () => {
+  beforeEach(() => {
+    vi.stubGlobal("navigator", { clipboard: { writeText: vi.fn(() => Promise.resolve()) } });
+  });
+
+  function copyButton(message: string): El {
+    return toastEl(message).children.find((c) => c.className === "toast-copy") as El;
+  }
+
+  it("an error toast gets a copy button alongside its close button", () => {
+    toast("⚠ Export failed", { kind: "error" });
+    const classes = toastEl("⚠ Export failed").children.map((c) => c.className);
+    expect(classes).toEqual(["toast-msg", "toast-copy", "toast-close"]);
+  });
+
+  it("a warning toast gets one too", () => {
+    toast("Nothing to undo", { kind: "warning" });
+    expect(copyButton("Nothing to undo")).toBeTruthy();
+  });
+
+  it("an info toast does not — nothing there is worth copying", () => {
+    toast("Saved", { kind: "info" });
+    const classes = toastEl("Saved").children.map((c) => c.className);
+    expect(classes).toEqual(["toast-msg", "toast-close"]);
+  });
+
+  it("clicking it copies the message text and acks, then reverts", () => {
+    toast(REFUSAL, { kind: "error" });
+    const btn = copyButton(REFUSAL);
+    expect(btn.attrs["aria-label"]).toBe(t("toast.copy"));
+    btn.dispatch("click");
+    expect((navigator as unknown as { clipboard: { writeText: ReturnType<typeof vi.fn> } }).clipboard.writeText)
+      .toHaveBeenCalledWith(REFUSAL);
+    return Promise.resolve().then(() => {
+      expect(btn.attrs["aria-label"]).toBe(t("toast.copied"));
+      vi.advanceTimersByTime(1000);
+      expect(btn.attrs["aria-label"]).toBe(t("toast.copy"));
+    });
+  });
+});
+
+// Refuted verdict on 812d934a: ccfab75's hover-pause only covers a toast's own
+// dismiss timer. The separate 3-toast cap at the top of toast() called
+// .remove() directly on the oldest child, ignoring hover/focus entirely — a
+// burst past the cap (the report's 19 notifications) could still yank a toast
+// out from under a reading user.
+describe("the 3-cap eviction does not take a toast the user is reading (812d934a)", () => {
+  it("skips a hovered toast and evicts the next-oldest unheld one instead", () => {
+    toast("one", { kind: "info" });
+    toast("two", { kind: "info" });
+    toastEl("one").dispatch("mouseenter"); // reading the oldest
+    toast("three", { kind: "info" });
+    expect(onScreen()).toEqual(["one", "two", "three"]);
+
+    toast("four", { kind: "info" }); // would normally evict "one"
+    expect(onScreen(), "the hovered toast survives the cap").toContain("one");
+    expect(onScreen()).toEqual(["one", "three", "four"]);
+  });
+
+  it("lets the stack grow past the cap rather than evict a held toast, when every toast is held", () => {
+    toast("a", { kind: "info" });
+    toast("b", { kind: "info" });
+    toast("c", { kind: "info" });
+    for (const m of ["a", "b", "c"]) toastEl(m).dispatch("mouseenter");
+
+    toast("d", { kind: "info" });
+    expect(onScreen(), "nothing was safe to evict").toEqual(["a", "b", "c", "d"]);
   });
 });
 

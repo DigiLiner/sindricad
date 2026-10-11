@@ -2072,6 +2072,7 @@ button.finish:hover {
   font-weight: 600;
   cursor: pointer;
 }
+.toast-copy,
 .toast-close {
   flex: 0 0 auto;
   border: none;
@@ -3244,8 +3245,8 @@ button.finish:hover {
 /* dialogs + toasts */
 .modal-close { display: inline-flex; align-items: center; justify-content: center; }
 .modal-close svg { width: 15px; height: 15px; display: block; flex: none; }
-.toast-close { display: inline-flex; align-items: center; }
-.toast-close svg { width: 13px; height: 13px; display: block; flex: none; }
+.toast-copy, .toast-close { display: inline-flex; align-items: center; }
+.toast-copy svg, .toast-close svg { width: 13px; height: 13px; display: block; flex: none; }
 .params-del { display: inline-flex; align-items: center; justify-content: center; }
 .params-del svg { width: 14px; height: 14px; display: block; flex: none; }
 .dim-btn { display: inline-flex; align-items: center; justify-content: center; }
