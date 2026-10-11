@@ -814,6 +814,7 @@
         },
         "facesNone": "No faces selected — click one or more faces"
       },
+      "waitingToApply": "I'll apply this once the current rebuild finishes…",
       "wholeBody": "Whole Body"
     },
     "thread": {

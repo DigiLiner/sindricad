@@ -18,7 +18,12 @@ import { TextureTool } from "./textureTool";
 // for four assertions.
 (globalThis as unknown as { document: unknown }).document ??= {
   createElement: () => ({ style: {}, appendChild() {}, addEventListener() {}, remove() {} }),
+  // commit()'s success path calls cleanup(), which calls setPrompt() (reads
+  // getElementById, src/ui/prompt.ts) and unregisters the Esc handler.
+  getElementById: () => null,
   body: { appendChild() {} },
+  addEventListener() {},
+  removeEventListener() {},
 };
 // tick() re-arms itself; the harness drives it by hand instead.
 (globalThis as unknown as { requestAnimationFrame: unknown }).requestAnimationFrame ??= () => 0;
@@ -124,5 +129,72 @@ describe("TextureTool saved face point", () => {
     expect(h.t.buildFeature().faces.point[2]).toBe(25); // the first preview's build
     h.showPreview(); // the displaced preview is on screen now
     expect(h.t.buildFeature().faces.point[2]).toBe(25); // the commit's build
+  });
+});
+
+// commit() is the Apply button, and unlike tick() it had no building gate at
+// all: a fast click+Apply during ANY rebuild (a mode switch's clearing
+// rebuild, or any other) could mint a face's selector off the stale displaced
+// mesh still on screen, in the very call that also saves it — and
+// faceSelectors only mints a fid once, so there is no later call that heals
+// it. commit() now defers behind the same store.buildState.building gate
+// tick() already uses, and tick() retries it once building clears.
+describe("TextureTool commit(): deferred while a rebuild is in flight", () => {
+  function applyHarness() {
+    // z is whatever the viewport is CURRENTLY SHOWING for the one face in
+    // play: 25 is the real (undisplaced) B-rep face, 25.4 is a stale displaced
+    // crest still on screen while a rebuild is in flight.
+    let z = 25.4;
+    const faceIds = [4];
+    const viewport = {
+      selecting: "faces",
+      setSelectionMode: () => {},
+      getSelectedBodies: () => ["b1"],
+      getSelectedFaceIds: () => faceIds,
+      selectedFacesForPressPull: () => ({
+        selectors: faceIds.map((fid) => ({ kind: "face", by: "nearest", point: [-30.57, 22.39, z] })),
+        faceIds,
+        bodyId: "b1",
+      }),
+      faceIdToBodyId: () => "b1",
+      clearSelection: () => {},
+      setSelectedBodies: () => {},
+    };
+    const saved: { faces: { point: number[] } }[] = [];
+    const store = {
+      buildState: { building: true, result: {} },
+      nextId: () => "f1",
+      onBuild: () => () => {},
+      setPreview: () => {},
+      addFeature: (f: unknown) => saved.push(f as { faces: { point: number[] } }),
+    };
+    const tool = new TextureTool(viewport as never, store as never);
+    const t = tool as unknown as { mode: string; active: boolean; raf: number; commit: () => void; tick: () => void };
+    t.mode = "faces";
+    t.active = true;
+    return {
+      t,
+      saved,
+      landBuild: () => { store.buildState.building = false; z = 25; },
+      tick: () => { t.tick(); cancelAnimationFrame(t.raf); },
+    };
+  }
+
+  it("Apply during a stale displaced preview waits, then saves the real face point", () => {
+    const h = applyHarness();
+    h.t.commit();
+    expect(h.saved.length, "commit() must not mint off the stale mesh").toBe(0);
+    h.landBuild(); // the rebuild lands; the real, undisplaced face is on screen
+    h.tick(); // the tool's own rAF loop notices building cleared and retries
+    expect(h.saved.length).toBe(1);
+    expect(h.saved[0]!.faces.point[2]).toBeCloseTo(25, 5); // the real face, not the 25.4 crest
+  });
+
+  it("commits immediately when no rebuild is in flight", () => {
+    const h = applyHarness();
+    h.landBuild();
+    h.t.commit();
+    expect(h.saved.length).toBe(1);
+    expect(h.saved[0]!.faces.point[2]).toBeCloseTo(25, 5);
   });
 });

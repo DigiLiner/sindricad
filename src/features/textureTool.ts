@@ -56,6 +56,9 @@ export class TextureTool {
   private savedBodyId: string | null = null;
   private awaitingRollback = false;
   private unsubBuild: (() => void) | null = null;
+  // set when Apply was clicked mid-rebuild; tick() retries commit() once
+  // store.buildState.building clears (see commit()'s building gate).
+  private pendingCommit = false;
 
   // --- ambient-selection diffing (rAF tick, not viewport.onSelectionChange —
   // that single callback slot belongs to main.ts) ---
@@ -263,6 +266,11 @@ export class TextureTool {
       this.raf = requestAnimationFrame(this.boundTick);
       return;
     }
+    if (this.pendingCommit) {
+      this.pendingCommit = false;
+      this.commit();
+      return;
+    }
     if (this.mode === "faces") {
       const cur = this.viewport.getSelectedFaceIds();
       // a rebuild (our own preview landing, usually) wiped the selection — the
@@ -423,6 +431,19 @@ export class TextureTool {
 
   private commit() {
     if (!this.active) return;
+    // A rebuild in flight means the mesh on screen may already be our own
+    // stale displaced preview (e.g. right after a Body->Faces mode switch,
+    // before the clearing rebuild lands) — buildFeature() would pin a
+    // face's selector from that crest, |depth| off the real B-rep face,
+    // FOREVER (faceSelectors only mints on first sighting, and this commit
+    // call both mints and saves in the same breath, with no later call to
+    // heal it). Defer instead: tick() already polls building every frame,
+    // so retry once it clears.
+    if (this.store.buildState.building) {
+      this.pendingCommit = true;
+      setPrompt(t("feature.texture.waitingToApply"));
+      return;
+    }
     const feature = this.buildFeature();
     if (!feature) {
       setPrompt(
@@ -464,6 +485,7 @@ export class TextureTool {
     this.unsubBuild = null;
     this.editId = null;
     this.awaitingRollback = false;
+    this.pendingCommit = false;
     this.savedFaceSelectors = [];
     this.savedBodyId = null;
     this.lastFaceIds = [];
