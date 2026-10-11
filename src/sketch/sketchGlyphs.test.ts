@@ -23,6 +23,7 @@ import { SketchGlyphs } from "./sketchGlyphs";
 import { constraintGlyphs } from "./glyphs";
 import { pickEntity } from "./modify";
 import { compileAndSolve } from "./sketchSolve";
+import { SketchMode } from "./sketchMode";
 import type { ResolvedEntity } from "./snap";
 import type { SketchConstraint } from "../types";
 import type { Viewport } from "../viewport/viewport";
@@ -294,7 +295,140 @@ describe("badges on the same spot sit side by side", () => {
     expect(drawnAt(fix!)).toEqual(near(joint.x + 12 + 20, joint.y - 12));
     // Tangent is unnudged and lands exactly on the joint.
     expect(drawnAt(tan!)).toEqual(near(joint.x, joint.y));
-    expect(drawnAt(h!)).toEqual(near(100 + 50 * 3, 400));
+    // H used to land exactly on the line's own midpoint — the regression this
+    // file now guards against (a badge there intercepts the click a
+    // double-press on the line needs for chain-select, see
+    // "a line-midpoint badge never sits on its own line" below). It is now
+    // nudged LINE_MIDPOINT_OFFSET_PX (12px) perpendicular to the line's
+    // on-screen direction; this line is horizontal on screen, so the nudge is
+    // purely vertical: +12px in screen y.
+    expect(drawnAt(h!)).toEqual(near(100 + 50 * 3, 400 + 12));
+  });
+});
+
+// The regression this fix closes: since 3a63f7d a perpendicular badges BOTH
+// its operands, each badge landing at center(line) — the line's own on-screen
+// midpoint. A double-press there is the documented delete escape hatch, but
+// it is also exactly where a user double-clicks the LINE to select its chain:
+// the badge's pointerdown claims the click first (stopPropagation), so the
+// click silently deletes the constraint instead of selecting the chain. The
+// fix nudges a line-midpoint badge off that pixel; this test checks the
+// nudge actually lands clear of each line's own midpoint, not just that *a*
+// nudge happened.
+describe("a line-midpoint badge never sits on its own line", () => {
+  const ents: ResolvedEntity[] = [
+    { type: "line", id: "l1", x1: 0, y1: 0, x2: 0, y2: 100 },
+    { type: "line", id: "l2", x1: 0, y1: 100, x2: 100, y2: 100 },
+  ];
+  const cons: SketchConstraint[] = [{ type: "perpendicular", l1: "l1", l2: "l2" }];
+  /** screen px of a plane point: 3 px per mm, y up, origin at (100, 400). */
+  const projecting = {
+    camera: new THREE.PerspectiveCamera(),
+    projectToOverlay: (w: THREE.Vector3) => ({ x: 100 + w.x * 3, y: 400 - w.y * 3, width: 900, height: 700 }),
+  } as unknown as Viewport;
+  const drawnAt = (el: FakeEl) => {
+    const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el.style.transform ?? "");
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+  };
+  // independently computed on-screen midpoints — NOT reusing the production
+  // code under test — of l1 and l2 respectively.
+  const mid1 = { x: 100 + 0 * 3, y: 400 - 50 * 3 };
+  const mid2 = { x: 100 + 50 * 3, y: 400 - 100 * 3 };
+
+  it("both ⊥ badges sit clear of either line's own midpoint", () => {
+    body().innerHTML = "";
+    const glyphs = new SketchGlyphs(projecting);
+    glyphs.show(constraintGlyphs(ents, cons), plane, new Set(), new Set());
+    (glyphs as unknown as { loop: () => void }).loop();
+    const badges = byClass(body(), "sketch-glyph").filter((el) => el.textContent === "⊥");
+    expect(badges).toHaveLength(2);
+    for (const badge of badges) {
+      const at = drawnAt(badge)!;
+      expect(at, "must not sit exactly on l1's on-screen midpoint").not.toEqual(mid1);
+      expect(at, "must not sit exactly on l2's on-screen midpoint").not.toEqual(mid2);
+    }
+  });
+});
+
+// Through the Select tool's own pointer handler, not just the glyph layer in
+// isolation: in the real webview a badge is a DOM element sitting ABOVE the
+// canvas, and its pointerdown calls stopPropagation — so when a badge renders
+// at the exact pixel a user double-clicks, SketchMode.onPointerDown's
+// chain-select branch never runs at all, and the badge's own isDoublePress ->
+// onDelete fires instead. This models that DOM z-order choice the way a real
+// browser's elementFromPoint would: whichever element (a glyph badge, or
+// nothing i.e. the canvas) actually sits at the clicked pixel wins the press.
+describe("double-click at a line's midpoint reaches chain-select, not the badge", () => {
+  const ents: ResolvedEntity[] = [
+    { type: "line", id: "a", x1: 0, y1: 0, x2: 10, y2: 0 },
+    { type: "line", id: "b", x1: 10, y1: 0, x2: 10, y2: 10 },
+  ];
+  const cons: SketchConstraint[] = [{ type: "perpendicular", l1: "a", l2: "b" }];
+  /** screen px of a plane point: 3 px per mm, y up, origin at (100, 400). */
+  const projecting = {
+    camera: new THREE.PerspectiveCamera(),
+    projectToOverlay: (w: THREE.Vector3) => ({ x: 100 + w.x * 3, y: 400 - w.y * 3, width: 900, height: 700 }),
+  } as unknown as Viewport;
+  const drawnAt = (el: FakeEl) => {
+    const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el.style.transform ?? "");
+    return m ? { x: Number(m[1]), y: Number(m[2]) } : null;
+  };
+  // line a's own exact on-screen midpoint — the pixel the user double-clicks.
+  const midA = { x: 100 + 5 * 3, y: 400 - 0 * 3 };
+  const press = (x: number, y: number) => ({
+    button: 0, shiftKey: false, ctrlKey: false, clientX: x, clientY: y, pointerId: 1,
+    stopPropagation: () => {}, preventDefault: () => {},
+  });
+
+  /** A bare SketchMode whose real private methods (entityChain, takeWhole,
+   *  onPointerDown) run unstubbed — only data and the geometry/DOM queries
+   *  they read are faked, the same pattern doublePress.test.ts's makeMode and
+   *  chainSelect.test.ts's withEntities use. */
+  function makeSelectMode(target: THREE.Vector2) {
+    const s = Object.create(SketchMode.prototype) as SketchMode & Record<string, unknown>;
+    Object.assign(s, {
+      tool: "select",
+      entities: ents,
+      selected: new Set<string>(),
+      dims: { clearSelection() {} },
+      overlay: { activeRegionAt: () => null },
+      viewport: { domElement: { setPointerCapture() {} } },
+      snapAt: () => ({ p: target, kind: "free" }),
+      planePoint: () => target,
+      pickPoint: () => null,
+      pickTol: () => 0.5,
+      derivedEntities: () => [],
+      textEntityAt: () => null,
+      refreshActive: () => {},
+    });
+    const down = (e: ReturnType<typeof press>) =>
+      (s as unknown as { onPointerDown: (e: PointerEvent) => void }).onPointerDown(e as unknown as PointerEvent);
+    return { s, down };
+  }
+
+  it("no badge renders on the line's own on-screen midpoint", () => {
+    body().innerHTML = "";
+    const glyphs = new SketchGlyphs(projecting);
+    glyphs.show(constraintGlyphs(ents, cons), plane, new Set(), new Set());
+    (glyphs as unknown as { loop: () => void }).loop();
+    const hitBadge = byClass(body(), "sketch-glyph").find((el) => {
+      const at = drawnAt(el);
+      return at && Math.round(at.x) === Math.round(midA.x) && Math.round(at.y) === Math.round(midA.y);
+    });
+    // Before the fix this found the ⊥ badge (the measured bug: elementFromPoint
+    // at a line's midpoint returned the constraint badge), which would have
+    // claimed the press below and deleted the constraint instead of selecting
+    // the chain.
+    expect(hitBadge, "a badge must not sit on the line's own midpoint pixel").toBeUndefined();
+  });
+
+  it("a double-press there selects the whole chain and touches no constraint", () => {
+    const { s, down } = makeSelectMode(new THREE.Vector2(5, 0)); // plane point (5,0): a's own midpoint
+    down(press(midA.x, midA.y));
+    down(press(midA.x, midA.y));
+    expect(cons).toHaveLength(1); // the perpendicular constraint is untouched
+    const selected = (s as unknown as { selected: Set<string> }).selected;
+    expect([...selected].sort()).toEqual(["a", "b"]); // chain select reached
   });
 });
 

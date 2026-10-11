@@ -17,6 +17,10 @@ interface GlyphEl {
   pos: THREE.Vector2;
   cIndex: number; // which constraint it names, so follow() can tell its list from another
   label: string; // the glyph's own symbol, to pick it out of ON_POINT_LABELS below
+  /** glyphs.ts's ConstraintGlyph.linePts, carried through unchanged: the two
+   *  sketch-plane endpoints of the line this badge sits at the midpoint of, so
+   *  loop() below can nudge it clear of the line on screen. */
+  linePts?: [THREE.Vector2, THREE.Vector2];
 }
 
 /** Badges anchored exactly on the point they mark (glyphs.ts's `refPos`), rather
@@ -32,6 +36,22 @@ interface GlyphEl {
 const ON_POINT_LABELS = new Set(["⊙", "∈", "⚓"]);
 /** screen pixels, clear of the 16px-square badge (styles.css .sketch-glyph) */
 const ON_POINT_OFFSET_PX = 12;
+
+/** Regression bisected to 3a63f7d ("badge both operands of a symmetric
+ *  two-operand constraint"): badging both lines of a Perpendicular/Parallel/
+ *  Equal, not just the first, put a badge on the EXACT midpoint of many more
+ *  lines than before. A double-click on a line's midpoint is the Select
+ *  tool's "select the whole chain" gesture; the second of those two presses,
+ *  landing on the badge instead of the line, instead hit isDoublePress's
+ *  delete-the-constraint escape hatch below. Measured in the real app: a line
+ *  from (-45,-25) to (-5,-5) had its on-screen midpoint at (792,702), and
+ *  `document.elementFromPoint` there returned the ⊥ badge.
+ *
+ *  Nudged clear of the line in screen space, same as the ON_POINT nudge above
+ *  and for the same reason: `constraintGlyphs()`'s own `pos` stays exactly on
+ *  the line's real midpoint (right-click-to-delete and follow()'s drag
+ *  tracking key off that), only the on-screen badge moves. */
+const LINE_MIDPOINT_OFFSET_PX = 12;
 
 export class SketchGlyphs {
   private root: HTMLDivElement;
@@ -104,7 +124,7 @@ export class SketchGlyphs {
         el.textContent = g.label;
         setTitle(el, "sketch.constraint.glyphPending");
         this.root.appendChild(el);
-        this.items.push({ el, pos: g.pos, cIndex: g.cIndex, label: g.label });
+        this.items.push({ el, pos: g.pos, cIndex: g.cIndex, label: g.label, ...(g.linePts ? { linePts: g.linePts } : {}) });
         continue;
       }
       const st = diagnosisOf(g.cIndex, conflicts, over);
@@ -149,7 +169,7 @@ export class SketchGlyphs {
         this.onMenu?.(e, g.cIndex);
       });
       this.root.appendChild(el);
-      this.items.push({ el, pos: g.pos, cIndex: g.cIndex, label: g.label });
+      this.items.push({ el, pos: g.pos, cIndex: g.cIndex, label: g.label, ...(g.linePts ? { linePts: g.linePts } : {}) });
     }
     this.lastCamHash = ""; // force a reposition next frame
     if (!this.raf) this.loop();
@@ -162,7 +182,11 @@ export class SketchGlyphs {
   follow(glyphs: ConstraintGlyph[]): boolean {
     if (glyphs.length !== this.items.length) return false;
     if (glyphs.some((g, k) => g.cIndex !== this.items[k]!.cIndex)) return false;
-    glyphs.forEach((g, k) => { this.items[k]!.pos = g.pos; });
+    glyphs.forEach((g, k) => {
+      this.items[k]!.pos = g.pos;
+      if (g.linePts) this.items[k]!.linePts = g.linePts;
+      else delete this.items[k]!.linePts;
+    });
     this.lastCamHash = ""; // the camera didn't move; force the reposition pass
     return true;
   }
@@ -216,6 +240,25 @@ export class SketchGlyphs {
       if (ON_POINT_LABELS.has(g.label)) {
         p.x += ON_POINT_OFFSET_PX;
         p.y -= ON_POINT_OFFSET_PX;
+      }
+      // A badge on a line's own midpoint (glyphs.ts's linePts): nudge it clear
+      // of the line, perpendicular to the line's ON-SCREEN direction (not its
+      // sketch-plane one — the two can differ once the camera tilts the
+      // plane), always to the same side so it doesn't flicker between frames.
+      // Same "after the visibility test, only a display-only few pixels" rule
+      // as the ON_POINT nudge above.
+      if (g.linePts) {
+        const [a, b] = g.linePts;
+        this.plane.to3D(a.x, a.y, this.scratch);
+        const pa = this.viewport.projectToOverlay(this.scratch);
+        this.plane.to3D(b.x, b.y, this.scratch);
+        const pb = this.viewport.projectToOverlay(this.scratch);
+        const dx = pb.x - pa.x, dy = pb.y - pa.y;
+        const len = Math.hypot(dx, dy);
+        if (len > 1e-6) {
+          p.x += (-dy / len) * LINE_MIDPOINT_OFFSET_PX;
+          p.y += (dx / len) * LINE_MIDPOINT_OFFSET_PX;
+        }
       }
       const at = `${Math.round(p.x)},${Math.round(p.y)}`;
       const n = taken.get(at) ?? 0;

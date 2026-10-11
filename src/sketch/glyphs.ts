@@ -17,7 +17,27 @@ const V = (x: number, y: number) => new THREE.Vector2(x, y);
 export interface ConstraintGlyph {
   cIndex: number; // index into the constraints array (delete target)
   label: string; // short symbol shown in the badge
-  pos: THREE.Vector2; // 2D sketch-plane position
+  pos: THREE.Vector2; // 2D sketch-plane position — the real constraint anchor;
+  // never nudged (see linePts below and sketchGlyphs.ts's ON_POINT handling):
+  // right-click-to-delete and follow()'s drag tracking key off this, not off
+  // whatever the renderer nudges it to on screen.
+  /** The two sketch-plane endpoints of the LINE this badge sits at the midpoint
+   *  of, when it does (H/V/∥/⊥/—/=/M/⋈ etc. — any case below that resolves its
+   *  `pos` through a line operand). Carried alongside `pos` so the renderer
+   *  (sketchGlyphs.ts) can nudge the on-screen badge clear of the line, in
+   *  screen space, without this file ever moving `pos` itself off the real
+   *  midpoint. Absent for a badge on a point, or on an arc/circle centre.
+   *
+   *  Regression (bisected to 3a63f7d, "badge both operands of a symmetric
+   *  two-operand constraint"): badging both lines of a Perpendicular/
+   *  Parallel/Equal, not just the first, put a badge on the midpoint of far
+   *  more lines. A badge sitting exactly on its own line's midpoint is also
+   *  the Select tool's double-click target for "select this line's whole
+   *  chain" — a double-PRESS on the badge is instead the documented escape
+   *  hatch that deletes the constraint (sketchGlyphs.ts's isDoublePress), so a
+   *  user double-clicking the middle of a now-badged line silently deleted the
+   *  constraint instead of selecting the chain. */
+  linePts?: [THREE.Vector2, THREE.Vector2];
   /** A constraint that is not applied yet — the one this click WOULD add. Drawn
    *  in a muted style with no delete affordance.
    *
@@ -142,6 +162,25 @@ export function constraintGlyphs(ents: ResolvedEntity[], constraints: SketchCons
     const e = byId.get(id);
     return e ? entCenter(e) : null;
   };
+  /** Same as `center`, but for a badge whose `pos` sits at a LINE's own
+   *  midpoint: also hands back that line's two endpoints, so the renderer can
+   *  nudge the badge clear of the line on screen (see ConstraintGlyph.linePts).
+   *  Falls back to `center`'s non-line behaviour (arc/circle/point centre, or
+   *  null) with no endpoints — those badges are never on a line midpoint and
+   *  stay exactly where they always sat. */
+  const centerLine = (id: string): { pos: THREE.Vector2; pts?: [THREE.Vector2, THREE.Vector2] } | null => {
+    const seg = lineOperand(byId, id);
+    if (seg) {
+      const p1 = V(seg.x1, seg.y1), p2 = V(seg.x2, seg.y2);
+      return { pos: p1.clone().add(p2).multiplyScalar(0.5), pts: [p1, p2] };
+    }
+    const pos = center(id);
+    return pos ? { pos } : null;
+  };
+  const pushLine = (i: number, label: string, id: string) => {
+    const r = centerLine(id);
+    if (r) out.push({ cIndex: i, label, pos: r.pos, ...(r.pts ? { linePts: r.pts } : {}) });
+  };
   // A point operand: an entity and its `p`, or a line operand and one of its
   // ends (`R~k` p0/p1, and a slot side's, which has no other spelling). The
   // second form solves and survives pruning like the first, so it has to draw
@@ -167,15 +206,21 @@ export function constraintGlyphs(ents: ResolvedEntity[], constraints: SketchCons
 
   constraints.forEach((c, i) => {
     switch (c.type) {
-      case "horizontal": push(i, "H", center(c.line)); break;
-      case "vertical": push(i, "V", center(c.line)); break;
+      case "horizontal": pushLine(i, "H", c.line); break;
+      case "vertical": pushLine(i, "V", c.line); break;
       // One badge per operand, not just the first: report 003a3494, "only one
       // of the two lines shows the parallel mark" (equal/perpendicular share
       // the same two-operand shape and the same gap).
-      case "parallel": push(i, "∥", center(c.l1)); push(i, "∥", center(c.l2)); break;
-      case "perpendicular": push(i, "⊥", center(c.l1)); push(i, "⊥", center(c.l2)); break;
-      case "collinear": push(i, "—", mid2(center(c.l1), center(c.l2))); break;
-      case "equal": push(i, "=", center(c.l1)); push(i, "=", center(c.l2)); break;
+      case "parallel": pushLine(i, "∥", c.l1); pushLine(i, "∥", c.l2); break;
+      case "perpendicular": pushLine(i, "⊥", c.l1); pushLine(i, "⊥", c.l2); break;
+      case "collinear": {
+        const r1 = centerLine(c.l1), r2 = centerLine(c.l2);
+        const pos = mid2(r1?.pos ?? null, r2?.pos ?? null);
+        const pts = r1?.pts ?? r2?.pts;
+        if (pos) out.push({ cIndex: i, label: "—", pos, ...(pts ? { linePts: pts } : {}) });
+        break;
+      }
+      case "equal": pushLine(i, "=", c.l1); pushLine(i, "=", c.l2); break;
       case "equalRadius": push(i, "=", center(c.a)); push(i, "=", center(c.b)); break;
       // At the touching point; the old halfway spot only when there is none
       // to find (an operand that does not resolve, two concentric rounds).
@@ -184,13 +229,13 @@ export function constraintGlyphs(ents: ResolvedEntity[], constraints: SketchCons
       case "splineTangent": push(i, "T", nearEnd(c.spline, c.end)); break;
       case "coincident": push(i, "⊙", refPos(c.e1, c.p1)); break;
       case "concentric": push(i, "◎", center(c.c1)); break;
-      case "midpoint": push(i, "M", center(c.line)); break;
+      case "midpoint": pushLine(i, "M", c.line); break;
       // On the POINT, like coincident's: that is the end that slides along the
       // curve, and a badge at the curve's middle could sit nowhere near it (the
       // line is infinite here). It also keeps the badge, and so the delete,
       // reachable if the curve ever fails to resolve.
       case "pointOn": push(i, "∈", refPos(c.e, c.p)); break;
-      case "symmetric": push(i, "⋈", center(c.line)); break;
+      case "symmetric": pushLine(i, "⋈", c.line); break;
       case "fix": push(i, "⚓", refPos(c.e, c.p)); break;
       // distance/diameter/p2pDistance/p2lDistance/radius/angle render as dimensions
       default: break;
