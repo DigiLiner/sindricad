@@ -127,6 +127,20 @@ export function bodyDragBlocked(
  *  and every fillet/corner tangency is an arc, so excluding them keeps this
  *  from touching that code at all.
  *
+ *  The round operand is identified with `curveKind`, not a bare `type ===
+ *  "circle"` literal, so a projected/reference circle counts too — the same
+ *  rule sketchSolve's own tangent2 compiler (kindOf) and its existing
+ *  settle-time tangentLC guard (tangentTouch via asRound) already use. A
+ *  literal type check would silently let a body drag past this guard whenever
+ *  the circle is reference geometry, the exact bug class below for that one
+ *  shape of operand.
+ *
+ *  A pair held at the LINE'S END — a `pointOn` pinning it there, what Trim
+ *  leaves behind cutting a line against a circle it touches (modify's
+ *  cutJoins) — is excluded too: sketchSolve compiles that to `tangentAt`
+ *  (heldEnd), not the free in-span `tangentLC` this guard judges, and a touch
+ *  pinned exactly at the line's own end has no span to walk off.
+ *
  *  A body drag is pure translation with no solver in the loop until the frame
  *  is already committed (report 269f23b6: grabbing the circle's RIM instead of
  *  its centre took this path and walked straight past the slot's end, while a
@@ -140,13 +154,17 @@ function tangentCircleWalksOffSpan(
 ): boolean {
   const before = new Map(ents.map((e) => [e.id, e] as const));
   const after = new Map(next.map((e) => [e.id, e] as const));
+  const isCircle = (id: string) => curveKind(before.get(id)!) === "circle";
+  const heldAtLineEnd = (lineId: string, circleId: string) =>
+    cons.some((k) => k.type === "pointOn" && k.e === lineId && (k.p === 0 || k.p === 1) && k.curve === circleId);
   for (const c of cons) {
     if (c.type !== "tangent2") continue;
-    const pair = before.get(c.a)?.type === "circle" ? ([c.a, c.b] as const)
-      : before.get(c.b)?.type === "circle" ? ([c.b, c.a] as const)
+    const pair = before.has(c.a) && isCircle(c.a) ? ([c.a, c.b] as const)
+      : before.has(c.b) && isCircle(c.b) ? ([c.b, c.a] as const)
       : null;
     if (!pair) continue;
     const [circleId, lineId] = pair;
+    if (heldAtLineEnd(lineId, circleId)) continue;
     const b = tangentTouch(before, lineId, circleId);
     const a = tangentTouch(after, lineId, circleId);
     if (b?.inSpan && a && !a.inSpan) return true;

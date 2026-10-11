@@ -648,3 +648,56 @@ describe("a body drag refuses to walk a tangent circle off the end of the span i
     expect(vi.mocked(toast)).toHaveBeenCalledWith(FIXED_POINT_MSG);
   });
 });
+
+// --- code review: the off-span guard must treat a projected circle like a
+// native one, and must not fire on a line held at its own end (code review) --
+
+describe("the off-span guard also catches a projected (reference) circle", () => {
+  // line (0,0)-(0,100) tangent2 to a circle at (50,50) r=50: the touch point
+  // sits at (0,50), dead centre of the line's span.
+  const lineId = "L";
+  const dragLineOffSpan = (circle: ResolvedEntity): { ents: ResolvedEntity[]; cons: SketchConstraint[] } => ({
+    ents: [{ type: "line", id: lineId, x1: 0, y1: 0, x2: 0, y2: 100 }, circle],
+    cons: [{ type: "tangent2", a: lineId, b: circle.id }],
+  });
+
+  it("refuses a body drag that walks the touch point off a PROJECTED circle's span", () => {
+    const circle: ResolvedEntity = {
+      type: "projected", id: "C",
+      source: { kind: "silhouette", body: "b" },
+      curve: { kind: "circle", x: 50, y: 50, r: 50 },
+    };
+    const { ents, cons } = dragLineOffSpan(circle);
+    expect(bodyDragFrame(ents, at(ents, lineId), 0, -200, cons)).toBeNull();
+  });
+
+  it("CONTROL: the identical drag against a native circle already refuses", () => {
+    const circle: ResolvedEntity = { type: "circle", id: "C", x: 50, y: 50, radius: 50 };
+    const { ents, cons } = dragLineOffSpan(circle);
+    expect(bodyDragFrame(ents, at(ents, lineId), 0, -200, cons)).toBeNull();
+  });
+});
+
+describe("the off-span guard leaves a line HELD AT ITS END alone", () => {
+  // what cutJoins leaves behind trimming a line against a circle it touches:
+  // line L's endpoint 0 sits exactly on circle C's rim, tangent there, held
+  // with a pointOn -- the shape sketchSolve compiles to tangentAt, not
+  // tangentLC, so there is no "span" for this guard to judge.
+  const heldAtEndDoc = (): { ents: ResolvedEntity[]; cons: SketchConstraint[] } => ({
+    ents: [
+      { type: "line", id: "L", x1: 0, y1: 0, x2: -5, y2: 0 },
+      { type: "circle", id: "C", x: 0, y: 5, radius: 5 },
+    ],
+    cons: [
+      { type: "pointOn", e: "L", p: 0, curve: "C" },
+      { type: "tangent2", a: "L", b: "C" },
+    ],
+  });
+
+  it("does not refuse an ordinary drag of the circle it is held tangent to", () => {
+    const { ents, cons } = heldAtEndDoc();
+    const out = bodyDragFrame(ents, at(ents, "C"), -10, 0, cons);
+    expect(out).not.toBeNull();
+    expect((byId(out!, "C") as Extract<ResolvedEntity, { type: "circle" }>).x).toBeCloseTo(-10, 9);
+  });
+});
