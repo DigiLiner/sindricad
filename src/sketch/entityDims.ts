@@ -51,6 +51,21 @@ function dimOffset(worldOff: number): number {
   return Math.max(worldOff, LABEL_CLEAR_PX * mmPerPx);
 }
 
+// An arrowhead's size, in world mm, computed the same screen-stable way as
+// dimOffset: a constant PIXEL size times the live mm-per-pixel, so it looks
+// the same regardless of the dimension's own length/radius or the current
+// zoom. Previously this was `clamp(value * 0.08, 1.4, 4)` (linear) / `clamp(r *
+// 0.16, 1.4, 4)` (diameter) — derived from the MEASURED VALUE, so a short
+// dimension's arrow was up to ~3x smaller than a long one's, and neither read
+// mmPerPx at all, so the same dimension's arrow grew or shrank with zoom
+// instead of holding a constant screen size (report b27735e2). mmPerPx is 0
+// only where these lines are never rendered (e.g. the inspector); fall back
+// to a fixed world size there instead of collapsing to zero.
+const ARROW_PX = 6;
+function arrowSize(): number {
+  return mmPerPx > 0 ? ARROW_PX * mmPerPx : 3;
+}
+
 /** arrowhead (a small "V") at `tip`, opening back along `dir` */
 function arrow(tip: V, dir: V, size: number): [V, V][] {
   const back = tip.clone().sub(dir.clone().multiplyScalar(size));
@@ -76,7 +91,7 @@ export function linearDim(
   const da = a.clone().add(dirOff.clone().multiplyScalar(off));
   const db = b.clone().add(dirOff.clone().multiplyScalar(off));
   const dir = db.clone().sub(da).normalize();
-  const aSize = clamp(value * 0.08, 1.4, 4);
+  const aSize = arrowSize();
   const lines: [V, V][] = [
     [a.clone(), da.clone()], // extension lines
     [b.clone(), db.clone()],
@@ -127,7 +142,7 @@ export function diameterDim(
   // unplaced: the chord stays horizontal (the label floats above it); placed:
   // the chord follows the placement direction
   const u = place && len > 1e-9 ? off.clone().divideScalar(len) : v(1, 0);
-  const aSize = clamp(r * 0.16, 1.4, 4);
+  const aSize = arrowSize();
   const tail = c.clone().addScaledVector(u, -r);
   const tip = c.clone().addScaledVector(u, r);
   // leader: when the label sits outside the rim, run the line out to it
