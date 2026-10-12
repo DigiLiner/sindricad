@@ -71,7 +71,7 @@ export function diagnosisOf(i: number, conflict: Set<number>, over: Set<number>)
  *  can never say something different from the rest of the app. Kept beside
  *  constraintGlyphs() itself: a new case added there without a row added here
  *  is immediately visible as the one switch case with no neighbour below. */
-export interface GlyphLegendEntry {
+interface GlyphLegendEntry {
   label: string;
   nameKey: string;
 }
