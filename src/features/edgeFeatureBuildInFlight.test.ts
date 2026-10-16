@@ -24,7 +24,7 @@ import * as THREE from "three";
 import { FakeEl } from "../ui/fakeDom.testkit";
 import { BodyEdges } from "../viewport/edgeLines";
 import { Picker } from "../viewport/picking";
-import { edgeSelectorFrom, midMatchTol, nearestEdgeByMid, type Vec3 } from "../viewport/edgeMatch";
+import { edgeSelectorFrom, midMatchTol, nearestEdgeByMid, polylineMid, type Vec3 } from "../viewport/edgeMatch";
 import { DocumentStore } from "../document/store";
 import { t } from "../i18n";
 import type { GeometryBackend } from "../geometry/client";
@@ -60,12 +60,17 @@ const BEFORE = c.input;
 const AFTER = c.preview;
 const sameEdge = (a: Edge, b: Edge) =>
   a.points.length === b.points.length && a.points.every((p, i) => p.every((v, k) => v === b.points[i]![k]));
+const CONSUMED = c.first; // only on the body before the chamfer
 // an edge the chamfer generated, on the body after it only
 const GENERATED: Vec3 = [0, -31, 27.200000762939453];
+const onlyAfter = (points: Vec3[]) =>
+  AFTER.some((e) => sameEdge(e, { id: "", body: "", points })) && !BEFORE.some((e) => sameEdge(e, { id: "", body: "", points }));
 
 const W = 1200;
 const H = 900;
 const RECT = { left: 0, top: 0, width: W, height: H, right: W, bottom: H, x: 0, y: 0 } as DOMRect;
+
+const CHAMFER: Feature = { id: "c1", type: "chamfer", edges: [edgeSelectorFrom(BEFORE[9]!)!], distance: 1 } as Feature;
 
 /** The real store over a backend that holds every reply until released. The
  *  "geometry" is which side of the chamfer the sent document is on. */
@@ -174,7 +179,70 @@ function rig(features: Feature[]) {
   };
 }
 
+const pickPrompt = () => t("feature.edge.pick.fillet");
 const prompt = () => promptEl.textContent;
+
+describe("Fillet started while the build of an added chamfer is still running", () => {
+  it("picks from the model that build lands, not from the one it replaces", async () => {
+    const h = rig([]);
+    void h.store.rebuildNow();
+    h.requests[0]!.release();
+    await h.settle();
+
+    h.store.addFeature(CHAMFER); // its build starts at once and is still running...
+    expect(h.store.buildState.building, "precondition: a build is in flight").toBe(true);
+    h.tool.start("fillet", () => {}); // ...when the user presses F
+
+    // during the build: the outgoing model offers nothing to click
+    expect(h.cursorAt(CONSUMED), "an edge of the outgoing model looked clickable").toBe("default");
+    h.click(CONSUMED);
+    expect(h.ghosts(), "a click during the build picked an edge of the outgoing model").toEqual([]);
+    expect(h.requests.length, "a click during the build started a preview").toBe(2);
+    expect(prompt()).toBe(t("feature.edge.waitForBuild"));
+
+    h.requests[1]!.release();
+    await h.settle();
+    expect(prompt(), "the pick prompt comes back once the build lands").toBe(pickPrompt());
+    expect(h.cursorAt(CONSUMED), "the edge the chamfer consumed is still pickable").toBe("default");
+    expect(h.cursorAt(GENERATED), "the chamfer's own edge is not pickable").toBe("pointer");
+
+    h.click(GENERATED);
+    const g = h.ghosts();
+    expect(g.length, "the click on the chamfer's edge selected nothing").toBeGreaterThan(0);
+    for (const m of g) expect(onlyAfter(m.points), "a member is not an edge of the chamfered body").toBe(true);
+    const clicked = g[0]!;
+    expect((clicked.sel as { point: Vec3 }).point).toEqual(polylineMid(clicked.points));
+    expect(h.requests.at(-1)!.features, "the click put a fillet preview up").toContain("c1");
+    expect(h.requests.length).toBe(3);
+  });
+
+  it("CONTROL: started with nothing building, the model on screen is pickable at once", async () => {
+    const h = rig([CHAMFER]);
+    void h.store.rebuildNow();
+    h.requests[0]!.release();
+    await h.settle();
+    h.tool.start("fillet", () => {});
+    expect(prompt()).toBe(pickPrompt());
+    expect(h.cursorAt(GENERATED)).toBe("pointer");
+    expect(h.cursorAt(CONSUMED)).toBe("default");
+  });
+
+  it("a build that starts under the open tool hands the pick over to the model it lands", async () => {
+    const h = rig([]);
+    void h.store.rebuildNow();
+    h.requests[0]!.release();
+    await h.settle();
+    h.tool.start("fillet", () => {});
+    expect(h.cursorAt(CONSUMED), "precondition: the body before the chamfer is pickable").toBe("pointer");
+    h.store.addFeature(CHAMFER);
+    expect(h.cursorAt(CONSUMED)).toBe("default");
+    h.requests[1]!.release();
+    await h.settle();
+    expect(h.cursorAt(GENERATED)).toBe("pointer");
+    expect(h.cursorAt(CONSUMED)).toBe("default");
+    expect(prompt()).toBe(pickPrompt());
+  });
+});
 
 describe("re-opening a committed fillet while a rebuild is in flight", () => {
   const FILLET: Feature = { id: "f9", type: "fillet", edges: [edgeSelectorFrom(BEFORE[9]!)!], radius: 1 } as Feature;

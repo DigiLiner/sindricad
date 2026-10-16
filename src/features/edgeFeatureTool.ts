@@ -14,7 +14,7 @@ import { BlendInputEdges } from "./blendInputEdges";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { Viewport } from "../viewport/viewport";
-import type { DocumentStore } from "../document/store";
+import type { DocumentStore, RebuildState } from "../document/store";
 import type { Feature, RebuildResult, Selector } from "../types";
 import { midMatchTol, polylineMid, edgeSelectorFrom } from "../viewport/edgeMatch";
 import { DimInput } from "../sketch/dimInput";
@@ -161,12 +161,6 @@ export class EdgeFeatureTool {
     el.addEventListener("pointerup", this.boundUp);
     window.addEventListener("keydown", this.boundKey, true);
 
-    // A preview the kernel refuses has to say so — see reportPreviewFailure.
-    this.unsubBuild = this.store.onBuild((s) => {
-      if (s.building || !s.result) return;
-      this.reportPreviewFailure(s.result);
-    });
-
     // pre-selection (Ctrl-click): skip the pick phase and go straight to the drag
     const pre = this.viewport.selectedEdgeSelectors();
     if (pre.length) {
@@ -174,6 +168,40 @@ export class EdgeFeatureTool {
     } else {
       this.prompt(t(`feature.edge.pick.${kind}`));
     }
+
+    // Subscribed after the pre-selection, so its replay of the current build
+    // state already knows which phase the tool is in.
+    this.unsubBuild = this.store.onBuild((s) => {
+      if (this.phase === "pick") {
+        this.followModel(s);
+        return;
+      }
+      // A preview the kernel refuses has to say so — see reportPreviewFailure.
+      if (s.building || !s.result) return;
+      this.reportPreviewFailure(s.result);
+    });
+  }
+
+  /** In the pick phase the model on screen IS the input, so the snapshot has
+   *  to follow it. A build in flight is about to replace that model (the
+   *  viewport only takes a settled build), so nothing is pickable until it
+   *  lands: an edge picked off the outgoing model stores a point the new body
+   *  may not have, and the edges the build adds were not pickable at all. */
+  private followModel(s: RebuildState) {
+    if (s.building) {
+      if (!this.input) return; // progress ticks repeat this
+      this.disposeInput();
+      this.viewport.domElement.style.cursor = "default";
+      this.viewport.requestRender();
+      this.prompt(t("feature.edge.waitForBuild"));
+      return;
+    }
+    // Still holding a snapshot means no build ran since it was taken (the
+    // replay at subscribe, or a re-emit of the same build): it is current.
+    if (this.input) return;
+    this.snapshotInput();
+    this.viewport.requestRender();
+    this.prompt(t(`feature.edge.pick.${this.kind}`));
   }
 
   /** Re-open a committed fillet/chamfer for editing: the model rolls back to

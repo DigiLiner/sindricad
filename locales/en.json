@@ -399,7 +399,8 @@
       "previewFailed": {
         "chamfer": "⚠ chamfer failed: {text}",
         "fillet": "⚠ fillet failed: {text}"
-      }
+      },
+      "waitForBuild": "Rebuilding the model · select an edge once it has finished · Esc to cancel"
     },
     "extrude": {
       "dragPrompt": "Drag the arrow to set depth · Ctrl-click areas to add/remove · type a value + Enter · negative = cut · T = up to a face, plane, point or line, Shift-T clears it · click or OK to extrude · Esc to cancel",
