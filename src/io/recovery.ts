@@ -139,6 +139,18 @@ export async function checkRecovery(store: DocumentStore) {
     if (pick === "recover") {
       store.load(JSON.stringify(env.doc));
       toast(t("recovery.recovered"), { kind: "info", timeout: 8000 });
+      // The recovered document is untitled, so its autosave, Save and Discard
+      // all look in "untitled" and would never clear the slot it came from:
+      // the next launch offered the same work again. Move the snapshot there,
+      // writing before clearing so a second crash still finds it.
+      if (slot !== "untitled") {
+        try {
+          await invoke("recovery_write", { slot: "untitled", json: raw });
+          await invoke("recovery_clear", { slot });
+        } catch (e) {
+          console.warn("recovery slot hand-over failed:", e);
+        }
+      }
     } else if (pick === "discard") {
       await invoke("recovery_clear", { slot });
     }
