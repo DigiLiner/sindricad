@@ -2305,7 +2305,10 @@ export class DocumentStore {
       throw new Error(t("file.error.couldNotRead", { reason: e instanceof Error ? e.message : String(e) }));
     }
     for (const w of migrateDocument(parsed)) this.onWarning?.(w);
-    this.pushUndo();
+    // An Open (or Recover) starts a fresh history, as New does. undo() swaps
+    // only `doc`, so a step back across a load put the previous document under
+    // the new file's name, path and overlays, and the next Save wrote it there.
+    this.undoStack = [];
     this.redoStack = [];
     this.rearmProjectionValve(); // valve state must never cross documents
     // split persisted project state back out of the document; keep `this.doc`
