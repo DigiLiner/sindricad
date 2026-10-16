@@ -19,7 +19,7 @@ import { isEditableTarget } from "../ui/focus";
 import { SketchDimensions, dimBadgeFields, type ExtraDim } from "./sketchDimensions";
 import { SketchGlyphs } from "./sketchGlyphs";
 import { constraintGlyphs, diagnosisOf, type ConstraintGlyph } from "./glyphs";
-import { entityDims, constraintDims, dimRefPoints, curveKind, hoverOperandCurve, lineOperand, lineOperandAt, linearDim, operandPoint, rebindPolygonSides, refPoint, refPointNear, setDimPixelScale, RECT_CENTRE, shapeSideAt, slotAxisAt, staggeredDefaults, angleDimMeasure, type DimField, type ConstraintDim } from "./entityDims";
+import { entityDims, constraintDims, constraintEntityIds, dimRefPoints, curveKind, hoverOperandCurve, lineOperand, lineOperandAt, linearDim, operandPoint, rebindPolygonSides, refPoint, refPointNear, setDimPixelScale, RECT_CENTRE, shapeSideAt, slotAxisAt, staggeredDefaults, angleDimMeasure, type DimField, type ConstraintDim } from "./entityDims";
 import {
   clampPlace, isDimError, isRoundTarget, pickDimTarget, rebindTarget, resolveDim, targetIdentity,
   targetKey, unsupportedMessage,
@@ -36,7 +36,7 @@ import { RIGID_ENTITY_NUM_FIELDS, coerceForField, dimValueFromParam, paramValueO
 import type { RegionCarry, SketchBinding } from "../document/store";
 import { composePointCarry, polygonSidesCarry, type PointCarry } from "../document/pointCarry";
 import { advanceCenterArcSweep, centerArcEntity, circumcenter } from "./arc";
-import { coincKey, compileAndSolve, constraintIndexOf, soleDimEntity, MAX_BIAS_ANCHORS, type FixPositions } from "./sketchSolve";
+import { coincKey, compileAndSolve, constraintIndexOf, soleDimEntity, MAX_BIAS_ANCHORS, type FixPositions, type MoverBias } from "./sketchSolve";
 import { SolverUnavailable } from "./solver";
 import { dragCluster } from "./dragCluster";
 import { p2lSideFlipped, refreshStep, refreshSteps } from "../document/projectionWalk";
@@ -291,6 +291,14 @@ function hasDrawnContent(f: Feature | null): boolean {
   return !!f && f.type === "sketch" && (f.entities.length > 0 || (f.patterns?.length ?? 0) > 0);
 }
 
+/** The bias a two-pick gesture arms: `moves` move, onto everything else the
+ *  constraints it adds name (sketchSolve's MoverBias). */
+function biasOnto(moves: string[], cons: readonly SketchConstraint[]): MoverBias {
+  const own = new Set(moves.map((id) => (id.includes("~") ? id.slice(0, id.indexOf("~")) : id)));
+  const stays = [...new Set(cons.flatMap(constraintEntityIds))].filter((id) => !own.has(id));
+  return stays.length ? { moves, stays } : { moves };
+}
+
 export class SketchMode {
   active = false;
   tool: SketchTool = "select";
@@ -381,7 +389,7 @@ export class SketchMode {
    *  Deliberately NOT persisted with the constraint, and deliberately not
    *  reachable from headlessSolve: pick order belongs to the gesture, not to the
    *  document, so no saved sketch changes how it solves because of this. */
-  private pendingBias: { moves: string[] } | null = null;
+  private pendingBias: MoverBias | null = null;
   /** Where every `fix` held its point when the running body drag began
    *  (sketchSolve's FixPositions): each frame's solve pins them there, and so
    *  does the one solve its release queues, which consumes it. */
@@ -1851,7 +1859,7 @@ export class SketchMode {
       restore: before,
       msg: (blamed, cons) => dimConflictMsg(c, blamed, cons, replacedValue),
     };
-    if (moves) this.pendingBias = { moves: [moves] }; // BEFORE requestSolve: pump reads it synchronously
+    if (moves) this.pendingBias = biasOnto([moves], [c]); // BEFORE requestSolve: pump reads it synchronously
     this.requestSolve();
     // requestSolve is a no-op once the solver is known dead, so on those
     // machines the value has to be written into the geometry here or it is
@@ -5262,7 +5270,7 @@ export class SketchMode {
     const kept = dedupeHolds(this.constraints, holds) ?? [];
     this.constraints.push(...kept, c);
     this.trial = { cons: [...kept, c], msg: SketchMode.CONSTRAINT_CONFLICT_MSG }; // withdrawn again if this solve conflicts
-    if (moves) this.pendingBias = { moves: [moves] }; // before requestSolve — pump reads it synchronously
+    if (moves) this.pendingBias = biasOnto([moves], [...kept, c]); // before requestSolve — pump reads it synchronously
     this.requestSolve();
   }
 
@@ -5302,7 +5310,7 @@ export class SketchMode {
     const pushAll = (cs: SketchConstraint[], moves: string[]) => {
       this.constraints.push(...cs);
       this.trial = { cons: cs, msg: SketchMode.CONSTRAINT_CONFLICT_MSG }; // withdrawn again if this solve conflicts
-      this.pendingBias = { moves };
+      this.pendingBias = biasOnto(moves, cs);
       this.requestSolve();
       this.onState?.();
     };

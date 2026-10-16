@@ -22,7 +22,7 @@ import type { ResolvedEntity } from "./snap";
 import { solveSketch, type SConstraint, type SPoint, type SLine, type SCircle, type SArc, type SolveInput, type SolveResult } from "./solver";
 import { circumcenter } from "./arc";
 import { polygonPoints, rectCorners } from "./region";
-import { POLYGON_CENTRE, RECT_CENTRE, SLOT_AXIS, asRound, lineOperand, namedEntityIds, refPoint, rimNesting, type Round } from "./entityDims";
+import { POLYGON_CENTRE, RECT_CENTRE, SLOT_AXIS, asRound, constraintEntityIds, dimRefPoints, lineOperand, namedEntityIds, refPoint, rimNesting, type Round } from "./entityDims";
 import type { SketchConstraint } from "../types";
 import { isDriven, projEndSamples } from "../types";
 import { isOriginGeometry, isOriginId } from "./origin";
@@ -194,11 +194,108 @@ export type FixPositions = ReadonlyMap<string, { x: number; y: number }>;
 /** The key a `fix` is held under in FixPositions. */
 export const fixKey = (e: string, p: number): string => `${e}:${p}`;
 
+/** "What you picked moves" (bug #86, see the bias below): the entities a
+ *  gesture's solve may move, and, for a gesture that moves them ONTO something,
+ *  the entities they are moved onto (`stays`). */
+export interface MoverBias {
+  moves: string[];
+  stays?: string[];
+}
+
+/** How far solve `out` moved the geometry of every entity outside `movers`,
+ *  read off the points a constraint can name (dimRefPoints) and a circle's
+ *  radius: a through-point the solve re-derives is not a move. */
+function nonMoverShift(before: readonly ResolvedEntity[], out: readonly ResolvedEntity[], movers: ReadonlySet<string>): number {
+  const after = new Map(out.map((e) => [e.id, e] as const));
+  let worst = 0;
+  for (const e of before) {
+    if (movers.has(e.id)) continue;
+    const a = after.get(e.id);
+    if (!a || a === e) continue;
+    const was = dimRefPoints(e), now = dimRefPoints(a);
+    for (const q of was) {
+      const r = now.find((n) => n.p === q.p);
+      worst = Math.max(worst, r ? q.pos.distanceTo(r.pos) : Number.POSITIVE_INFINITY);
+    }
+    if (e.type === "circle" && a.type === "circle") worst = Math.max(worst, Math.abs(a.radius - e.radius));
+  }
+  return worst;
+}
+
+/** The movers widened to everything tied to them by a constraint, walking no
+ *  further than the `stays`: what has to move WITH the picked entity when it
+ *  cannot move alone. */
+function moverGroup(constraints: readonly SketchConstraint[], moves: readonly string[], stays: readonly string[]): Set<string> {
+  const wall = new Set(stays);
+  const group = new Set(moves);
+  const queue = [...moves];
+  const named = constraints.map((c) => constraintEntityIds(c));
+  while (queue.length) {
+    const id = queue.pop()!;
+    for (const ids of named) {
+      if (!ids.includes(id)) continue;
+      for (const o of ids) {
+        if (group.has(o) || wall.has(o) || isOriginGeometry(o)) continue;
+        group.add(o);
+        queue.push(o);
+      }
+    }
+  }
+  return group;
+}
+
+/** compileAndSolveOnce, and once more with the mover WIDENED when the bias
+ *  could not keep everything else still.
+ *
+ *  The picked entity can be tied to others so that it cannot move alone
+ *  (report d97616d8: a circle aligned by zero gaps to three more, put on a
+ *  rectangle's diagonal with Coincident). The anchors that hold everything but
+ *  the mover are soft, so that solve does not fail: it spreads the correction
+ *  over all of them, and the rectangle the circle was put ON moved 0.148 mm.
+ *  The second solve frees the mover's whole group instead (moverGroup, never
+ *  past what it is moved onto), and is taken only when it is clean and leaves
+ *  everything outside the group exactly where it was. Otherwise the first
+ *  answer stands, as it always has.
+ *
+ *  Only for a gesture that names what the mover goes onto (`stays`): without
+ *  that wall the group would walk straight into the other operand. */
 export async function compileAndSolve(
   entities: ResolvedEntity[],
   constraints: SketchConstraint[],
   drag?: { fromX: number; fromY: number; toX: number; toY: number },
-  bias?: { moves: string[] },
+  bias?: MoverBias,
+  pins?: { x: number; y: number }[],
+  bound?: BoundFields,
+  fixAt?: FixPositions,
+): Promise<SolvePass> {
+  const pass = await compileAndSolveOnce(entities, constraints, drag, bias, pins, bound, fixAt);
+  if (drag || pins?.length || !bias?.stays?.length) return pass;
+  if (!(pass.ok && pass.conflicts.length === 0)) return pass;
+  // a side (`R~0`) moves its shape, as in the bias itself
+  const base = (id: string) => (id.includes("~") ? id.slice(0, id.indexOf("~")) : id);
+  const movers = new Set(bias.moves.map(base));
+  if (nonMoverShift(entities, pass.entities, movers) <= STILL_TOL) return pass;
+  const group = moverGroup(constraints, [...movers], bias.stays.map(base));
+  if (group.size === movers.size) return pass;
+  let wide: SolvePass;
+  try {
+    wide = await compileAndSolveOnce(entities, constraints, drag, { moves: [...group] }, pins, bound, fixAt);
+  } catch {
+    return pass; // the heap: the first answer stands
+  }
+  const clean = wide.ok && wide.conflicts.length === 0;
+  return clean && nonMoverShift(entities, wide.entities, group) <= STILL_TOL ? wide : pass;
+}
+
+/** How far a solve may move what it is meant to keep still: solver noise, not
+ *  a move a user could see. */
+const STILL_TOL = 1e-7;
+
+async function compileAndSolveOnce(
+  entities: ResolvedEntity[],
+  constraints: SketchConstraint[],
+  drag?: { fromX: number; fromY: number; toX: number; toY: number },
+  bias?: MoverBias,
   pins?: { x: number; y: number }[],
   bound?: BoundFields,
   fixAt?: FixPositions,
