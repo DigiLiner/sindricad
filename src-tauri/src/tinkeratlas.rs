@@ -555,7 +555,10 @@ const MAX_DOCUMENT_BYTES: usize = 1_500_000;
 /// machines/users (in logs or pasted text) scrub too. A RUN of separators
 /// counts as one, because escaped text doubles them: Rust's `{:?}` and
 /// Python's `repr` both write `C:\\Users\\name`, and old logs on users' disks
-/// are in that shape.
+/// are in that shape. `media` covers removable drives (`/media/<name>`,
+/// udisks2's `/run/media/<name>`), and a JSON `\uXXXX` escape inside a name
+/// is part of the name: the sidecar's `err:` lines are `json.dumps` text,
+/// which writes every non-ASCII letter that way.
 fn redact_user_paths(s: &str) -> String {
     // A Windows profile folder may hold spaces ("John Smith"), so the name
     // runs to the next separator, quote or line end, not the next space.
@@ -565,10 +568,26 @@ fn redact_user_paths(s: &str) -> String {
     fn is_sep(b: u8) -> bool {
         b == b'\\' || b == b'/'
     }
+    /// 6 when `b` starts with a JSON `\uXXXX` escape, else 0.
+    fn unicode_escape_len(b: &[u8]) -> usize {
+        let escape = b.len() >= 6
+            && b[0] == b'\\'
+            && b[1] == b'u'
+            && b[2..6].iter().all(u8::is_ascii_hexdigit);
+        if escape { 6 } else { 0 }
+    }
     fn name_len(rest: &str) -> usize {
-        let end = rest
-            .find(|c: char| c == '\\' || c == '/' || c == '"' || c == '\'' || c.is_control())
-            .unwrap_or(rest.len());
+        let mut chars = rest.char_indices();
+        let end = loop {
+            let Some((i, c)) = chars.next() else { break rest.len() };
+            if unicode_escape_len(&rest.as_bytes()[i..]) > 0 {
+                chars.nth(4); // the escape's `u` and four hex digits
+                continue;
+            }
+            if c == '\\' || c == '/' || c == '"' || c == '\'' || c.is_control() {
+                break i;
+            }
+        };
         if end <= MAX_NAME_BYTES {
             return end;
         }
@@ -584,7 +603,7 @@ fn redact_user_paths(s: &str) -> String {
     let mut copied = 0;
     let mut i = 0;
     while i < bytes.len() {
-        let root_end = ["users", "home"].iter().find_map(|root| {
+        let root_end = ["users", "home", "media"].iter().find_map(|root| {
             let end = i + 1 + root.len();
             let matched = is_sep(bytes[i])
                 && end < bytes.len()
@@ -596,7 +615,18 @@ fn redact_user_paths(s: &str) -> String {
             i += 1;
             continue;
         };
+        let run_start = name_start;
         while name_start < bytes.len() && is_sep(bytes[name_start]) {
+            // A `\uXXXX` right after the root's own separator, or after whole
+            // escaped `\\` pairs, is the name's first letter, not a separator.
+            // Inside a pair (`\\u1234`) it is a login that looks like one.
+            let backslashes = bytes[run_start..name_start].iter().filter(|&&b| b == b'\\').count();
+            if name_start > run_start
+                && backslashes % 2 == 0
+                && unicode_escape_len(&bytes[name_start..]) > 0
+            {
+                break;
+            }
             name_start += 1;
         }
         let len = name_len(&s[name_start..]);
@@ -651,9 +681,19 @@ fn os_version() -> String {
 /// last `max` bytes of the sidecar log, lossily decoded (never fails the
 /// report over a missing/unreadable log — the report IS the diagnostic path).
 fn read_log_tail(app: &AppHandle, max: usize) -> Option<String> {
-    let path = app.path().app_data_dir().ok()?.join("sidecar.log");
+    read_log_tail_at(&app.path().app_data_dir().ok()?.join("sidecar.log"), max)
+}
+
+/// The tail starts on a whole line: a cut mid-line can begin past a path's
+/// `Users\` anchor, and the redactor would then send the rest of the name.
+fn read_log_tail_at(path: &std::path::Path, max: usize) -> Option<String> {
     let bytes = std::fs::read(path).ok()?;
-    let start = bytes.len().saturating_sub(max);
+    let mut start = bytes.len().saturating_sub(max);
+    if start > 0 && bytes[start - 1] != b'\n' {
+        if let Some(nl) = bytes[start..].iter().position(|&b| b == b'\n') {
+            start += nl + 1;
+        }
+    }
     Some(String::from_utf8_lossy(&bytes[start..]).into_owned())
 }
 
@@ -706,6 +746,95 @@ fn trim_breadcrumbs(crumbs: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// Keys whose string values in a document are paths on the user's disk: an
+/// import's dialog path and an image texture's file. Nothing reads either
+/// from a report. Body names, titles and sketch text are the user's own words
+/// and are sent as written.
+const DOCUMENT_PATH_KEYS: [&str; 2] = ["source", "imagePath"];
+
+/// Redact the path fields of a parsed document. Working on decoded strings
+/// rather than the JSON text keeps the result valid JSON by construction.
+fn redact_document_paths(v: &mut serde_json::Value) {
+    use serde_json::Value;
+    match v {
+        Value::Array(items) => items.iter_mut().for_each(redact_document_paths),
+        Value::Object(fields) => {
+            for (key, child) in fields.iter_mut() {
+                match child {
+                    Value::String(s) if DOCUMENT_PATH_KEYS.contains(&key.as_str()) => {
+                        *s = redact_user_paths(s);
+                    }
+                    _ => redact_document_paths(child),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The exact JSON the bug report POSTs, with every user-supplied part
+/// scrubbed. Pure (no AppHandle, no platform calls) so a test can assert on
+/// the whole wire body rather than on the redactor alone.
+#[allow(clippy::too_many_arguments)]
+fn build_report_body(
+    description: &str,
+    app_version: &str,
+    os_version: &str,
+    webview_version: &str,
+    sidecar_connected: bool,
+    log_tail: Option<String>,
+    breadcrumbs: &[String],
+    document_json: Option<&str>,
+    locale: Option<&str>,
+    category: Option<&str>,
+) -> TResult<serde_json::Value> {
+    let clean_description = redact_user_paths(description);
+    let first_line = clean_description.lines().next().unwrap_or("bug report");
+    let title: String = first_line.chars().take(120).collect();
+    let fingerprint = fnv1a64_hex(&format!("{app_version}|{first_line}"));
+
+    let log_tail = log_tail.map(|t| redact_user_paths(&t));
+    let breadcrumbs: Vec<String> = trim_breadcrumbs(breadcrumbs)
+        .into_iter()
+        .map(|b| redact_user_paths(&b))
+        .collect();
+
+    let document_value: Option<serde_json::Value> = match document_json {
+        Some(s) if s.len() > MAX_DOCUMENT_BYTES => {
+            return Err(TaError::new(
+                TaErrCode::Config,
+                "document too large to attach — send the report without it",
+            ));
+        }
+        Some(s) => {
+            let mut doc = serde_json::from_str(s).map_err(|e| {
+                TaError::new(TaErrCode::Config, format!("document isn't valid JSON: {e}"))
+            })?;
+            redact_document_paths(&mut doc);
+            Some(doc)
+        }
+        None => None,
+    };
+
+    Ok(serde_json::json!({
+        "title": title,
+        "description": clean_description,
+        "app_version": app_version,
+        "os": std::env::consts::OS,
+        "os_version": os_version,
+        "webview_version": webview_version,
+        "arch": std::env::consts::ARCH,
+        "sidecar_connected": sidecar_connected,
+        "log_tail": log_tail,
+        "breadcrumbs": breadcrumbs,
+        "fingerprint": fingerprint,
+        "document_json": document_value,
+        "locale": locale.map(|l| l.chars().take(16).collect::<String>()),
+        "category": category.map(|c| c.chars().take(16).collect::<String>()),
+    }))
+}
+
+
 #[tauri::command]
 pub async fn ta_bug_report(
     app: AppHandle,
@@ -729,50 +858,19 @@ pub async fn ta_bug_report(
     // signed-out is fine — report goes anonymous
     let account = read_account(&app).unwrap_or(None);
 
-    let clean_description = redact_user_paths(&description);
-    let first_line = clean_description.lines().next().unwrap_or("bug report");
-    let title: String = first_line.chars().take(120).collect();
-    let fingerprint = fnv1a64_hex(&format!("{app_version}|{first_line}"));
-
-    let log_tail = if include_log {
-        read_log_tail(&app, LOG_TAIL_BYTES).map(|t| redact_user_paths(&t))
-    } else {
-        None
-    };
-    let breadcrumbs: Vec<String> = trim_breadcrumbs(&breadcrumbs)
-        .into_iter()
-        .map(|b| redact_user_paths(&b))
-        .collect();
-
-    let document_value: Option<serde_json::Value> = match document_json {
-        Some(ref s) if s.len() > MAX_DOCUMENT_BYTES => {
-            return Err(TaError::new(
-                TaErrCode::Config,
-                "document too large to attach — send the report without it",
-            ));
-        }
-        Some(ref s) => Some(serde_json::from_str(s).map_err(|e| {
-            TaError::new(TaErrCode::Config, format!("document isn't valid JSON: {e}"))
-        })?),
-        None => None,
-    };
-
-    let body = serde_json::json!({
-        "title": title,
-        "description": clean_description,
-        "app_version": app_version,
-        "os": std::env::consts::OS,
-        "os_version": os_version(),
-        "webview_version": tauri::webview_version().unwrap_or_default(),
-        "arch": std::env::consts::ARCH,
-        "sidecar_connected": sidecar_connected,
-        "log_tail": log_tail,
-        "breadcrumbs": breadcrumbs,
-        "fingerprint": fingerprint,
-        "document_json": document_value,
-        "locale": locale.as_deref().map(|l| l.chars().take(16).collect::<String>()),
-        "category": category.as_deref().map(|c| c.chars().take(16).collect::<String>()),
-    });
+    let log_tail = if include_log { read_log_tail(&app, LOG_TAIL_BYTES) } else { None };
+    let body = build_report_body(
+        &description,
+        &app_version,
+        &os_version(),
+        &tauri::webview_version().unwrap_or_default(),
+        sidecar_connected,
+        log_tail,
+        &breadcrumbs,
+        document_json.as_deref(),
+        locale.as_deref(),
+        category.as_deref(),
+    )?;
 
     let client = http(Duration::from_secs(30))?;
     let mut req = client.post(format!("{BASE}/api/desktop/bug-report")).json(&body);
@@ -908,6 +1006,155 @@ mod tests {
             })
             .collect();
         assert!(failed.is_empty(), "{} of {} cases wrong:{}", failed.len(), cases.len(), failed.concat());
+    }
+
+    // Gaps left by the first pass, each a shape a real report can carry:
+    // removable media (udisks2 mounts under /run/media/<user>, Debian's
+    // /media/<user>), and the sidecar's `err:` lines, which are json.dumps
+    // text, so a non-ASCII name arrives as \uXXXX escapes. The escapes here
+    // spell plain letters so the fixtures hold only placeholder names.
+    #[test]
+    fn user_path_redaction_covers_removable_media_and_json_escapes() {
+        let cases: &[(&str, &str)] = &[
+            ("/run/media/alice/USB/part.step", "/run/media/[REDACTED]/USB/part.step"),
+            (
+                "FileNotFoundError: [Errno 2] No such file or directory: '/media/alice/KINGSTON/logo.png'",
+                "FileNotFoundError: [Errno 2] No such file or directory: '/media/[REDACTED]/KINGSTON/logo.png'",
+            ),
+            // An escape inside the name, at its start, and a /home name of escapes
+            (
+                r#"err: {"source": "C:\\Users\\ali\u0063e\\Desktop\\part.step"}"#,
+                r#"err: {"source": "C:\\Users\\[REDACTED]\\Desktop\\part.step"}"#,
+            ),
+            (
+                r#"{"source": "C:\\Users\\\u0061lice\\x.step"}"#,
+                r#"{"source": "C:\\Users\\[REDACTED]\\x.step"}"#,
+            ),
+            (
+                r#"err: {"imagePath": "/home/\u0062o\u0062/logo.png"}"#,
+                r#"err: {"imagePath": "/home/[REDACTED]/logo.png"}"#,
+            ),
+            // A login that merely LOOKS like an escape (u + four hex digits)
+            // after an escaped backslash: the backslash pair is the separator,
+            // and the output must keep both halves or the JSON breaks.
+            (
+                r#"{"source":"C:\\Users\\u1234\\Desktop\\part.step"}"#,
+                r#"{"source":"C:\\Users\\[REDACTED]\\Desktop\\part.step"}"#,
+            ),
+            (r"spawn: C:\Users\u1234\AppData", r"spawn: C:\Users\[REDACTED]\AppData"),
+            // Accepted over-redaction, pinned so it stays a decision
+            (r"C:\Users\alice\u1234\x", r"C:\Users\[REDACTED]\x"),
+            ("/media/cdrom/x", "/media/[REDACTED]/x"),
+            // Prose that names the words without a path stays byte-identical
+            ("see Users/Guide and the home/garden page", "see Users/Guide and the home/garden page"),
+        ];
+        let failed: Vec<String> = cases
+            .iter()
+            .filter_map(|(input, want)| {
+                let got = std::panic::catch_unwind(|| redact_user_paths(input))
+                    .unwrap_or_else(|_| "<panicked>".to_string());
+                (got != *want).then(|| format!("\n  in:   {input}\n  got:  {got}\n  want: {want}"))
+            })
+            .collect();
+        assert!(failed.is_empty(), "{} of {} cases wrong:{}", failed.len(), cases.len(), failed.concat());
+    }
+
+    /// A log file under the OS temp dir, removed on Drop.
+    struct TmpLog(std::path::PathBuf);
+    impl TmpLog {
+        fn new(label: &str, content: &[u8]) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("sindricad-test-{label}-{}.log", std::process::id()));
+            std::fs::write(&path, content).expect("write tmp log");
+            TmpLog(path)
+        }
+    }
+    impl Drop for TmpLog {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn log_tail_starts_on_a_line_boundary() {
+        let log = "[sidecar] version 0.1.251\n[sidecar] spawn ok\n[sidecar] LISTENING 8765\n";
+        let tmp = TmpLog::new("tail-lines", log.as_bytes());
+        let tail = |max| read_log_tail_at(&tmp.0, max).expect("log reads");
+        // cut mid-line: the partial line is dropped
+        assert_eq!(tail(30), "[sidecar] LISTENING 8765\n");
+        // cut exactly at a line start: that line is kept whole
+        assert_eq!(tail(25), "[sidecar] LISTENING 8765\n");
+        assert_eq!(tail(1000), log);
+        // nothing to snap to: keep the tail rather than send nothing
+        let flat = TmpLog::new("tail-flat", b"abcdefgh");
+        assert_eq!(read_log_tail_at(&flat.0, 3).as_deref(), Some("fgh"));
+    }
+
+    // The byte cut used to land wherever LOG_TAIL_BYTES fell, so the first line
+    // could start mid-name, past the `Users\` anchor the redactor needs.
+    #[test]
+    fn log_tail_cut_inside_a_user_path_cannot_leak_the_name() {
+        let head = "SindriCAD 0.1.251\nspawn: C:\\Users\\al";
+        let rest_of_spawn = "ice\\AppData\\Local\\SindriCAD\\python.exe\n";
+        let filler = "[sidecar] ok\n".repeat((LOG_TAIL_BYTES - rest_of_spawn.len()) / 13);
+        let pad = "#".repeat(LOG_TAIL_BYTES - rest_of_spawn.len() - filler.len());
+        let filler = format!("{pad}{filler}");
+        let log = format!("{head}{rest_of_spawn}{filler}");
+        assert_eq!(log.len() - LOG_TAIL_BYTES, head.len(), "the cut must land inside the name");
+
+        let tmp = TmpLog::new("tail-cut", log.as_bytes());
+        let tail = read_log_tail_at(&tmp.0, LOG_TAIL_BYTES).expect("log reads");
+        let sent = redact_user_paths(&tail);
+        assert!(!sent.contains("ice"), "partial name leaked: {:?}", &sent[..60]);
+        assert_eq!(sent, filler);
+    }
+
+    // An import records the dialog path in `source`, an image texture its file
+    // in `imagePath`; both ride along when the user attaches the document.
+    // Only those path fields are scrubbed: the user's own names and text are not.
+    #[test]
+    fn attached_document_paths_are_redacted_and_still_json() {
+        let doc = r#"{"bodyNames":{"b1":"alice's bracket","b2":"copied from /home/alice/old"},"features":[{"id":"f1","type":"import","source":"C:\\Users\\u1234\\Desktop\\part.step"},{"id":"f2","type":"import","source":"/run/media/alice/USB/scan.stl"},{"id":"f3","type":"texture","imagePath":"/media/bob/K/logo.png"},{"id":"f4","type":"sketch","entities":[{"id":"e1","kind":"line","source":{"kind":"edge","body":"b1"}}]}]}"#;
+        let body = build_report_body("crash", "0.1.251", "", "", true, None, &[], Some(doc), None, None)
+            .expect("the report builds");
+        let d = &body["document_json"];
+        assert!(d.is_object(), "document must still be JSON: {d}");
+        assert_eq!(d["features"][0]["source"], r"C:\Users\[REDACTED]\Desktop\part.step");
+        assert_eq!(d["features"][1]["source"], "/run/media/[REDACTED]/USB/scan.stl");
+        assert_eq!(d["features"][2]["imagePath"], "/media/[REDACTED]/K/logo.png");
+        assert_eq!(d["features"][3]["entities"][0]["source"]["body"], "b1");
+        assert_eq!(d["bodyNames"]["b1"], "alice's bracket");
+        assert_eq!(d["bodyNames"]["b2"], "copied from /home/alice/old");
+
+        // a path-free document arrives exactly as parsed
+        let plain = r#"{"bodyNames":{"b1":"my/home\nstuff"},"features":[{"id":"f1","type":"box","source":"my home"}]}"#;
+        let body = build_report_body("crash", "0.1.251", "", "", true, None, &[], Some(plain), None, None)
+            .expect("the report builds");
+        assert_eq!(body["document_json"], serde_json::from_str::<serde_json::Value>(plain).unwrap());
+    }
+
+    // The whole wire body, every user-supplied part carrying a name in a
+    // different shape: none of them may reach the server.
+    #[test]
+    fn nothing_in_the_report_body_carries_a_username() {
+        let description = r"Import of C:\Users\alice\Desktop\x.step crashes";
+        let log_tail = "header\nerr: {\"imagePath\": \"/run/media/alice/USB/logo.png\"}\n".to_string();
+        let crumbs = vec!["12:00:00 [error] can't read texture image '/media/bob/K/logo.png'".to_string()];
+        let doc = r#"{"features":[{"id":"f1","type":"import","source":"C:\\Users\\u1234\\Desktop\\part.step"},{"id":"f2","type":"texture","imagePath":"/home/alice/logo.png"}]}"#;
+        let body = build_report_body(
+            description, "0.1.251", "", "", true, Some(log_tail), &crumbs, Some(doc), Some("en"), Some("bug"),
+        )
+        .expect("the report builds");
+        let wire = serde_json::to_string(&body).unwrap();
+        for name in ["alice", "bob", "u1234"] {
+            assert!(!wire.contains(name), "{name} reached the wire: {wire}");
+        }
+        assert!(body["title"].as_str().unwrap().contains("[REDACTED]"));
+        assert_eq!(
+            body["breadcrumbs"][0],
+            "12:00:00 [error] can't read texture image '/media/[REDACTED]/K/logo.png'"
+        );
+        assert_eq!(body["document_json"]["features"][0]["source"], r"C:\Users\[REDACTED]\Desktop\part.step");
     }
 
     #[test]
