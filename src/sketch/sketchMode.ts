@@ -3750,11 +3750,14 @@ export class SketchMode {
     if (!center) return;
     const { w, h } = this.centerRectSize(center, p);
     if (w < 1e-4 || h < 1e-4) return;
-    this.dim.hide();
     const ent: ResolvedEntity = { type: "rectangle", id: newEntityId(), width: w, height: h, x: center.x, y: center.y };
     if (this.constructionMode) ent.construction = true;
     this.entities.push(ent);
+    // Lock BEFORE hiding the box: hide() empties its fields, after which
+    // nothing reads as typed, so a typed W/H was built and then left free
+    // (95108ab8; the corner rectangle locks first and always worked).
     this.lockTypedDrawDims(ent, ["width", "height"]);
+    this.dim.hide();
     // This click placed a CORNER, so a corner snapped onto a point is joined to
     // it, as the corner-to-corner rectangle's are. The first click placed the
     // CENTRE, which is a point too now (point 4), so it joins what it was
