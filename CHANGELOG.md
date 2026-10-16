@@ -20,6 +20,47 @@ This file starts on 2026-08-03. For anything before that, see the
 
 ### Sketching
 
+- **Circles and arcs that cross other shapes fill and select cleanly again.**
+  0.1.248 cut a circle's touch point into every side of a rectangle or spline it
+  crossed, which drew fan-shaped artifacts and left regions you could not select.
+  A mirrored pocket now gets its own region too.
+- **A centre rectangle and a 2-point circle lock what you type.** The typed
+  width, height or diameter was lost when the box closed. It is now a locked
+  dimension, as it already was for the other drawing tools.
+- **Zoom, pan and orbit work with the pointer over a dimension.** The scroll
+  wheel and a middle or right drag on a dimension or constraint badge now move
+  the view. A right-click without moving still opens the badge's menu.
+- **Dimension arrows stay the same size while you zoom.** Arrowheads and
+  endpoint dots no longer grow or shrink until the next edit.
+- **A fixed arc centre stays put** when you drag a line joined to the arc.
+- **Coincident moves the point you picked, not the shape you put it on.**
+  Putting a circle that is lined up with other circles onto a line could shift
+  the rectangle around that line as well.
+- **Horizontal and Vertical between two points show as H and V**, in the sketch
+  and in the list, instead of a 0 distance named after the other axis.
+- **Drawing from a line's midpoint holds the new point at the middle.** It used
+  to keep the point only somewhere on the line.
+- **Mirror keeps slots and polygons.** Mirroring one used to leave a single
+  point.
+
+### Modelling
+
+- **Fillet and chamfer pick only real edges.** While the tool was open, edges of
+  its own preview could be clicked or pulled into a chain, and they then landed
+  on other edges of the part: a corner filled all the way down, a chamfer that
+  tapered, or an "ambiguous edge" error. Picks and chains now come from the part
+  as it was before the feature.
+
+### Bug reports
+
+- **Your Windows user name stays out of bug reports.** One line of the engine
+  log attached to a report showed it. That line, and logs already on disk, are
+  now scrubbed.
+
+## 0.1.248 (2026-10-12)
+
+### Sketching
+
 - **Typing a number keeps the line where it is.** An angle dimension typed onto
   a line that already sat at that angle could flip the line to the other side.
   The number is now always the angle you see, and the line keeps its side.
