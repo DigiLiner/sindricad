@@ -14,6 +14,7 @@
 //
 // Usage (from the repo root, with vite on 5173 + sidecar on 8765):
 //   SC_TOKEN=<token> node e2e/presspull_dispatch_e2e.cjs
+// SC_URL overrides the dev-server origin, for a side-port worktree.
 const { chromium } = require("playwright-core");
 
 const TOKEN = process.env.SC_TOKEN || "";
@@ -76,7 +77,7 @@ const DOC = {
     return { x: Math.round(s.x), y: Math.round(s.y) };
   }, w);
 
-  await page.goto(`http://localhost:5173/?token=${TOKEN}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${process.env.SC_URL || "http://localhost:5173"}/?token=${TOKEN}`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => !!window.__sindri, null, { timeout: 30000 });
 
   // A module-init abort is the failure mode that once shipped a dead keyboard;

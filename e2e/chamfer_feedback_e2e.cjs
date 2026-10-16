@@ -25,11 +25,12 @@
 //
 // Usage (from the repo root, with vite on 5173 + sidecar on 8765):
 //   SC_TOKEN=<token> node e2e/chamfer_feedback_e2e.cjs
+// SC_URL (or SC_BASE) overrides the dev-server origin, for a side-port worktree.
 const { chromium } = require("playwright-core");
 
 const TOKEN = process.env.SC_TOKEN || "";
 if (!TOKEN) { console.error("set SC_TOKEN"); process.exit(1); }
-const BASE = process.env.SC_BASE || "http://localhost:5173";
+const BASE = process.env.SC_URL || process.env.SC_BASE || "http://localhost:5173";
 const OUT = "/tmp/chamfer_feedback_shots";
 let failures = 0;
 const check = (name, ok, detail) => {

@@ -8,6 +8,7 @@
 //
 // Usage (from the repo root, with vite on 5173 + sidecar on 8765):
 //   SC_TOKEN=<token> node e2e/assembly_tree_e2e.cjs
+// SC_URL overrides the dev-server origin, for a side-port worktree.
 const { chromium } = require("playwright-core");
 const path = require("path");
 
@@ -40,7 +41,7 @@ const check = (name, ok, detail) => {
     window.WebSocket = P;
   }, TOKEN);
 
-  await page.goto("http://localhost:5173/");
+  await page.goto(`${process.env.SC_URL || "http://localhost:5173"}/`);
   await page.waitForTimeout(3500);
   const modal = await page.$(".modal-close");
   if (modal) { await modal.click(); await page.waitForTimeout(400); }

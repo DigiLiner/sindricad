@@ -26,7 +26,7 @@
 // Usage (from the repo root), with vite on 5173:
 //   SC_TOKEN=<the sidecar token> node e2e/sketch_dim_conflict_e2e.cjs
 // SC_CHROME overrides the browser binary (CI uses /usr/bin/google-chrome);
-// SC_PORT overrides the vite port.
+// SC_URL overrides the dev-server origin, SC_PORT just the vite port.
 const { chromium } = require("playwright-core");
 
 let fails = 0;
@@ -73,7 +73,7 @@ const CONFLICT = 0xff4444;
 
 (async () => {
   const executablePath = process.env.SC_CHROME || "/usr/bin/chromium";
-  const port = process.env.SC_PORT || "5173";
+  const origin = process.env.SC_URL || `http://localhost:${process.env.SC_PORT || "5173"}`;
   const browser = await chromium.launch({
     ...(require("fs").existsSync(executablePath) ? { executablePath } : {}),
     // WebGL2 is MANDATORY — the Viewport constructor throws without it.
@@ -83,7 +83,7 @@ const CONFLICT = 0xff4444;
   page.on("pageerror", (e) => console.log("PAGEERROR:", e.message));
 
   const token = process.env.SC_TOKEN ? `?token=${process.env.SC_TOKEN}` : "";
-  await page.goto(`http://localhost:${port}/${token}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${origin}/${token}`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => !!window.__sindri, null, { timeout: 30000 });
   await page.keyboard.press("Escape"); // dismiss the welcome modal
   await page.waitForTimeout(400);

@@ -29,7 +29,8 @@
 //
 // Usage (from the repo root), with vite on 5173 and the sidecar on 8765:
 //   SC_TOKEN=<the sidecar token> node e2e/sketch_exit_e2e.cjs
-// SC_CHROME overrides the browser binary (CI uses /usr/bin/google-chrome).
+// SC_CHROME overrides the browser binary (CI uses /usr/bin/google-chrome), and
+// SC_URL the dev server, for running against a side-port worktree.
 const { chromium } = require("playwright-core");
 
 const TOKEN = process.env.SC_TOKEN;
@@ -57,7 +58,7 @@ const BOX = {
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   page.on("pageerror", (e) => console.log("PAGEERROR:", e.message));
 
-  await page.goto(`http://localhost:5173/?token=${TOKEN}`, { waitUntil: "domcontentloaded" });
+  await page.goto(`${process.env.SC_URL || "http://localhost:5173"}/?token=${TOKEN}`, { waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => !!window.__sindri, null, { timeout: 30000 });
   await page.keyboard.press("Escape"); // the welcome modal is part of toolBusy()
   await page.waitForTimeout(400);
