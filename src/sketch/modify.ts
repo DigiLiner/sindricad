@@ -13,7 +13,7 @@ import { newEntityId } from "./id";
 import { arcCenterRadius } from "./arc";
 import { translated } from "./pattern";
 import { splineEndIndices, splineFlags } from "./spline";
-import { coincKey, tangentTouch } from "./sketchSolve";
+import { coincKey, fixKey, tangentTouch } from "./sketchSolve";
 import {
   circleLineIntersect,
   circleCircleIntersect,
@@ -44,14 +44,14 @@ export const FIXED_POINT_MSG = t("sketch.guard.pointFixed");
 export const fixPinnedIds = (cons: readonly SketchConstraint[]): Set<string> =>
   new Set(cons.flatMap((c) => (c.type === "fix" ? [c.e] : [])));
 
-/** WHERE each `fix` pins, as coincKey buckets — the same bucket the solver
- *  merges positions into, so "is this endpoint the pinned one?" is asked in the
- *  solver's own terms rather than with a private tolerance. */
-export function fixPinnedKeys(
+/** WHERE each `fix` pins, by fixKey: the positions a body drag hands every
+ *  frame's solve (FixPositions), so a point the drag moves without meaning to
+ *  is held where it was when the gesture began. */
+export function fixPinnedAt(
   ents: readonly ResolvedEntity[],
   cons: readonly SketchConstraint[],
-): Set<string> {
-  const out = new Set<string>();
+): Map<string, THREE.Vector2> {
+  const out = new Map<string, THREE.Vector2>();
   for (const c of cons) {
     if (c.type !== "fix") continue;
     const e = ents.find((x) => x.id === c.e);
@@ -61,9 +61,19 @@ export function fixPinnedKeys(
     const pos = e.type === "circle" || e.type === "point"
       ? v(e.x, e.y)
       : dimRefPoints(e).find((r) => r.p === c.p)?.pos;
-    if (pos) out.add(coincKey(pos.x, pos.y));
+    if (pos) out.set(fixKey(c.e, c.p), pos);
   }
   return out;
+}
+
+/** WHERE each `fix` pins, as coincKey buckets — the same bucket the solver
+ *  merges positions into, so "is this endpoint the pinned one?" is asked in the
+ *  solver's own terms rather than with a private tolerance. */
+export function fixPinnedKeys(
+  ents: readonly ResolvedEntity[],
+  cons: readonly SketchConstraint[],
+): Set<string> {
+  return new Set([...fixPinnedAt(ents, cons).values()].map((q) => coincKey(q.x, q.y)));
 }
 
 /** The moved entity's attachment points: the positions where neighbours may

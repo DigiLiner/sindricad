@@ -102,6 +102,7 @@ export function liveSketch(ents: ResolvedEntity[], cons: SketchConstraint[] = []
     pendingDrag: null,
     pendingPinIdxs: null,
     pendingBias: null,
+    fixHold: null,
     trial: null,
     solveBusy: false,
     solveDirty: false,

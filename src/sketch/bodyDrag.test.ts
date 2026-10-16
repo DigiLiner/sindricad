@@ -701,3 +701,77 @@ describe("the off-span guard leaves a line HELD AT ITS END alone", () => {
     expect((byId(out!, "C") as Extract<ResolvedEntity, { type: "circle" }>).x).toBeCloseTo(-10, 9);
   });
 });
+
+// --- 57bf3762: a Fix on an arc's centre, reached through a neighbour ---------
+
+describe("a fixed arc centre holds when a line joined to the arc is dragged (57bf3762)", () => {
+  /** The reporter's teardrop: a 30 mm arc whose centre carries Fix, two lines
+   *  tangent to it and meeting below it, plus a third line tangent to it. */
+  const teardrop = (): { ents: ResolvedEntity[]; cons: SketchConstraint[] } => ({
+    ents: [
+      { id: "e25", type: "arc", mx: -111.74937455609565, my: 40.62579973181056, x1: -97.70443689255993, x2: -125.79431221963124, y1: 20.35894810798462, y2: 20.358948107984624 },
+      { id: "e33", type: "line", x1: -111.7493745560956, x2: -125.79431221963124, y1: -17.094218994777155, y2: 20.358948107984624 },
+      { id: "e34", type: "line", x1: -111.7493745560956, x2: -97.70443689255993, y1: -17.094218994777155, y2: 20.35894810798462 },
+      { id: "e35", type: "line", x1: -77.92066738807297, x2: -97.55519838648176, y1: 67.65070134154085, y2: 53.89034730962254 },
+    ],
+    cons: [
+      { id: "c32", type: "diameter", value: 30, circle: "e25" },
+      { type: "coincident", e1: "e33", e2: "e34", p1: 0, p2: 0 },
+      { type: "tangent2", a: "e34", b: "e25" },
+      { type: "tangent2", a: "e33", b: "e25" },
+      { type: "pointOn", e: "e34", p: 1, curve: "e25" },
+      { type: "pointOn", e: "e33", p: 1, curve: "e25" },
+      { type: "p2pDistanceX", e1: "e25", e2: "e34", p1: 2, p2: 0, value: 0 },
+      { type: "coincident", e1: "e25", e2: "e34", p1: 0, p2: 1 },
+      { type: "coincident", e1: "e25", e2: "e33", p1: 1, p2: 1 },
+      { type: "fix", e: "e25", p: 2 },
+      { type: "tangent2", a: "e35", b: "e25" },
+      { id: "c36", type: "distance", line: "e33", value: 40 },
+    ],
+  });
+  const centre = (e: ResolvedEntity | undefined) => {
+    if (e?.type !== "arc") throw new Error("not an arc");
+    return circumcenter({ x: e.x1, y: e.y1 }, { x: e.x2, y: e.y2 }, { x: e.mx, y: e.my })!;
+  };
+  const START = { x: -111.74937455609565, y: 25.625799731810563 };
+
+  it("CONTROL: the drag is a body drag, not refused up front", () => {
+    const { ents, cons } = teardrop();
+    expect(bodyDragBlocked(ents, at(ents, "e33"), cons)).toBe(false);
+  });
+
+  for (const each of [true, false]) {
+    it(`the centre stays where it was through a 10 mm drag of the line${each ? "" : ", frames piling up"}`, async () => {
+      const { ents, cons } = teardrop();
+      const live = liveSketch(ents, cons);
+      const c0 = centre(live.ent("e25"));
+      expect(Math.hypot(c0.x - START.x, c0.y - START.y)).toBeLessThan(1e-6);
+      // the middle of e33, which is a body press (20 mm from either end)
+      const mid: [number, number] = [(-111.7493745560956 - 125.79431221963124) / 2, (-17.094218994777155 + 20.358948107984624) / 2];
+      live.press(mid[0], mid[1]);
+      expect(live.s.moveDrag, "the line press did not arm a body drag").not.toBeNull();
+      let worst = 0;
+      for (let i = 1; i <= 5; i++) {
+        live.move(mid[0] + 2 * i, mid[1]);
+        if (each) await live.settle();
+        const c = centre(live.ent("e25"));
+        if (each) worst = Math.max(worst, Math.hypot(c.x - START.x, c.y - START.y));
+      }
+      live.release();
+      await live.settle();
+      const c = centre(live.ent("e25"));
+      const moved = Math.hypot(c.x - START.x, c.y - START.y);
+      expect(worst, "the fixed centre moved during the drag").toBeLessThan(1e-4);
+      expect(moved, `the fixed centre ended at (${c.x}, ${c.y})`).toBeLessThan(1e-4);
+      // ...and the drag solved AROUND it rather than tearing the shape: the
+      // arc, its centre held and its diameter set, decides both tangent lines,
+      // so they stay joined to it, 40 mm long, at the same bottom point
+      const l = live.ent("e33") as Extract<ResolvedEntity, { type: "line" }>;
+      const a = live.ent("e25") as Extract<ResolvedEntity, { type: "arc" }>;
+      expect(Math.hypot(l.x2 - l.x1, l.y2 - l.y1)).toBeCloseTo(40, 4);
+      expect(Math.hypot(l.x2 - a.x2, l.y2 - a.y2)).toBeLessThan(1e-4);
+      expect(Math.hypot(a.x2 - c.x, a.y2 - c.y)).toBeCloseTo(15, 4);
+      expect(l.x1).toBeCloseTo(-111.7493745560956, 4);
+    });
+  }
+});

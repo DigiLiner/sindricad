@@ -25,7 +25,7 @@ import {
   targetKey, unsupportedMessage,
   type DimOptions, type DimPlan, type DimTarget,
 } from "./dimensionTool";
-import { pickEntity, pointBeatsCurve, tangencyPoints, crossingPoints, trimSpan, trimWithConstraints, detachEndpoint, detachableEnd, isBreakCut, filletCorner, chamferCorner, cornerJoins, explodeCompound, polygonRingHolds, rotationTie, translationTie, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, followOffsets, followRefusal, breakWithConstraints, joinLines, extendLine, breakLink, attachmentPoints, bodyDragBlocked, bodyDragFrame, fixPinnedIds, pickDragPoint, FIXED_POINT_MSG, PROJECTED_FIXED_MSG, type ExplodeResult, type OffsetResult, type TrimResult } from "./modify";
+import { pickEntity, pointBeatsCurve, tangencyPoints, crossingPoints, trimSpan, trimWithConstraints, detachEndpoint, detachableEnd, isBreakCut, filletCorner, chamferCorner, cornerJoins, explodeCompound, polygonRingHolds, rotationTie, translationTie, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, followOffsets, followRefusal, breakWithConstraints, joinLines, extendLine, breakLink, attachmentPoints, bodyDragBlocked, bodyDragFrame, fixPinnedAt, fixPinnedIds, pickDragPoint, FIXED_POINT_MSG, PROJECTED_FIXED_MSG, type ExplodeResult, type OffsetResult, type TrimResult } from "./modify";
 import { newEntityId, newConstraintId, isDimConstraint, notePatternId } from "./id";
 import { angleQuadrant, reflectAcrossLine } from "./geom2d";
 import { SketchHistory, cloneSnapshot, type SketchSnapshot } from "./history";
@@ -36,7 +36,7 @@ import { RIGID_ENTITY_NUM_FIELDS, coerceForField, dimValueFromParam, paramValueO
 import type { RegionCarry, SketchBinding } from "../document/store";
 import { composePointCarry, polygonSidesCarry, type PointCarry } from "../document/pointCarry";
 import { advanceCenterArcSweep, centerArcEntity, circumcenter } from "./arc";
-import { coincKey, compileAndSolve, constraintIndexOf, soleDimEntity, MAX_BIAS_ANCHORS } from "./sketchSolve";
+import { coincKey, compileAndSolve, constraintIndexOf, soleDimEntity, MAX_BIAS_ANCHORS, type FixPositions } from "./sketchSolve";
 import { SolverUnavailable } from "./solver";
 import { dragCluster } from "./dragCluster";
 import { p2lSideFlipped, refreshStep, refreshSteps } from "../document/projectionWalk";
@@ -382,6 +382,10 @@ export class SketchMode {
    *  reachable from headlessSolve: pick order belongs to the gesture, not to the
    *  document, so no saved sketch changes how it solves because of this. */
   private pendingBias: { moves: string[] } | null = null;
+  /** Where every `fix` held its point when the running body drag began
+   *  (sketchSolve's FixPositions): each frame's solve pins them there, and so
+   *  does the one solve its release queues, which consumes it. */
+  private fixHold: FixPositions | null = null;
   /** The select tool's selection, as selection KEYS (selection.ts): whole
    *  entities, and single points (`e3@4`) and shape sides (`e3~2`) of them
    *  (GH #17). Insertion order is pick order. Whatever acts on GEOMETRY reads
@@ -4509,6 +4513,12 @@ export class SketchMode {
           md.started = true;
           // nothing has moved yet — snapshot the pristine positions for Esc-revert
           this.dragSnapshot = JSON.parse(JSON.stringify(this.entities));
+          // ...and where each Fix holds its point. The guard above refuses a drag
+          // that would carry a pinned point; it cannot see a point the drag moves
+          // by moving what it is COMPUTED from — an arc's centre, when the drag
+          // carries the arc's end (report 57bf3762) — and the positionless
+          // solve would re-pin it wherever it landed.
+          this.fixHold = fixPinnedAt(this.entities, this.constraints);
         }
         const dx = raw.x - md.last.x, dy = raw.y - md.last.y;
         md.last.copy(raw);
@@ -4724,6 +4734,7 @@ export class SketchMode {
         this.dragFrom = null;
         this.dragClusterIds = null;
         this.moveDrag = null;
+        this.fixHold = null;
         this.pendingDrag = null;
         this.pendingPinIdxs = null;
         this.dragRelease = null;
@@ -7217,7 +7228,8 @@ export class SketchMode {
           const solveEntities = cluster && cluster.size > 0
             ? this.entities.filter((e) => cluster.has(e.id))
             : this.entities;
-          const r = await compileAndSolve(solveEntities, this.constraints, d ?? undefined, undefined, pins, this.boundShapeFields());
+          const r = await compileAndSolve(solveEntities, this.constraints, d ?? undefined, undefined, pins, this.boundShapeFields(),
+            forBody ? this.fixHold ?? undefined : undefined);
           // The gesture this result belongs to ended, was cancelled, or was
           // replaced mid-solve: drop the result (and its toast) rather than
           // apply it to a gesture that never asked for it. Asked per KIND —
@@ -7282,6 +7294,10 @@ export class SketchMode {
           // gesture that armed it).
           const bias = this.pendingBias;
           this.pendingBias = null;
+          // a body drag's release solve: the last frame may have conflicted and
+          // left the arithmetic move in place, fixed points and all
+          const fixAt = this.moveDrag ? null : this.fixHold;
+          if (fixAt) this.fixHold = null;
           if (this.constraints.length === 0) { this.lastDof = -1; this.conflict = false; continue; }
           const ver = this.entityVersion;
           // a copy, so the indices the solve reports still name the constraints
@@ -7294,14 +7310,14 @@ export class SketchMode {
           // With every chain corner joined, each segment of a chain starts a
           // solve, so two quick clicks meet one. The version check below then
           // discards this result and solves again, as it always meant to.
-          const r = await compileAndSolve([...this.entities], solved, undefined, bias ?? undefined, undefined, this.boundShapeFields());
+          const r = await compileAndSolve([...this.entities], solved, undefined, bias ?? undefined, undefined, this.boundShapeFields(), fixAt ?? undefined);
           if (!this.active) break;
           // geometry changed mid-solve (a draw committed): discard, re-solve.
           // Re-arm the bias with it — this result never reached the document, so
           // the gesture that armed it has still not had its one biased solve.
           // `??=`, not `=`: a newer gesture may have armed its own while we were
           // awaiting, and that one is the more recent intent.
-          if (this.entityVersion !== ver) { this.pendingBias ??= bias; this.solveDirty = true; continue; }
+          if (this.entityVersion !== ver) { this.pendingBias ??= bias; this.fixHold ??= fixAt; this.solveDirty = true; continue; }
           this.conflict = r.conflicts.length > 0;
           // A constraint that cannot be satisfied must not stay in the sketch.
           // Keeping it leaves the whole system unsolvable, so every LATER

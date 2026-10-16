@@ -183,6 +183,17 @@ export function soleDimEntity(c: SketchConstraint): string | null {
  *  whatever the solve made of it, and the two would fight. */
 export type BoundFields = ReadonlySet<string>;
 
+/** Where each `fix` held its point when a body drag started, by fixKey. A
+ *  `fix` stores no position, so a solve pins whatever the INPUT says; a body
+ *  drag moves the input arithmetically, and a point that is computed rather
+ *  than stored (an arc's centre, from its three points) moves with it when the
+ *  drag carries the arc's end (report 57bf3762). Handed this, the solve pins
+ *  each such point here instead, and the drag solves around it. */
+export type FixPositions = ReadonlyMap<string, { x: number; y: number }>;
+
+/** The key a `fix` is held under in FixPositions. */
+export const fixKey = (e: string, p: number): string => `${e}:${p}`;
+
 export async function compileAndSolve(
   entities: ResolvedEntity[],
   constraints: SketchConstraint[],
@@ -190,6 +201,7 @@ export async function compileAndSolve(
   bias?: { moves: string[] },
   pins?: { x: number; y: number }[],
   bound?: BoundFields,
+  fixAt?: FixPositions,
 ): Promise<SolvePass> {
   const points: SPoint[] = [];
   const pointByKey = new Map<string, string>();
@@ -853,7 +865,12 @@ export async function compileAndSolve(
     }
     else if (c.type === "fix") {
       const p = dimPoint(c.e, c.p);
-      if (p) fixedPts.add(p);
+      if (p) {
+        fixedPts.add(p);
+        const held = fixAt?.get(fixKey(c.e, c.p));
+        const pt = held && points.find((q) => q.id === p);
+        if (held && pt) { pt.x = held.x; pt.y = held.y; }
+      }
     }
     else if (c.type === "collinear") {
       if (isLine(c.l1) && isLine(c.l2)) {
