@@ -8,6 +8,7 @@ mod geom;
 // `pub` so the cross-language seam test (tests/container_seam.rs) can drive the
 // container the way `container_save` / `container_open` do. Nothing outside the
 // crate consumes it in the app itself.
+mod close_guard;
 pub mod container;
 mod printer;
 mod sidecar;
@@ -258,7 +259,16 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        // A close the webview cannot answer still finishes: see close_guard.rs.
+        .manage(close_guard::CloseGuard::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                if window.label() == "main" {
+                    close_guard::on_close_requested(window);
+                }
+            }
+        });
 
     // The Rust/OCCT geometry commands (`geom_rebuild`/`geom_export`) only exist when
     // the `rust-geom` feature is on (VITE_GEOM=rust). generate_handler! won't accept
@@ -271,6 +281,7 @@ pub fn run() {
         geom::geom_rebuild,
         geom::geom_export,
         sidecar_token,
+        close_guard::close_guard_ack,
         restart_for_update,
         updates_supported,
         frontend_ready,
@@ -312,6 +323,7 @@ pub fn run() {
     #[cfg(not(feature = "rust-geom"))]
     let builder = builder.invoke_handler(tauri::generate_handler![
         sidecar_token,
+        close_guard::close_guard_ack,
         restart_for_update,
         updates_supported,
         frontend_ready,

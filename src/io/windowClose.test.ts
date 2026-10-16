@@ -194,6 +194,39 @@ describe("Save at the close", () => {
   });
 });
 
+// The shell closes the window anyway when a close request goes unacked for a
+// few seconds (src-tauri/src/close_guard.rs), so the handler must ack first, on
+// every request: also the second X while the prompt is up, which a
+// still-asking guard otherwise swallows without a word.
+describe("the ack to the shell's watchdog", () => {
+  it("comes before anything else the handler does", async () => {
+    const store = await boot(() => void shell.log.push("beforeAsk"));
+    store.load(BOX);
+    choose.mockImplementationOnce(async () => { shell.log.push("choose"); return null; });
+    await shell.requestClose();
+    expect(shell.log.filter((c) => ["close_guard_ack", "beforeAsk", "choose"].includes(c)))
+      .toEqual(["close_guard_ack", "beforeAsk", "choose"]);
+  });
+
+  it("is sent on a clean close and on a second request during the prompt", async () => {
+    const store = await boot();
+    await shell.requestClose(); // clean
+    expect(shell.log.indexOf("close_guard_ack")).toBeLessThan(shell.log.indexOf("plugin:window|destroy"));
+    store.load(BOX);
+    let entered!: () => void;
+    const inChoose = new Promise<void>((r) => { entered = r; });
+    let answer!: (v: null) => void;
+    choose.mockImplementationOnce(() => { entered(); return new Promise((r) => { answer = r; }); });
+    shell.log.length = 0;
+    const first = shell.requestClose();
+    await inChoose;
+    await shell.requestClose(); // swallowed, but acked
+    expect(shell.log.filter((c) => c === "close_guard_ack")).toHaveLength(2);
+    answer(null);
+    await first;
+  });
+});
+
 describe("work not in the store yet", () => {
   // An open sketch is committed only by Finish. Without beforeAsk a clean
   // document with a sketch being drawn closed without asking.

@@ -10,6 +10,11 @@
 // finishes it with destroy(). That needs `core:window:allow-destroy` in
 // src-tauri/capabilities/default.json: without it no close would ever finish.
 //
+// A webview that cannot answer (stalled, or its web process crashed) would
+// then hold the window open for good, so the shell closes it anyway when a
+// request goes unacked for a few seconds (src-tauri/src/close_guard.rs). The
+// handler acks FIRST, on every request, prompt or not.
+//
 // Not covered, because nothing reaches this event: macOS Cmd+Q (the default
 // menu's Quit is a native terminate:) and a Windows session end.
 
@@ -26,10 +31,13 @@ export async function installWindowCloseGuard(
 ): Promise<void> {
   if (!("__TAURI_INTERNALS__" in window)) return;
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
+  const { invoke } = await import("@tauri-apps/api/core");
   let asking = false;
   // INVARIANT: returning from this handler without preventDefault() destroys
   // the window. Every path that must keep the app open calls it.
   await getCurrentWindow().onCloseRequested(async (e) => {
+    // Tell the shell's watchdog this webview is alive before anything else.
+    void invoke("close_guard_ack").catch((err) => console.warn("close guard ack failed:", err));
     // A second X or Alt+F4 while the prompt is up is not a second answer.
     if (asking) {
       e.preventDefault();

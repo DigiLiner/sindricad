@@ -94,6 +94,7 @@ function installFloor({ token, permissions }) {
           floor.destroyed = "destroy";
           return null;
         case "plugin:window|is_maximized": return false;
+        case "close_guard_ack": return null; // the shell's watchdog (close_guard.rs), not modelled
         case "recovery_list": return [...floor.slots.keys()].map((s) => [s, 1]);
         case "recovery_read": return floor.slots.get(args.slot) ?? null;
         case "recovery_write": floor.slots.set(args.slot, args.json); return null;
