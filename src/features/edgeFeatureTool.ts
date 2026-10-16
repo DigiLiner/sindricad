@@ -214,13 +214,17 @@ export class EdgeFeatureTool {
     window.addEventListener("keydown", this.boundKey, true);
     this.prompt(t("feature.rollingBack"));
 
-    // Roll the model to just before the feature; the NEXT completed build shows
-    // the sharp member edges, which we snapshot as ghosts before pushing the
-    // live preview back on top of them.
+    // Roll the model to just before the feature; the roll-back build shows the
+    // sharp member edges, which we snapshot as ghosts before pushing the live
+    // preview back on top of them. A build already in flight when the edit
+    // opens settles FIRST, with the older document (the feature still in it),
+    // so the roll-back is told apart by its epoch, read before it is asked for.
+    const from = this.store.buildEpoch;
     this.store.beginEditPreview(featureId);
     this.unsubBuild = this.store.onBuild((s) => {
       if (s.building || !s.result) return;
       if (this.awaitingRollback) {
+        if (this.store.buildEpoch === from) return;
         this.awaitingRollback = false;
         this.snapshotInput(); // the rolled-back model: the edges before this feature
         this.seedGhosts(sels);

@@ -398,7 +398,13 @@ export class DocumentStore {
   private rebuildQueued = false; // a newer rebuild was requested while one was in flight
   /** Bumped on every rebuild start. Chunk installments carry it so a late one
    *  from an abandoned reply can be recognised and dropped. */
-  private buildEpoch = 0;
+  private epoch = 0;
+  /** The epoch of the latest rebuild to START. Read before asking for a
+   *  rebuild, it tells that rebuild's settle apart from the settle of one
+   *  already in flight, which builds the older document (addFeatureAndBuild). */
+  get buildEpoch(): number {
+    return this.epoch;
+  }
   private chunkListeners = new Set<(c: BuildChunk) => void>();
   private abortListeners = new Set<(epoch: number) => void>();
   private replaceListeners = new Set<(how: "new" | "load") => void>();
@@ -2400,7 +2406,7 @@ export class DocumentStore {
    *  build's label. */
   private emitBuildStarted() {
     // A new rebuild invalidates any stream still in flight for the old one.
-    this.buildEpoch++;
+    this.epoch++;
     this.build = {
       ...this.build, building: true,
       progress: null, meshed: null, meshTotal: null, streamed: null, streamTotal: null,

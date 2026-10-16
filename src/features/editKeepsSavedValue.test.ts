@@ -137,6 +137,7 @@ describe("re-opening a fillet and pressing Enter", () => {
   function open(radius: number) {
     const written: Feature[] = [];
     let onBuild: ((s: unknown) => void) | null = null;
+    let epoch = 0;
     const store = {
       document: {
         features: [{ id: "f1", type: "fillet", edges: { kind: "edge", point: [10, 0, 5] }, radius }],
@@ -145,7 +146,9 @@ describe("re-opening a fillet and pressing Enter", () => {
       isParamBound: () => false,
       buildState: { result: null },
       nextId: () => "prev1",
-      beginEditPreview() {},
+      // the real store starts the roll-back build inside this call
+      get buildEpoch() { return epoch; },
+      beginEditPreview() { epoch++; },
       endEditPreview() {},
       setEditPreview() {},
       replaceFeature: (_id: string, f: Feature) => written.push(f),

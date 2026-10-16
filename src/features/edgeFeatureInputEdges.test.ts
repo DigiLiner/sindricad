@@ -94,13 +94,16 @@ function harness(c: Case, edit = false) {
     radius: 1,
   } as Feature;
   let onBuild: ((s: unknown) => void) | null = null;
+  let epoch = 0;
   const store = {
     document: { features: edit ? [committed] : [], parameters: [] },
     buildState: { result: null },
     nextId: () => "prev1",
     isParamBound: () => false,
     setPreview: show,
-    beginEditPreview() {},
+    // the real store starts the roll-back build inside this call
+    get buildEpoch() { return epoch; },
+    beginEditPreview() { epoch++; },
     setEditPreview: show,
     onBuild: (fn: (s: unknown) => void) => {
       onBuild = fn;
