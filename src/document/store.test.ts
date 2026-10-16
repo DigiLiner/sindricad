@@ -227,3 +227,42 @@ describe("inspector numeric edit leaves an extrude's region anchors alone", () =
     }
   });
 });
+
+// The marker position is written to the file (toObject's `rollback`), so moving
+// it is an unsaved change like toggling a suppress. It never marked the document
+// dirty: no dot in the titlebar, and Close, Open and the window's close let a
+// marker-only change go without asking.
+describe("moving the rollback marker", () => {
+  let store: DocumentStore;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new DocumentStore(stubBackend([]), doc());
+    store.markSaved("/tmp/part.sindri"); // freshly opened == clean
+  });
+  afterEach(() => void vi.useRealTimers());
+
+  it("is an unsaved change, and the saved file carries it", () => {
+    store.setRollback(2);
+    expect(store.dirty).toBe(true);
+    expect(store.toObject().rollback).toBe(2);
+  });
+
+  it("rolling all the way forward again is a change too", () => {
+    store.load(JSON.stringify({ ...doc(), rollback: 2 }));
+    store.markSaved("/tmp/part.sindri");
+    store.setRollback(4);
+    expect(store.dirty).toBe(true);
+    expect(store.toObject().rollback).toBeUndefined();
+  });
+
+  // The transport's buttons and the drag can land on the gap the marker is
+  // already in; a no-op is not an edit.
+  it("leaves the document clean when the marker does not move", () => {
+    store.setRollback(4); // already at the end
+    expect(store.dirty).toBe(false);
+    store.load(JSON.stringify({ ...doc(), rollback: 2 }));
+    store.markSaved("/tmp/part.sindri");
+    store.setRollback(2);
+    expect(store.dirty).toBe(false);
+  });
+});

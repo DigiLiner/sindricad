@@ -1861,7 +1861,12 @@ export class DocumentStore {
   /** roll the model back/forward to build only the first `i` features. */
   setRollback(i: number) {
     const n = this.doc.features.length;
-    this.rollback = i >= n ? null : Math.max(0, i);
+    const next = i >= n ? null : Math.max(0, i);
+    // the marker is saved in the file (toObject), so a move is an unsaved change
+    if (next !== this.rollback) {
+      this.rollback = next;
+      this.markDirty();
+    }
     this.emitDoc();
     this.scheduleRebuild(true);
   }
