@@ -455,6 +455,32 @@ export function bodyOfFace(view: ModelView, faceId: number): BodyMesh | undefine
   return faceId < b.faceStart + b.faceCount ? b : undefined;
 }
 
+/** Whether a body from the previous reply can be kept as it is: the sidecar's
+ *  etag says its geometry is unchanged. The face count is checked as well
+ *  because rebaseBodyFaces below can only move a body's face range, not resize
+ *  it. */
+export function canReuseBody(prev: BodyMesh, meta: { etag?: string | undefined; faceCount: number }): boolean {
+  return meta.etag !== undefined && prev.etag === meta.etag && prev.faceCount === meta.faceCount;
+}
+
+/** Move a REUSED body onto this reply's face numbering. Global face ids are
+ *  handed out by position on every reply (assembly.ts), so when an earlier body
+ *  gains or loses faces (a fillet, a split face) every later body's range
+ *  shifts while its etag, and so its mesh, stays the same. Left on the old
+ *  range, bodyOfFace resolved the changed body's last faces to the NEXT body:
+ *  hover, select and body colour all landed on the wrong body (report
+ *  d04febe3). Only the id bookkeeping moves; the GPU buffers do not carry ids. */
+export function rebaseBodyFaces(body: BodyMesh, faceStart: number) {
+  const delta = faceStart - body.faceStart;
+  if (delta === 0) return;
+  const ids = body.faceIds;
+  for (let t = 0; t < ids.length; t++) ids[t] = ids[t]! + delta;
+  const faceTriangles = new Map<number, number[]>();
+  for (const [fid, tris] of body.faceTriangles) faceTriangles.set(fid + delta, tris);
+  body.faceTriangles = faceTriangles;
+  body.faceStart = faceStart;
+}
+
 /** Reset a REUSED body's transient per-model display state (clip plane, dimmed
  *  opacity, emphasized/hovered/selected edge styling) back to build-time
  *  defaults — i.e. make it look exactly like a freshly built body would. A

@@ -13,6 +13,7 @@ import {
 } from "./cameras";
 import {
   buildBodyMesh,
+  canReuseBody,
   buildEdgeLines,
   bodyOfFace,
   disposeBody,
@@ -22,6 +23,7 @@ import {
   edgeObjects,
   groupEdgesByBody,
   partitionMesh,
+  rebaseBodyFaces,
   resetBodyAppearance,
   setEdgeResolution,
   visibleBodyMeshes,
@@ -1478,7 +1480,7 @@ export class Viewport {
     const rebuilding = new Set<string>();
     for (const meta of bodyMeta) {
       const prev = prevBodies.get(meta.id);
-      if (!(prev && meta.etag !== undefined && prev.etag === meta.etag)) rebuilding.add(meta.id);
+      if (!(prev && canReuseBody(prev, meta))) rebuilding.add(meta.id);
     }
     // One shared partition of the reply's triangles, so the build below is O(model)
     // instead of O(bodies x model) — the difference between 2s and 38s on an
@@ -1491,10 +1493,11 @@ export class Viewport {
       const prev = prevBodies.get(meta.id);
       prevBodies.delete(meta.id);
       let body: BodyMesh;
-      if (prev && meta.etag !== undefined && prev.etag === meta.etag) {
+      if (prev && canReuseBody(prev, meta)) {
         // unchanged since the last reply — keep its GPU objects untouched, just
         // reset the transient display state a rebuild used to wipe for free.
         body = prev;
+        rebaseBodyFaces(body, meta.faceStart);
         resetBodyAppearance(body);
       } else {
         body = buildBodyMesh(result, meta, byBody.get(meta.id) ?? [], this.resolution, meta.etag, partition);

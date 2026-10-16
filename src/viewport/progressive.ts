@@ -14,7 +14,7 @@
 // Nothing here can produce a model the commit would not have produced anyway.
 
 import * as THREE from "three";
-import { buildBodyMesh, partitionMesh, resetBodyAppearance } from "./render";
+import { buildBodyMesh, canReuseBody, partitionMesh, rebaseBodyFaces, resetBodyAppearance } from "./render";
 import type { BodyMesh, MeshPartition, ModelView } from "./render";
 import type { EdgeRef } from "./edgeLines";
 import type { RebuildResult } from "../types";
@@ -76,8 +76,9 @@ export class ProgressiveModel {
       const p = keptById.get(m.id);
       if (!p) continue;
       keptById.delete(m.id);
-      if (m.etag !== undefined && p.etag === m.etag) {
+      if (canReuseBody(p, m)) {
         // unchanged: keep its GPU objects untouched. It never blinks.
+        rebaseBodyFaces(p, m.faceStart);
         resetBodyAppearance(p);
         p.mesh.visible = !hidden.has(m.id);
         p.edges.setBodyVisible(p.mesh.visible);
