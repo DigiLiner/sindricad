@@ -851,7 +851,7 @@ mod tests {
     fn user_path_redaction() {
         // Windows drive + the exact field-log shape
         assert_eq!(
-            redact_user_paths(r"spawn: C:\Users\jrabi\AppData\Local\SindriCAD\python.exe"),
+            redact_user_paths(r"spawn: C:\Users\alice\AppData\Local\SindriCAD\python.exe"),
             r"spawn: C:\Users\[REDACTED]\AppData\Local\SindriCAD\python.exe"
         );
         // UNC form
@@ -879,14 +879,14 @@ mod tests {
             // The spawn line as 0.1.248 and earlier wrote it: Debug formatting
             // doubles every backslash. Logs in this shape are already on disk.
             (
-                r#"spawn: "C:\\Users\\jrabi\\AppData\\python.exe" "server.py" (cwd "C:\\Users\\jrabi\\app")"#,
+                r#"spawn: "C:\\Users\\alice\\AppData\\python.exe" "server.py" (cwd "C:\\Users\\alice\\app")"#,
                 r#"spawn: "C:\\Users\\[REDACTED]\\AppData\\python.exe" "server.py" (cwd "C:\\Users\\[REDACTED]\\app")"#,
             ),
             // Escaped UNC form
             (r"\\\\HOST\\Users\\someone\\share", r"\\\\HOST\\Users\\[REDACTED]\\share"),
             // Windows with forward slashes, and mixed separators
             (
-                "C:/Users/name/x and C:\\Users/other\\y",
+                "C:/Users/alice/x and C:\\Users/bob\\y",
                 "C:/Users/[REDACTED]/x and C:\\Users/[REDACTED]\\y",
             ),
             // A profile folder with a space must not leak its second word
