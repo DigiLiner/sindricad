@@ -150,3 +150,24 @@ export function byClass(root: FakeEl, cls: string): FakeEl[] {
   walk(root);
   return out;
 }
+
+/** Node has EventTarget and Event but no window, PointerEvent or WheelEvent.
+ *  This supplies the three, so a component that RE-DISPATCHES a pointer or
+ *  wheel event (the sketch badges hand camera gestures on to the canvas) or
+ *  listens on `window` for a release can run. The event classes copy every
+ *  field of their init the way the browser's do from a real event, which is
+ *  what `new PointerEvent(e.type, e)` relies on. Idempotent. */
+export function installFakeEvents(): void {
+  const g = globalThis as unknown as Record<string, unknown>;
+  if (!g.window) g.window = new EventTarget();
+  class FieldEvent extends Event {
+    constructor(type: string, init: Record<string, unknown> = {}) {
+      super(type, { bubbles: !!init.bubbles, cancelable: !!init.cancelable });
+      for (const [k, v] of Object.entries(init)) {
+        if (typeof v !== "function" && !(k in Event.prototype)) Object.defineProperty(this, k, { value: v });
+      }
+    }
+  }
+  g.PointerEvent ??= class PointerEvent extends FieldEvent {};
+  g.WheelEvent ??= class WheelEvent extends FieldEvent {};
+}

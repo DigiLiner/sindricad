@@ -9,6 +9,7 @@ import * as THREE from "three";
 import type { Viewport } from "../viewport/viewport";
 import { camHash } from "../viewport/camHash";
 import { overlayHost, outsideRect } from "../viewport/overlayHost";
+import { BadgeRightPress, forwardPress, forwardWheel } from "./badgeNav";
 import type { SketchPlane } from "./plane";
 import { diagnosisOf, type ConstraintGlyph } from "./glyphs";
 
@@ -85,6 +86,8 @@ export class SketchGlyphs {
    *  (measured in Chromium — a dblclick on an overlapping glyph deleted
    *  nothing). This state lives on the instance, which outlives the elements. */
   private lastPress = { t: 0, x: 0, y: 0, cIndex: -1 };
+  /** Right click (this badge's menu) versus right drag (pan), see badgeNav. */
+  private rightPress = new BadgeRightPress();
   private static readonly DBL_MS = 500;
   private static readonly DBL_PX = 5;
   /** How far apart two badges on one spot are drawn: a badge is 16 px across
@@ -108,6 +111,7 @@ export class SketchGlyphs {
   constructor(private viewport: Viewport) {
     this.root = document.createElement("div");
     this.root.className = "sketch-glyphs";
+    this.root.addEventListener("wheel", (e) => forwardWheel(e, this.viewport.domElement), { passive: false });
     overlayHost().appendChild(this.root);
   }
 
@@ -138,8 +142,14 @@ export class SketchGlyphs {
         // Primary button only, the same guard the dimension badges carry: a
         // secondary press must leave this element alive (and the selection
         // alone) for the contextmenu handler below, and onOverlapPick rebuilds
-        // the whole layer when geometry claims the pick.
-        if (e.button !== 0) return;
+        // the whole layer when geometry claims the pick. Like a dimension's,
+        // a middle or right press goes on to the canvas to orbit or pan
+        // (9dec2462), and a right CLICK still opens the menu (rightPress).
+        if (e.button !== 0) {
+          if (e.button === 2) this.rightPress.begin(e);
+          if (e.button === 1 || e.button === 2) forwardPress(e, this.viewport.domElement);
+          return;
+        }
         // Escape hatch, and literally what the 59c5a7d7 reporter tried: a badge
         // sitting on its own operand loses every SINGLE click to the geometry
         // underneath, so a double-click deletes regardless of who won the
@@ -166,7 +176,7 @@ export class SketchGlyphs {
       el.addEventListener("contextmenu", (e) => {
         e.preventDefault();
         e.stopPropagation();
-        this.onMenu?.(e, g.cIndex);
+        this.rightPress.menu(() => this.onMenu?.(e, g.cIndex));
       });
       this.root.appendChild(el);
       this.items.push({ el, pos: g.pos, cIndex: g.cIndex, label: g.label, ...(g.linePts ? { linePts: g.linePts } : {}) });

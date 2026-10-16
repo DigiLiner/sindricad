@@ -13,6 +13,7 @@ import * as THREE from "three";
 import type { Viewport } from "../viewport/viewport";
 import { camHash } from "../viewport/camHash";
 import { overlayHost, outsideRect, clampIntoRect } from "../viewport/overlayHost";
+import { BadgeRightPress, forwardPress, forwardWheel } from "./badgeNav";
 import type { SketchPlane } from "./plane";
 import type { ResolvedEntity } from "./snap";
 import { entityDims, staggeredDefaults, type DimField, type ConstraintDim, type EntityDim } from "./entityDims";
@@ -231,6 +232,8 @@ export class SketchDimensions {
    *  the instance, not on a label, precisely because the label object does not
    *  survive that rebuild. See src/input/doublePress.ts. */
   private lastPress: PressRecord = null;
+  /** Right click (this badge's menu) versus right drag (pan), see badgeNav. */
+  private rightPress = new BadgeRightPress();
   private isDoublePress(e: PointerEvent): boolean {
     const { next, double } = stepDoublePress(this.lastPress, e);
     this.lastPress = next;
@@ -248,6 +251,7 @@ export class SketchDimensions {
   ) {
     this.root = document.createElement("div");
     this.root.className = "sketch-dims";
+    this.root.addEventListener("wheel", (e) => forwardWheel(e, this.viewport.domElement), { passive: false });
     overlayHost().appendChild(this.root);
   }
 
@@ -360,8 +364,14 @@ export class SketchDimensions {
       // two-entity selection before its constraint menu was ever built, and
       // rebuilt the badge out from under its own contextmenu handler. A
       // secondary press selects nothing, starts no drag, and leaves this
-      // element alive for the contextmenu below; middle-drag stays camera pan.
-      if (e.button !== 0) return;
+      // element alive for the contextmenu below. It goes on to the canvas
+      // instead, so a middle or right drag that starts here orbits or pans
+      // (9dec2462); a right CLICK still opens this badge's menu (rightPress).
+      if (e.button !== 0) {
+        if (e.button === 2) this.rightPress.begin(e);
+        if (e.button === 1 || e.button === 2) forwardPress(e, this.viewport.domElement);
+        return;
+      }
       this.suppressClick = false;
       // The escape hatch, made real: the SECOND press of a double-press edits,
       // whoever won the first. Without it a badge that sits on its own geometry
@@ -410,12 +420,14 @@ export class SketchDimensions {
     el.addEventListener("contextmenu", (e) => {
       e.preventDefault();
       e.stopPropagation();
-      this.selectLabel(label);
-      this.onLabelMenu?.(e, {
-        del: label.onDelete ? () => label.onDelete!() : null,
-        lock: label.onLock ? () => label.onLock!() : null,
-        unlock: label.onUnlock ? () => label.onUnlock!() : null,
-        flipSide: label.onFlipSide ? () => label.onFlipSide!() : null,
+      this.rightPress.menu(() => {
+        this.selectLabel(label);
+        this.onLabelMenu?.(e, {
+          del: label.onDelete ? () => label.onDelete!() : null,
+          lock: label.onLock ? () => label.onLock!() : null,
+          unlock: label.onUnlock ? () => label.onUnlock!() : null,
+          flipSide: label.onFlipSide ? () => label.onFlipSide!() : null,
+        });
       });
     });
     if (d.driven) {

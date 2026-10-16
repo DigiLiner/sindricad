@@ -11,7 +11,7 @@
 // did the badge get marked selected — not that a guard exists in the source.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import * as THREE from "three";
-import { FakeEl, byClass, installFakeDocument } from "../ui/fakeDom.testkit";
+import { FakeEl, byClass, installFakeDocument, installFakeEvents } from "../ui/fakeDom.testkit";
 import { SketchDimensions, dimBadgeFields } from "./sketchDimensions";
 import { constraintDims } from "./entityDims";
 import type { ResolvedEntity } from "./snap";
@@ -19,6 +19,7 @@ import type { Viewport } from "../viewport/viewport";
 import type { SketchPlane } from "./plane";
 
 installFakeDocument();
+installFakeEvents();
 // the badge reposition loop rides on rAF, which node has no notion of; the stub
 // returns a handle and never re-enters, so show() runs exactly one pass
 vi.stubGlobal("requestAnimationFrame", () => 1);
@@ -28,6 +29,7 @@ const viewport = {
   camera: new THREE.PerspectiveCamera(),
   projectToScreen: () => ({ x: 0, y: 0 }),
   projectToOverlay: () => ({ x: 0, y: 0, width: 900, height: 700 }),
+  domElement: new EventTarget(), // the canvas a middle/right press is handed on to
 } as unknown as Viewport;
 
 const plane = {
@@ -98,6 +100,7 @@ describe("dimension badge: which mouse button acts", () => {
     dims.onLabelMenu = menu;
     badge.dispatch("pointerdown", press(2));
     badge.dispatch("contextmenu", { preventDefault: () => {}, stopPropagation: () => {} });
+    window.dispatchEvent(new PointerEvent("pointerup")); // WebKit: the menu waits for the release
     expect(menu).toHaveBeenCalledTimes(1);
     expect(byClass(body(), "sketch-dim")).toHaveLength(1);
   });

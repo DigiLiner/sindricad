@@ -18,7 +18,7 @@ vi.mock("@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm?url", () => ({
   default: process.cwd() + "/node_modules/@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm",
 }));
 
-import { FakeEl, byClass, installFakeDocument } from "../ui/fakeDom.testkit";
+import { FakeEl, byClass, installFakeDocument, installFakeEvents } from "../ui/fakeDom.testkit";
 import { SketchGlyphs } from "./sketchGlyphs";
 import { constraintGlyphs } from "./glyphs";
 import { pickEntity } from "./modify";
@@ -30,6 +30,7 @@ import type { Viewport } from "../viewport/viewport";
 import type { SketchPlane } from "./plane";
 
 installFakeDocument();
+installFakeEvents();
 vi.stubGlobal("requestAnimationFrame", () => 1);
 vi.stubGlobal("cancelAnimationFrame", () => {});
 
@@ -37,6 +38,7 @@ const viewport = {
   camera: new THREE.PerspectiveCamera(),
   projectToScreen: () => ({ x: 0, y: 0 }),
   projectToOverlay: () => ({ x: 0, y: 0, width: 900, height: 700 }),
+  domElement: new EventTarget(), // the canvas a right press is handed on to
 } as unknown as Viewport;
 const plane = {
   to3D: (x: number, y: number, out = new THREE.Vector3()) => out.set(x, y, 0),
@@ -86,6 +88,10 @@ const evt = (at: THREE.Vector2, button = 0, client = { x: 0, y: 0 }) => ({
   preventDefault: () => {},
 });
 
+/** The right button coming back up. WebKit fires contextmenu while it is still
+ *  down, and the badge's menu waits for this release (a drag pans instead). */
+const release = () => window.dispatchEvent(new PointerEvent("pointerup"));
+
 describe("report 59c5a7d7: a parallel glyph on its own line", () => {
   // the reporter's own geometry, lifted from his attached document: two lines
   // each held parallel to a rectangle EDGE, plus a point-to-line dimension.
@@ -128,6 +134,7 @@ describe("report 59c5a7d7: a parallel glyph on its own line", () => {
     const badge = m.badges()[0]!;
     badge.dispatch("pointerdown", evt(g.pos, 2));
     badge.dispatch("contextmenu", evt(g.pos, 2));
+    release();
     expect(cons.some((c) => c.type === "parallel" && c.l1 === "e5")).toBe(false);
     expect(cons).toHaveLength(2);
   });
@@ -203,6 +210,7 @@ describe("the solver stops enforcing a deleted constraint", () => {
     const badge = m.badges()[0]!;
     badge.dispatch("pointerdown", evt(g.pos, 2));
     badge.dispatch("contextmenu", evt(g.pos, 2));
+    release();
     expect(cons).toHaveLength(0);
 
     const free = await compileAndSolve(seed(), cons);
@@ -247,6 +255,7 @@ describe("every geometric constraint is deletable with geometry under its badge"
     const badge = m.badges()[0]!;
     badge.dispatch("pointerdown", evt(g!.pos, 2));
     badge.dispatch("contextmenu", evt(g!.pos, 2));
+    release();
     expect(cons).toHaveLength(0);
   });
 });
