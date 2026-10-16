@@ -716,23 +716,46 @@ function roundTouchPoints(pi: EntSegs, pj: EntSegs): THREE.Vector2[] {
   return [];
 }
 
+/** Signed angle from `from` to `to`, normalised to (-PI, PI]. */
+const signedDelta = (from: number, to: number) => {
+  const d = ccwDelta(from, to);
+  return d > Math.PI ? d - TAU : d;
+};
+
 /** Does point p (on pi's true curve) belong on THIS tessellated chord of pi,
  *  rather than a neighbour? For a round entity, by angle about its centre — p
  *  need not lie ON the chord's line at all; it sits outside the inscribed
  *  polygon by the tessellation's sagitta, which is the entire reason it was
- *  missed. For anything else, the ordinary segment parameter. */
+ *  missed. The test uses the chord's own short signed span, so it holds
+ *  whichever way the chords run: a mirrored arc's run CLOCKWISE, and a CCW-only
+ *  test read each of them as spanning nearly the whole turn, cutting every
+ *  chord toward the touch point (field 50429b0d, mirrored pocket).
+ *
+ *  For anything else (a rectangle's edge, a polygon's side, a spline chord), p
+ *  must lie ON this segment: inside its span AND within a hair of its line.
+ *  The span alone is not enough — a touch on a rectangle's left edge projects
+ *  inside the top, bottom and right edges too, and cutting those toward it
+ *  zig-zags the loop back to the point, so the traced loop self-intersects
+ *  and its fill fans out from there (field f40b90ca: a 3 mm² cell filled
+ *  1813 mm²). The analytic point was computed on the segment that produced it
+ *  (roundSegIntersect), so it sits on that line to float noise; touchTol's
+ *  length-scaled slack accepts it there and rejects every other edge. */
 function onThisChord(pi: EntSegs, a: Seg, p: THREE.Vector2): boolean {
   if (pi.round) {
     const c = pi.round.c;
     const a0 = Math.atan2(a.y1 - c.y, a.x1 - c.x);
-    const a1 = Math.atan2(a.y2 - c.y, a.x2 - c.x);
-    const ap = ccwDelta(a0, Math.atan2(p.y - c.y, p.x - c.x));
-    return ap <= ccwDelta(a0, a1) + 1e-9;
+    const span = signedDelta(a0, Math.atan2(a.y2 - c.y, a.x2 - c.x));
+    const ap = signedDelta(a0, Math.atan2(p.y - c.y, p.x - c.x));
+    return span >= 0 ? ap >= -1e-9 && ap <= span + 1e-9 : ap <= 1e-9 && ap >= span - 1e-9;
   }
   const rx = a.x2 - a.x1, ry = a.y2 - a.y1;
-  const len2 = rx * rx + ry * ry || 1;
+  const len2 = rx * rx + ry * ry;
+  if (len2 < 1e-18) return false;
   const t = ((p.x - a.x1) * rx + (p.y - a.y1) * ry) / len2;
-  return t > -1e-6 && t < 1 + 1e-6;
+  if (t <= -1e-6 || t >= 1 + 1e-6) return false;
+  const len = Math.sqrt(len2);
+  const off = Math.abs((p.x - a.x1) * ry - (p.y - a.y1) * rx) / len; // distance from the line
+  return off <= touchTol(len);
 }
 
 /** Do any two entities' curves meet at a point that isn't a shared endpoint —
