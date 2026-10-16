@@ -1739,6 +1739,19 @@ def _import_job(path, fmt):
         return _error_from(ex)
 
 
+def _import_raw_job(path, fmt):
+    """Worker: the one retry after `_import_job` took the WHOLE WORKER down on
+    a STEP file. Reads it again as B-rep without the optional surface
+    simplification pass, the step that crashed OCCT on swept faces (row
+    1bd80dc2). The scan retry below is no use here: it reads meshes only."""
+    from builder import import_geometry
+
+    try:
+        return import_geometry(path, fmt, canonicalize=False)
+    except Exception as ex:
+        return _error_from(ex)
+
+
 def _import_as_scan_job(path, fmt):
     """Worker: the one retry after `_import_job` took the WHOLE WORKER down
     (see `_is_worker_crash` / the 'import' op in handle()). Skips the solid
@@ -3587,7 +3600,28 @@ async def _dispatch(ws, loop, req, req_id, op):
             loop, _import_job, req["path"], req["format"],
             stall=budget, on_progress=_importing,
         )
-        if _is_worker_crash(res):
+        fmt = (req.get("format") or "").lower()
+        if _is_worker_crash(res) and fmt in ("step", "stp"):
+            # A STEP cannot be read as a scan, so the mesh retry below only ever
+            # turned a crash into a false "too heavy" (row 1bd80dc2). Retry ONCE
+            # as B-rep without surface simplification, the optional pass that
+            # crashed; _on_broken already respawned the pool.
+            _ph["i"], _ph["t"] = -1, loop.time()
+            res = await _run_stall(
+                loop, _import_raw_job, req["path"], req["format"],
+                stall=budget, on_progress=_importing,
+            )
+            if _is_worker_crash(res):
+                res["error"]["message"] = (
+                    "the geometry kernel crashed while reading this file, even "
+                    "with surface simplification turned off"
+                )
+        elif _is_worker_crash(res) and fmt == "brep":
+            # A .brep is never simplified, so a retry would repeat the crash.
+            res["error"]["message"] = (
+                "the geometry kernel crashed while reading this file"
+            )
+        elif _is_worker_crash(res):
             # Field TA f70e9cf7: a scan STL took the worker down mid-solid-build
             # with no Python exception to catch (native OCCT crash), and the
             # generic reply named no file and offered no way forward. _on_broken

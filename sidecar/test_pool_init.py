@@ -219,6 +219,113 @@ def test_the_warmup_exercises_geometry_not_just_the_import():
     print("ok  the warm-up builds and checks real geometry")
 
 
+# --- the 'import' op's one retry after a worker death, at the REPLY level: a
+# stubbed _run_stall reports a crash for the first `crashes` jobs and RUNS every
+# later job in-process, so the test sees what the user would be told.
+
+class _FakeWs:
+    def __init__(self):
+        self.frames = []
+
+    async def send(self, s):
+        import json
+        self.frames.append(json.loads(s))
+
+
+def _import_reply(path, fmt, crashes):
+    import builder
+
+    calls, canonicalised = [], []
+    real_run_stall, real_canon = server._run_stall, builder._canonicalize
+
+    async def fake_run_stall(loop, fn, *args, stall=None, on_progress=None):
+        calls.append(fn.__name__)
+        if len(calls) <= crashes:
+            return {"error": {"message": "the geometry kernel crashed on this operation"}}
+        return fn(*args)
+
+    def spy(shape, tol=1e-3):
+        canonicalised.append(calls[-1])
+        return real_canon(shape, tol)
+
+    server._run_stall, builder._canonicalize = fake_run_stall, spy
+    try:
+        ws = _FakeWs()
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(server._dispatch(
+                ws, loop, {"id": "r1", "op": "import", "path": path, "format": fmt},
+                "r1", "import"))
+        finally:
+            loop.close()
+    finally:
+        server._run_stall, builder._canonicalize = real_run_stall, real_canon
+    return calls, canonicalised, ws.frames[-1]
+
+
+def _box_file(fmt):
+    import os
+    import tempfile
+
+    from build123d import Box
+
+    path = os.path.join(tempfile.mkdtemp(), f"box.{fmt}")
+    if fmt == "stl":
+        from mesh_writers import write_stl
+        from tessellate import tessellate
+        positions, indices, _ids = tessellate(Box(10, 10, 10), tolerance=0.1)
+        write_stl(positions, indices, path)
+    elif fmt == "brep":
+        from build123d import export_brep
+        export_brep(Box(10, 10, 10), path)
+    else:
+        import exporters
+        exporters.export(Box(10, 10, 10), fmt, path)
+    return path
+
+
+def test_a_step_import_that_crashed_the_worker_is_retried_as_b_rep():
+    """Row 1bd80dc2: a STEP whose import killed the worker was retried on the
+    MESH scan path, which cannot read STEP at all, and the user was told the
+    small file was 'too heavy'. The retry must read it again as B-rep with the
+    optional surface simplification (the step that crashed) turned off."""
+    calls, canonicalised, frame = _import_reply(_box_file("step"), "step", crashes=1)
+    assert calls == ["_import_job", "_import_raw_job"], calls
+    assert frame["ok"] is True, frame
+    assert (frame["result"]["faces"], frame["result"]["solid"]) == (6, True), frame
+    assert "meshOnly" not in frame["result"], "a STEP must come back as B-rep"
+    assert canonicalised == [], f"the retry still simplified surfaces: {canonicalised}"
+    print("ok  a STEP import after a worker crash is retried as raw B-rep")
+
+
+def test_a_step_import_that_crashes_twice_says_what_happened():
+    calls, _c, frame = _import_reply(_box_file("step"), "step", crashes=2)
+    assert calls == ["_import_job", "_import_raw_job"], calls
+    msg = frame["error"]["message"]
+    assert frame["ok"] is False and "even with surface simplification turned off" in msg, frame
+    assert "too heavy" not in msg and "reference scan" not in msg, msg
+    print("ok  a STEP that crashes twice is not called 'too heavy'")
+
+
+def test_a_brep_import_crash_is_not_retried_or_called_too_heavy():
+    """A .brep is never simplified, so a retry would only repeat the crash."""
+    calls, _c, frame = _import_reply(_box_file("brep"), "brep", crashes=1)
+    assert calls == ["_import_job"], calls
+    msg = frame["error"]["message"]
+    assert frame["ok"] is False and "crashed while reading this file" in msg, frame
+    assert "too heavy" not in msg, msg
+    print("ok  a BREP crash is reported as a crash, once")
+
+
+def test_a_mesh_import_crash_still_degrades_to_a_reference_scan():
+    """Guards the mesh branch against the STEP change: field TA f70e9cf7."""
+    calls, _c, frame = _import_reply(_box_file("stl"), "stl", crashes=1)
+    assert calls == ["_import_job", "_import_as_scan_job"], calls
+    assert frame["ok"] is True and frame["result"]["meshOnly"] is True, frame
+    assert frame["result"]["reference"]["why"] == "workerCrashed", frame["result"]["reference"]
+    print("ok  an STL crash still lands as a reference scan")
+
+
 if __name__ == "__main__":
     server._mp_ctx = mp.get_context("spawn")
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

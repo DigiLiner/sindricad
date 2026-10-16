@@ -4877,7 +4877,7 @@ def _read_glb(path):
     return wrapped
 
 
-def _assembly_payload(asm):
+def _assembly_payload(asm, canonicalize=True):
     """Turn a read STEP assembly into the flat blob shape plus its manifest.
 
     The blob's top-level children ARE the leaf occurrences, in order, already
@@ -4898,7 +4898,9 @@ def _assembly_payload(asm):
         leaf = _wrap_topods(topods)
         if leaf is None:
             continue
-        if leaf.solids():
+        if not canonicalize:
+            pass
+        elif leaf.solids():
             leaf = _canonicalize(leaf)
         else:
             # A solid-less product (a bare face or shell) fails gate 1 —
@@ -5104,10 +5106,14 @@ def import_as_reference_scan(path, fmt):
     return _import_mesh_reference(path, fmt, why="workerCrashed")
 
 
-def import_geometry(path, fmt):
+def import_geometry(path, fmt, canonicalize=True):
     """Read an external geometry file and return the document payload for an
     `import` feature: {brep, solid, faces, name}. STL/3MF/OBJ are read as a
-    (watertight) mesh solid; STEP/BREP come in as native B-rep."""
+    (watertight) mesh solid; STEP/BREP come in as native B-rep.
+
+    `canonicalize=False` skips the STEP surface-simplification pass. It is
+    optional cleanup, so the server's retry after a worker died mid-import
+    (`_import_raw_job`) reads the file once more without it."""
     fmt = (fmt or "").lower()
     try:
         size = os.path.getsize(path)
@@ -5144,7 +5150,7 @@ def import_geometry(path, fmt):
         asm = step_assembly.read_assembly(path)
         _import_phase(IMPORT_PHASE_CANONICALIZE)
         if asm.is_assembly:
-            shape, nodes, parts = _assembly_payload(asm)
+            shape, nodes, parts = _assembly_payload(asm, canonicalize)
             manifest = {"nodes": nodes, "parts": parts}
         else:
             # An ordinary part file stays on the historical path: ONE shape,
@@ -5153,7 +5159,11 @@ def import_geometry(path, fmt):
             #
             # snap near-analytic spline faces to true planes/cylinders/… ONCE at
             # import, so the canonical form is baked into the embedded BREP.
-            if len(asm.roots) == 1:
+            if not canonicalize:
+                roots = [_wrap_topods(r) for r in asm.roots]
+                roots = [w for w in roots if w is not None]
+                shape = roots[0] if len(roots) == 1 else Compound(children=roots)
+            elif len(asm.roots) == 1:
                 shape = _canonicalize(_wrap_topods(asm.roots[0]))
             else:
                 shape = _canonicalize_roots(asm.roots)
