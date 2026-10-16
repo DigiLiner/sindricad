@@ -35,6 +35,7 @@
 // SC_URL the dev server, for running against a side-port worktree.
 const fs = require("fs");
 const { chromium } = require("playwright-core");
+const { drawn } = require("./lib/frames.cjs");
 
 const TOKEN = process.env.SC_TOKEN;
 if (!TOKEN) { console.error("set SC_TOKEN"); process.exit(1); }
@@ -142,7 +143,9 @@ const HINT = "The section stays on";
     }, axis);
     if (!at) throw new Error(`no ${axis} button in the axis chooser`);
     await page.mouse.click(at.x, at.y);
-    await page.waitForTimeout(400);
+    // The arrow is hit-testable only from the 2nd drawn frame: tick() places it
+    // after the 1st, and a pick reads the matrix the next draw refreshes.
+    await drawn(page, 2);
   };
 
   // --- 983f5f56: the box reads where the cut is ---------------------------------

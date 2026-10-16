@@ -24,6 +24,7 @@
 // SC_URL overrides the dev-server origin; a vite on any port other than 5173
 // also needs that origin in SINDRI_EXTRA_ORIGINS on the sidecar.
 const { chromium } = require("playwright-core");
+const { drawn } = require("./lib/frames.cjs");
 
 const TOKEN = process.env.SC_TOKEN;
 if (!TOKEN) { console.error("set SC_TOKEN"); process.exit(1); }
@@ -85,7 +86,9 @@ const DOC = {
       (b) => window.__settles > b && !window.__sindri.store.buildState.building,
       before, { timeout: 120000 },
     ).catch(() => { console.log("  (warning: no rebuild settled within the timeout)"); });
-    await page.waitForTimeout(250); // the doc-change repaint runs off the build event
+    // The build event re-creates the datum quads; they are pickable only once
+    // a draw has refreshed their matrices.
+    await drawn(page, 1);
   };
 
   const read = () => page.evaluate(() => ({
