@@ -1,5 +1,5 @@
 // Unsaved work must not go without a question: the window's own close, and the
-// welcome screen's recent-files list.
+// welcome screen's recent-files list (its section is at the end).
 //
 // GitHub #61: closing the window (the titlebar X, Alt+F4, the window manager's
 // close) quit at once with unsaved changes. Nothing listened for Tauri's
@@ -281,6 +281,75 @@ function installFloor({ token, permissions }) {
   check(s.log.indexOf("recovery_clear:untitled") >= 0
     && s.log.indexOf("plugin:window|destroy") > s.log.indexOf("recovery_clear:untitled"),
     "the slot was cleared before the window went", JSON.stringify(s.log));
+
+  // The welcome screen's recent-files list replaced the document on screen with
+  // no question (main.ts onOpenPath passed no guard), and left its autosave
+  // slot to be offered on the next launch.
+  console.log("\n=== welcome: a recent file over unsaved work asks first ===");
+  const RECENT = "/home/me/recent-B.sindri";
+  const openWelcome = async () => {
+    await page.evaluate(async (p) => {
+      (await import("/src/io/recentFiles.ts")).noteRecent(p);
+      window.__sindri.handleAction("welcome");
+    }, RECENT);
+    await page.waitForSelector(".welcome-recent", { timeout: 5000 }).catch(() => {});
+  };
+  const welcomeUp = () => page.evaluate(() => !!document.querySelector(".welcome-panel"));
+  const clickRecent = async () => {
+    await page.locator(".welcome-recent", { hasText: "recent-B" }).click({ timeout: 3000 })
+      .catch(() => check(false, "there is a recent-B row to click"));
+    await page.waitForTimeout(400);
+  };
+  await settle(() => page.evaluate((d) => {
+    window.__sindri.store.newDocument(); // untitled
+    window.__sindri.store.loadDocument(d); // and dirty
+    window.__floor.files.set("/home/me/recent-B.sindri", JSON.stringify(
+      { version: 5, parameters: {}, features: [{ id: "b1", type: "box", length: 5, width: 5, height: 5 }] }));
+    Object.assign(window.__floor, { log: [], savePath: null });
+    window.__floor.slots.set("untitled", "{}"); // the autosave had run
+  }, BOX));
+  await openWelcome();
+  await clickRecent();
+  s = await state();
+  check(s.prompts === 1 && s.title === EN.file.close.confirmOpen, "the prompt asks to save before opening",
+    `${s.prompts} ${s.title}`);
+  check(s.features.join() === "f1" && s.dirty && s.path === null, "the work is untouched while it asks",
+    `${s.features} ${s.dirty} ${s.path}`);
+  check(!s.log.some((c) => c.startsWith("container_")), "nothing was read yet", JSON.stringify(s.log));
+
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(400);
+  s = await state();
+  check(s.prompts === 0, "one Esc closes the prompt", String(s.prompts));
+  check(await welcomeUp(), "and leaves the welcome screen up");
+  check(s.features.join() === "f1" && s.dirty, "the work is kept", `${s.features} ${s.dirty}`);
+
+  console.log("\n=== welcome: Save, with Save As cancelled, keeps the work and the screen ===");
+  await clickRecent();
+  await answer(L.save);
+  s = await state();
+  check(s.features.join() === "f1" && s.dirty && await welcomeUp(), "work and welcome kept",
+    `${s.features} ${s.dirty}`);
+  check(!s.log.some((c) => c.startsWith("container_")), "nothing was read", JSON.stringify(s.log));
+
+  console.log("\n=== welcome: Discard clears the slot, then opens the file ===");
+  await clickRecent();
+  await settle(() => answer(L.discard));
+  s = await state();
+  check(s.features.join() === "b1" && !s.dirty && s.path === RECENT, "the recent file is open",
+    `${s.features} ${s.dirty} ${s.path}`);
+  check(!(await welcomeUp()), "and the welcome screen is closed");
+  check(s.log.indexOf("recovery_clear:untitled") >= 0
+    && s.log.indexOf("container_is_container") > s.log.indexOf("recovery_clear:untitled"),
+    "the abandoned slot was cleared before the file was read", JSON.stringify(s.log));
+
+  console.log("\n=== welcome: a clean document opens without a question ===");
+  await settle(() => page.evaluate(() => { window.__sindri.store.newDocument(); window.__floor.log = []; }));
+  await openWelcome();
+  await settle(() => clickRecent());
+  s = await state();
+  check(s.prompts === 0 && s.features.join() === "b1" && s.path === RECENT, "opened at once",
+    `${s.prompts} ${s.features} ${s.path}`);
 
   await browser.close();
   console.log(fails ? `\n${fails} FAILED` : "\nALL PASS");

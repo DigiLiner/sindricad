@@ -189,8 +189,10 @@ export async function openDocument(
  *  "newerFormat" means the file is fine and this build is too old, so the
  *  recent-files entry must SURVIVE: dropping it would delete the one affordance
  *  the user has for finding the file again, in the same breath as telling them
- *  to upgrade. */
-export type OpenOutcome = "ok" | "unreadable" | "newerFormat";
+ *  to upgrade.
+ *  "cancelled" means the user kept the document on screen at the unsaved-changes
+ *  prompt: nothing was read, so the row and the screen stay too. */
+export type OpenOutcome = "ok" | "unreadable" | "newerFormat" | "cancelled";
 
 /** True if `text` is a ZIP archive rather than JSON — i.e. a v5 packaged
  *  document this build cannot read.
@@ -242,7 +244,9 @@ async function migrateInlineGeometry(text: string, geometry: GeometryBackend): P
 }
 
 /** Open a .sindri/.json document at a known path (no dialog) — shared by Open…
- *  and the welcome screen's recent-files list.
+ *  and the welcome screen's recent-files list. `confirmReplace` is the
+ *  unsaved-changes guard, asked before anything is read; Open… asks its own
+ *  after the pick and leaves the default.
  *
  *  A v5 document is a ZIP and is read by Rust, which also extracts its geometry
  *  into the blob store before returning. A pre-v5 document is plain JSON and is
@@ -257,7 +261,9 @@ export async function openDocumentAtPath(
   store: DocumentStore,
   path: string,
   geometry?: GeometryBackend,
+  confirmReplace: () => Promise<boolean> = async () => true,
 ): Promise<OpenOutcome> {
+  if (!(await confirmReplace())) return "cancelled";
   const base = baseName(path);
   let text: string;
   let wasContainer = false;

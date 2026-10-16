@@ -508,10 +508,14 @@ const spaceMouseSettings = new SpaceMouseSettings();
 const welcome = new WelcomeScreen({
   onNew: () => void newDocument(),
   onOpen: () => void openDoc(),
-  onOpenPath: async (path) => {
-    if (sketch.active) sketch.cancel(); // same guard as openDoc
-    return openDocumentAtPath(store, path, geometry);
-  },
+  // The same guard as openDoc, in the same order: ask first, and only then
+  // drop an open sketch (cancel() does not commit it).
+  onOpenPath: (path) =>
+    openDocumentAtPath(store, path, geometry, async () => {
+      if (!(await confirmDiscardChanges(store, t("file.close.confirmOpen")))) return false;
+      if (sketch.active) sketch.cancel();
+      return true;
+    }),
   onSignIn: () => void openSignInDialog(),
   onSignOut: () => void signOutFlow(),
 });

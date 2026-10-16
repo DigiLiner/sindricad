@@ -50,9 +50,15 @@ export class WelcomeScreen {
   private overlay: HTMLDivElement | null = null;
   private unsubAccount: (() => void) | null = null;
   private onMessage = this.handleMessage.bind(this);
+  // A recent file is being opened, which may be asking "save your changes
+  // first?" on top of this screen.
+  private opening = false;
   private onKey = (e: KeyboardEvent) => {
     // Escape while an IME is composing cancels the conversion, not the screen.
     if (isImeComposing(e)) return;
+    // The prompt owns Escape. Both listen on window in capture and this one was
+    // added first, so it closed the welcome UNDER the prompt and left it up.
+    if (this.opening) return;
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -187,7 +193,14 @@ export class WelcomeScreen {
         row.title = r.path;
         row.innerHTML = `<span class="welcome-recent-name">${esc(base)}</span><span class="welcome-recent-dir">${esc(parts.join("/"))}</span>`;
         row.onclick = async () => {
-          const outcome = await this.cb.onOpenPath(r.path);
+          if (this.opening) return; // a double-click must not stack two prompts
+          this.opening = true;
+          let outcome: OpenOutcome;
+          try {
+            outcome = await this.cb.onOpenPath(r.path);
+          } finally {
+            this.opening = false;
+          }
           if (outcome === "ok") {
             this.close();
           } else if (outcome === "unreadable") {
@@ -196,6 +209,7 @@ export class WelcomeScreen {
           }
           // "newerFormat": the file is fine, we're too old. Keep the row —
           // it's how the user finds the file again after updating.
+          // "cancelled": the user kept their unsaved work. Keep row and screen.
         };
         list.appendChild(row);
       }
