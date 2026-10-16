@@ -1,5 +1,5 @@
 import "./styles.css";
-import { applyDocumentLang, onLocaleChange, trackHoveredKey, setText, t } from "./i18n";
+import { applyDocumentLang, localizeStaticChrome, onLocaleChange, trackHoveredKey, setText, t } from "./i18n";
 import { openLanguageSettings } from "./ui/languageSettings";
 import { Viewport } from "./viewport/viewport";
 import type { StandardView } from "./viewport/cameras";
@@ -101,6 +101,11 @@ window.onerror = (message, source, lineno, colno, error) => {
   console.error("Uncaught error:", error ?? message, source, lineno, colno);
   toast(t("common.somethingWentWrong"), { kind: "error" });
 };
+
+// The labels index.html ships as markup (SOLID, the view buttons, Fit, Units).
+// Before anything connects: this writes "connecting…" into the status pill, so
+// a later call would overwrite "ready".
+localizeStaticChrome();
 
 // --- core singletons ---
 const canvas = document.getElementById("canvas") as HTMLCanvasElement;
@@ -2176,6 +2181,7 @@ window.addEventListener("keydown", (e) => {
 // --- helpers ---
 function setStatus(text: string, cls: "" | "connected" | "error") {
   statusEl.textContent = text;
+  delete statusEl.dataset.i18n; // the boot key no longer names this text
   statusEl.className = `status ${cls}`;
   // Breadcrumb the failures. Breadcrumbs used to cover toasts and window errors
   // only, and this banner is neither — so the 0.1.111 stall report ("one

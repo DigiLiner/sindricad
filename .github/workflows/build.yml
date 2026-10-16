@@ -1057,6 +1057,14 @@ jobs:
           SC_TOKEN: citoken
           SC_CHROME: /usr/bin/google-chrome
         run: node e2e/section_chip_e2e.cjs
+      # PR #59's review: SOLID, the view buttons, Fit and Units stayed English
+      # in every locale because the boot pass that translates them was never
+      # called. Only a booted app shows it; a unit test of that pass was green.
+      - name: Static chrome follows the language end-to-end
+        env:
+          SC_TOKEN: citoken
+          SC_CHROME: /usr/bin/google-chrome
+        run: node e2e/locale_boot_e2e.cjs
 
       - name: Sidecar log on failure
         if: failure()
