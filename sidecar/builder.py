@@ -3854,9 +3854,9 @@ def _canonical_ok(result, shape, deep=True):
 
     So: full gate after the sew/ShapeFix rebuild below, which re-creates faces
     from scratch and genuinely can produce an invalid or volume-shifted solid.
-    Counts only after SweptToElementary alone, which is a topology-preserving
-    modifier — the counts still catch gross damage, and this path previously had
-    NO validation at all.
+    Counts only (`deep=False`) for a topology-preserving rewrite, where the
+    counts still catch gross damage; its one caller, the SweptToElementary pass,
+    is gone (it segfaulted, see _canonicalize).
 
     NOTE the volume comparison is only meaningful when neither side is a compound
     of compounds: `Compound.volume` does not recurse, so on nested input it reads
@@ -3884,8 +3884,7 @@ def _canonical_ok(result, shape, deep=True):
 
 def _canonicalize(shape, tol=1e-3):
     """Canonical-recognition pre-pass for B-rep imports (STEP): snap near-analytic
-    B-spline/Bezier faces to true planes/cylinders/cones/spheres, and swept
-    surfaces to elementary ones. STEP writers routinely emit splines for what is
+    B-spline/Bezier faces to true planes/cylinders/cones/spheres. STEP writers routinely emit splines for what is
     really a plane or cylinder; defeaturing heals by EXTENDING neighbour surfaces,
     and extension is exact on analytic surfaces but fragile polynomial
     extrapolation on splines — snapping at import is what lets Delete Face work
@@ -3898,8 +3897,6 @@ def _canonicalize(shape, tol=1e-3):
     CONVERTIBLE = (
         GeomAbs_SurfaceType.GeomAbs_BSplineSurface,
         GeomAbs_SurfaceType.GeomAbs_BezierSurface,
-        GeomAbs_SurfaceType.GeomAbs_SurfaceOfExtrusion,
-        GeomAbs_SurfaceType.GeomAbs_SurfaceOfRevolution,
     )
     try:
         faces = shape.faces()
@@ -3915,19 +3912,25 @@ def _canonicalize(shape, tol=1e-3):
         from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace, BRepBuilderAPI_Sewing
         from OCP.BRepCheck import BRepCheck_Analyzer
         from OCP.BRepTools import BRepTools
-        from OCP.ShapeCustom import ShapeCustom, ShapeCustom_Surface
+        from OCP.ShapeCustom import ShapeCustom_Surface
         from OCP.ShapeFix import ShapeFix_Face, ShapeFix_Shape, ShapeFix_Solid
         from OCP.TopAbs import TopAbs_SHELL, TopAbs_WIRE
         from OCP.TopExp import TopExp_Explorer
         from OCP.TopoDS import TopoDS
 
-        # swept (extrusion/revolution) surfaces -> elementary, as a whole-shape
-        # modifier that preserves topology
-        work = _wrap_topods(ShapeCustom.SweptToElementary_s(shape.wrapped)) or shape
-
+        # Swept (extrusion/revolution) faces are deliberately left alone. The
+        # whole-shape ShapeCustom.SweptToElementary modifier used to run here and
+        # SEGFAULTED the worker on any realistic solid with a swept face (row
+        # 1bd80dc2: re-importing our own STEP export of a revolve): OCCT's
+        # BRepTools_Modifier::CreateOtherVertices probes NewCurve2d with a NULL
+        # new face for every face next to a swept one, or holding a degenerate
+        # edge, and SweptToElementary dereferences it. Present in OCCT 7.4
+        # through 7.9.3, not catchable from Python. Do not re-add the call; a
+        # safe route back is a per-face conversion that never goes through
+        # BRepTools_Modifier.
         converted = 0
         new_faces = []
-        for f in work.faces():
+        for f in shape.faces():
             t = BRepAdaptor_Surface(f.wrapped).GetType()
             nf = f.wrapped
             if t in (
@@ -3954,14 +3957,6 @@ def _canonicalize(shape, tol=1e-3):
                         converted += 1
             new_faces.append(nf)
         if converted == 0:
-            # `work` is SweptToElementary's output, and until now it was returned
-            # here WITHOUT any of the validation every other exit applies. That
-            # modifier rewrites surfaces across the whole shape; if it produced
-            # something invalid or volume-shifted, the unchecked return baked it
-            # into the embedded B-rep, permanently and silently. Same gate as the
-            # converted path below.
-            if work is not shape and _canonical_ok(work, shape, deep=False):
-                return work
             return shape
 
         sew = BRepBuilderAPI_Sewing(max(tol, 1e-6))

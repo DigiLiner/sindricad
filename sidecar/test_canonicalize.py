@@ -10,6 +10,8 @@ it is the user's geometry quietly replaced by something else forever.
 Two ways round the gate existed. SweptToElementary's output was returned
 unvalidated whenever no spline face needed converting, and the multi-root import
 path handed the gate a compound of compounds, whose volume it cannot measure.
+The SweptToElementary pass is gone since: it segfaulted the worker on STEP files
+with swept faces (row 1bd80dc2), which the last two tests pin.
 """
 
 import os
@@ -157,6 +159,121 @@ def test_import_still_produces_the_same_geometry():
         print(f"{PASS} {name}: {len(bodies)} bodies, {total} faces")
 
 
+def _surface_kinds(shape):
+    from collections import Counter
+
+    from OCP.BRepAdaptor import BRepAdaptor_Surface
+
+    return Counter(
+        str(BRepAdaptor_Surface(f.wrapped).GetType()).rsplit(".", 1)[-1]
+        for f in shape.faces()
+    )
+
+
+def _import_in_child(fn, *args):
+    """Run an import in a forked child so a kernel SEGFAULT fails this test with
+    an exit code instead of killing the whole runner. Returns (exitcode, payload)."""
+    import multiprocessing
+
+    ctx = multiprocessing.get_context("fork")
+    q = ctx.Queue()
+
+    def run():
+        res = fn(*args)
+        q.put({k: res.get(k) for k in
+               ("faces", "solid", "name", "geom", "nodes", "parts", "error")})
+
+    p = ctx.Process(target=run)
+    p.start()
+    p.join(120)
+    if p.is_alive():
+        p.terminate()
+        p.join()
+        raise AssertionError("the import hung for 120 s")
+    # the payload is a few hundred bytes (geom is a blob hash), so reading the
+    # queue after join cannot deadlock on a full pipe
+    return p.exitcode, (q.get(timeout=5) if p.exitcode == 0 else None)
+
+
+def test_a_swept_face_next_to_ordinary_faces_imports():
+    """Row 1bd80dc2: exporting a model with a revolve to STEP and importing that
+    STEP back killed the geometry worker. OCCT's whole-shape SweptToElementary
+    modifier dereferences a null face for every ordinary face next to a swept
+    one (BRepTools_Modifier::CreateOtherVertices), so the pass segfaulted on any
+    realistic solid carrying a surface of revolution. Enters where the user does:
+    the server's own export job, then its import job, on the app's document. Two
+    bodies make the export an assembly, which is the per-leaf branch the field
+    file took."""
+    import tempfile
+
+    import server
+
+    doc = {"version": 5, "parameters": {}, "features": [
+        {"id": "rs", "type": "sketch", "plane": "XZ", "entities": [
+            {"id": "l0", "type": "line", "x1": 10, "y1": -5, "x2": 16, "y2": -5},
+            {"id": "l1", "type": "line", "x1": 16, "y1": -5, "x2": 16, "y2": 5},
+            {"id": "l2", "type": "line", "x1": 16, "y1": 5, "x2": 13, "y2": 5},
+            {"id": "sp", "type": "spline", "points": [
+                {"x": 13, "y": 5}, {"x": 11, "y": 2}, {"x": 12, "y": -2},
+                {"x": 10, "y": -5}]}]},
+        {"id": "rv", "type": "revolve", "sketch": "rs", "axis": "Z", "angle": 120},
+        {"id": "bx", "type": "box", "length": 5, "width": 5, "height": 5,
+         "origin": [40, 0, 0]}]}
+    _p, err, src = builder.rebuild(doc)
+    assert not err, err
+    src_kinds = [_surface_kinds(b["shape"]) for b in src]
+    # the trigger must survive in the source, or this test proves nothing
+    assert any(k["GeomAbs_SurfaceOfRevolution"] for k in src_kinds), src_kinds
+
+    out = os.path.join(tempfile.mkdtemp(), "revolve.step")
+    res = server._export_job(doc, "step", out)
+    assert "error" not in res, res
+
+    code, pay = _import_in_child(server._import_job, out, "step")
+    assert code == 0, (f"the import child exited {code} "
+                       "(-11 is the SweptToElementary segfault)")
+    assert pay["error"] is None, pay["error"]
+    assert (pay["faces"], pay["solid"]) == (12, True), (pay["faces"], pay["solid"])
+    assert sorted(pt["faces"] for pt in pay["parts"]) == [6, 6], pay["parts"]
+
+    _p, err, got = builder.rebuild({"parameters": {}, "features": [
+        {"id": "im", "type": "import", "format": "step", "name": pay["name"],
+         "geom": pay["geom"], "nodes": pay["nodes"], "parts": pay["parts"]}]})
+    assert not err, err
+
+    def summary(bodies):
+        return sorted((round(b["shape"].volume, 6), sorted(_surface_kinds(b["shape"]).items()))
+                      for b in bodies)
+
+    assert summary(got) == summary(src), (summary(got), summary(src))
+    print(f"{PASS} a revolve with a spline profile round-trips through STEP: "
+          f"{len(got)} bodies, same faces and volumes")
+
+
+def test_a_body_made_only_of_swept_faces_imports():
+    """The same crash without any ordinary neighbour: a dome revolved from two
+    splines touching the axis has two surfaces of revolution and degenerate apex
+    edges, and the degenerate edges reach the same null-face probe."""
+    import tempfile
+
+    from build123d import Axis, Line, Spline, make_face, revolve
+
+    import exporters
+
+    dome = revolve(make_face(Spline((0, 9), (6, 8), (10, 5))
+                             + Spline((10, 5), (7, 1), (0, 0))
+                             + Line((0, 0), (0, 9))), Axis.Y, 360)
+    assert _surface_kinds(dome)["GeomAbs_SurfaceOfRevolution"] == 2, _surface_kinds(dome)
+    out = os.path.join(tempfile.mkdtemp(), "dome.step")
+    exporters.export(dome, "step", out)
+
+    code, pay = _import_in_child(builder.import_geometry, out, "step")
+    assert code == 0, (f"the import child exited {code} "
+                       "(-11 is the SweptToElementary segfault)")
+    assert (pay["faces"], pay["solid"]) == (2, True), (pay["faces"], pay["solid"])
+    print(f"{PASS} a dome of two swept faces round-trips through STEP")
+
+
 if __name__ == "__main__":
     print("_canonicalize validation gate")
     test_an_identical_shape_is_accepted()
@@ -168,4 +285,6 @@ if __name__ == "__main__":
     test_multi_root_canonicalises_each_root_separately()
     test_multi_root_skips_unwrappable_roots_without_losing_the_rest()
     test_import_still_produces_the_same_geometry()
+    test_a_swept_face_next_to_ordinary_faces_imports()
+    test_a_body_made_only_of_swept_faces_imports()
     print("all canonicalize tests passed")
