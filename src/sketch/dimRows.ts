@@ -19,7 +19,8 @@ import { t } from "../i18n";
 import type { ResolvedEntity } from "./snap";
 import type { DimField, SketchConstraint } from "../types";
 import { isDriven } from "../types";
-import { constraintDims, entityDims } from "./entityDims";
+import { constraintDims, entityDims, pointAlignment } from "./entityDims";
+import { constraintName } from "./dimConflict";
 import { isDimConstraint } from "./id";
 import { ORIGIN_X_ID, ORIGIN_Y_ID, isOriginGeometry, isOriginId } from "./origin";
 import { paramValueOfDim } from "../document/numFields";
@@ -130,8 +131,12 @@ function constraintWord(c: SketchConstraint): string {
     case "diameter": return t("common.diameter");
     case "radius": return t("common.radius");
     case "angle": return t("common.angle");
-    case "p2pDistanceX": return t("inspector.sketchDim.kind.horizontal");
-    case "p2pDistanceY": return t("inspector.sketchDim.kind.vertical");
+    // a zero-gap pair is the Horizontal/Vertical the user made (pointAlignment)
+    case "p2pDistanceX": case "p2pDistanceY": {
+      const axis = pointAlignment(c);
+      if (axis) return constraintName(axis);
+      return t(c.type === "p2pDistanceX" ? "inspector.sketchDim.kind.horizontal" : "inspector.sketchDim.kind.vertical");
+    }
     case "radialGap": return t("inspector.sketchDim.kind.radialGap");
     case "offset": return t("inspector.sketchDim.kind.offset");
     case "p2pDistance": case "p2lDistance": case "c2cDistance": case "c2lDistance": case "p2cDistance":
@@ -205,7 +210,8 @@ export function sketchDimRows(entities: readonly ResolvedEntity[], constraints: 
       valueMm: d?.valueMm ?? paramValueOfDim(c),
       kind: c.type === "angle" ? "angle" : "length",
       driven: isDriven(c),
-      signed: d?.signed === true,
+      // an alignment has no drawn dimension to ask, and is an X/Y distance
+      signed: d?.signed === true || pointAlignment(c) !== null,
     });
   });
   return rows;

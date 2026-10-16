@@ -930,6 +930,20 @@ export function angleDimMeasure(byId: Map<string, ResolvedEntity>, c: { l1: stri
   return signedAngleDeg(s1, s2);
 }
 
+/** The alignment a two-point X/Y distance of ZERO is, or null for a real
+ *  dimension. The Horizontal and Vertical tools store a two-point alignment
+ *  this way (constraintTools.axisClick): Vertical as a horizontal distance of
+ *  0 (same X), Horizontal as a vertical distance of 0 (same Y). Shown as the
+ *  dimension it is stored as, a pair made with Vertical read "Horizontal
+ *  distance 0", which is the wrong way round to the user who made it (report
+ *  c89a43be); shown as this, it is an H or a V like a line's. A reference
+ *  dimension measures, so it is never one. Returns the constraint TYPE of the
+ *  matching line alignment, so a caller can name it the way it names those. */
+export function pointAlignment(c: SketchConstraint): "horizontal" | "vertical" | null {
+  if ((c.type !== "p2pDistanceX" && c.type !== "p2pDistanceY") || c.value !== 0 || isDriven(c)) return null;
+  return c.type === "p2pDistanceX" ? "vertical" : "horizontal";
+}
+
 /** annotation + label geometry for the distance constraints (the driving dims
  *  the dimension tool places between two points, or a point and a line).
  *  `place` (when the dimension tool froze a placement) offsets the label from
@@ -938,6 +952,7 @@ export function constraintDims(ents: ResolvedEntity[], constraints: SketchConstr
   const byId = new Map(ents.map((e) => [e.id, e]));
   const out: ConstraintDim[] = [];
   constraints.forEach((c, i) => {
+    if (pointAlignment(c)) return; // drawn as an H or V badge (constraintGlyphs)
     const driven = isDriven(c);
     const place = (c as { place?: PlaceOffset }).place;
     // radius (circle/arc): a radial line from center to rim + an "R" label

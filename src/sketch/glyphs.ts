@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import type { ResolvedEntity } from "./snap";
 import type { SketchConstraint } from "../types";
-import { asRound, lineOperand, operandPoint } from "./entityDims";
+import { asRound, lineOperand, operandPoint, pointAlignment } from "./entityDims";
 import { entityPolyline } from "./region";
 
 /** a quarter of a spline span, in entityPolyline's 16 samples per span */
@@ -237,6 +237,16 @@ export function constraintGlyphs(ents: ResolvedEntity[], constraints: SketchCons
       case "pointOn": push(i, "∈", refPos(c.e, c.p)); break;
       case "symmetric": pushLine(i, "⋈", c.line); break;
       case "fix": push(i, "⚓", refPos(c.e, c.p)); break;
+      // Horizontal/Vertical on two points: one badge on each, like the
+      // two-operand relations above. A non-zero X/Y distance is a dimension.
+      case "p2pDistanceX": case "p2pDistanceY": {
+        const axis = pointAlignment(c);
+        if (!axis) break;
+        const label = axis === "horizontal" ? "H" : "V";
+        push(i, label, refPos(c.e1, c.p1));
+        push(i, label, refPos(c.e2, c.p2));
+        break;
+      }
       // distance/diameter/p2pDistance/p2lDistance/radius/angle render as dimensions
       default: break;
     }

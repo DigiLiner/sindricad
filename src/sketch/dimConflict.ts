@@ -18,6 +18,7 @@
 import type { SketchConstraint } from "../types";
 import { localeTag, t } from "../i18n";
 import { fmtLength, round } from "../ui/units";
+import { pointAlignment } from "./entityDims";
 
 /** Locale key per constraint TYPE (resolve with `t()`). Typed as a total Record
  *  so a constraint type added to the union without a name here fails the build
@@ -148,7 +149,7 @@ export function dimConflictMsg(
   for (const i of [...blamed].sort((a, b) => a - b)) {
     const k = constraints[i];
     if (!k || k === edited) continue;
-    const name = constraintName(k.type);
+    const name = constraintName(pointAlignment(k) ?? k.type);
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   const held = [...counts].map(([name, count]) => t("sketch.dimConflict.heldItem", { name, count }));
