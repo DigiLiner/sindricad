@@ -1996,6 +1996,10 @@
       "areaNotCurves": "I move, copy, turn and scale lines and curves, not the area inside a shape. Click the shape's lines and curves (Shift or Ctrl-click adds more), then press Enter.",
       "choseOnlyThis": "I selected just that one, as a plain click does, and let the others go. Shift or Ctrl-click adds instead. Press Enter once everything is selected.",
       "clickDestination": "Click the destination point",
+      "mirrorRectangleToLines": {
+        "one": "A rectangle always sits square to the sketch axes, so I mirrored it as four lines kept square to each other.",
+        "other": "A rectangle always sits square to the sketch axes, so I mirrored these {count} as lines kept square to each other."
+      },
       "moveTied": "I did not move anything: a constraint ties what you selected to geometry that is not being moved, and the solver would pull it back or stretch it. Select that geometry too, or remove the constraint, then move again.",
       "pressEnter": "Press Enter once everything is selected, then click the point to work from.",
       "rectangleToLines": {

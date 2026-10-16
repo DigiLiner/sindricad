@@ -51,7 +51,7 @@ import {
   curvesEndingAt, inferArcTangents, inferLineRelations, isGeometrySnap, relationConstraints,
   type ArcPoints, type LineInference,
 } from "./autoConstrain";
-import { detectRegions, entityPolyline, EPS, pointInLoop, resolveRegionRef, sameRegionIds, twinRegion, type Region } from "./region";
+import { detectRegions, entityPolyline, EPS, pointInLoop, rectCorners, resolveRegionRef, sameRegionIds, twinRegion, type Region } from "./region";
 import { splineFlags } from "./spline";
 import { worldPointInRegion } from "./regionSelect";
 import { setSpaceMouseOrbitLocked } from "../input/spacemouse";
@@ -3814,8 +3814,19 @@ export class SketchMode {
     if (!chosen.length) return; // nothing selected to mirror
     const a = new THREE.Vector2(axis.x1, axis.y1);
     const b = new THREE.Vector2(axis.x2, axis.y2);
-    for (const e of chosen) this.entities.push(this.reflectEntity(e, a, b));
+    let toLines = 0;
+    for (const e of chosen) {
+      if (e.type !== "rectangle") {
+        this.entities.push(this.reflectEntity(e, a, b));
+        continue;
+      }
+      const r = this.reflectRectangle(e, a, b);
+      this.entities.push(...r.entities);
+      this.constraints.push(...r.holds);
+      if (r.holds.length) toLines++;
+    }
     this.selected.clear();
+    if (toLines) toast(t("sketch.transform.mirrorRectangleToLines", { count: toLines }), { timeout: 8000 });
     this.afterModify();
   }
   /** reflect a 2D point across the infinite line through a→b */
@@ -3826,11 +3837,42 @@ export class SketchMode {
     const px = a.x + t * dx, py = a.y + t * dy; // foot of perpendicular
     return { x: 2 * px - x, y: 2 * py - y };
   }
+  /** A reflected COPY of a rectangle across the line a→b. A reflection turns
+   *  it by twice the line's angle, and a rectangle is square to the sketch axes
+   *  by definition (types.ts), so the copy is a rectangle only when it comes
+   *  out square to them again (a horizontal or vertical line, or 45 degrees
+   *  with width and height swapped). Otherwise it is four lines on the
+   *  reflected corners, held square by Perpendicular, as Rotate explodes one
+   *  (explodeSelectedRectangles). The corners are the same numbers on both
+   *  lines that meet there, which is what joins them in the solver. */
+  private reflectRectangle(
+    e: Extract<ResolvedEntity, { type: "rectangle" }>, a: THREE.Vector2, b: THREE.Vector2,
+  ): { entities: ResolvedEntity[]; holds: SketchConstraint[] } {
+    const c = e.construction ? { construction: true } : {};
+    const ctr = this.reflectPoint(e.x, e.y, a, b);
+    const rect = (width: number, height: number) => ({
+      entities: [{ type: "rectangle" as const, id: newEntityId(), width, height, x: ctr.x, y: ctr.y, ...c }],
+      holds: [],
+    });
+    if (!(e.width > 0 && e.height > 0)) return rect(e.width, e.height);
+    const q = rectCorners(e.x, e.y, e.width, e.height).map((p) => this.reflectPoint(p.x, p.y, a, b));
+    const tol = 1e-6 * Math.hypot(q[1]!.x - q[0]!.x, q[1]!.y - q[0]!.y);
+    if (Math.abs(q[1]!.y - q[0]!.y) <= tol) return rect(e.width, e.height); // bottom edge still horizontal
+    if (Math.abs(q[1]!.x - q[0]!.x) <= tol) return rect(e.height, e.width); // bottom edge turned vertical
+    const ids = q.map(() => newEntityId());
+    const entities: ResolvedEntity[] = q.map((p, k) => {
+      const n = q[(k + 1) % 4]!;
+      return { type: "line", id: ids[k]!, x1: p.x, y1: p.y, x2: n.x, y2: n.y, ...c };
+    });
+    const holds: SketchConstraint[] = [0, 1, 2].map((k) => ({ type: "perpendicular", l1: ids[k]!, l2: ids[k + 1]! }));
+    return { entities, holds };
+  }
   /** a reflected COPY of an entity (fresh id) across the line a→b. One case per
    *  entity type and no fallback, so a type added later fails to compile here
    *  instead of mirroring as a point (a slot and a polygon once did: the slot's
-   *  point had NaN coordinates). */
-  private reflectEntity(e: ResolvedEntity, a: THREE.Vector2, b: THREE.Vector2): ResolvedEntity {
+   *  point had NaN coordinates). A rectangle has its own (reflectRectangle):
+   *  its copy can be four lines. */
+  private reflectEntity(e: Exclude<ResolvedEntity, { type: "rectangle" }>, a: THREE.Vector2, b: THREE.Vector2): ResolvedEntity {
     const rp = (x: number, y: number) => this.reflectPoint(x, y, a, b);
     const id = newEntityId();
     const c = e.construction ? { construction: true } : {};
@@ -3842,11 +3884,6 @@ export class SketchMode {
       case "circle": {
         const ctr = rp(e.x, e.y);
         return { type: "circle", id, radius: e.radius, x: ctr.x, y: ctr.y, ...c };
-      }
-      case "rectangle": {
-        // a reflected axis-aligned rectangle stays axis-aligned: reflect the center
-        const ctr = rp(e.x, e.y);
-        return { type: "rectangle", id, width: e.width, height: e.height, x: ctr.x, y: ctr.y, ...c };
       }
       case "arc": {
         // reflection flips orientation, so the through-point reflects too
