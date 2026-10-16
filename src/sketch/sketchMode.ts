@@ -3791,39 +3791,58 @@ export class SketchMode {
     const px = a.x + t * dx, py = a.y + t * dy; // foot of perpendicular
     return { x: 2 * px - x, y: 2 * py - y };
   }
-  /** a reflected COPY of an entity (fresh id) across the line a→b */
+  /** a reflected COPY of an entity (fresh id) across the line a→b. One case per
+   *  entity type and no fallback, so a type added later fails to compile here
+   *  instead of mirroring as a point (a slot and a polygon once did: the slot's
+   *  point had NaN coordinates). */
   private reflectEntity(e: ResolvedEntity, a: THREE.Vector2, b: THREE.Vector2): ResolvedEntity {
     const rp = (x: number, y: number) => this.reflectPoint(x, y, a, b);
     const id = newEntityId();
     const c = e.construction ? { construction: true } : {};
-    if (e.type === "line") {
-      const p1 = rp(e.x1, e.y1), p2 = rp(e.x2, e.y2);
-      return { type: "line", id, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ...c };
+    switch (e.type) {
+      case "line": {
+        const p1 = rp(e.x1, e.y1), p2 = rp(e.x2, e.y2);
+        return { type: "line", id, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, ...c };
+      }
+      case "circle": {
+        const ctr = rp(e.x, e.y);
+        return { type: "circle", id, radius: e.radius, x: ctr.x, y: ctr.y, ...c };
+      }
+      case "rectangle": {
+        // a reflected axis-aligned rectangle stays axis-aligned: reflect the center
+        const ctr = rp(e.x, e.y);
+        return { type: "rectangle", id, width: e.width, height: e.height, x: ctr.x, y: ctr.y, ...c };
+      }
+      case "arc": {
+        // reflection flips orientation, so the through-point reflects too
+        const p1 = rp(e.x1, e.y1), p2 = rp(e.x2, e.y2), m = rp(e.mx, e.my);
+        return { type: "arc", id, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, mx: m.x, my: m.y, ...c };
+      }
+      case "spline":
+        return { type: "spline", id, points: e.points.map((q) => rp(q.x, q.y)), ...splineFlags(e), ...c };
+      case "slot": {
+        // symmetric about its own axis, so the two end centres carry it
+        const p1 = rp(e.x1, e.y1), p2 = rp(e.x2, e.y2);
+        return { type: "slot", id, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, width: e.width, ...c };
+      }
+      case "polygon": {
+        // a vertex at angle φ lands at 2θ - φ (θ the mirror line's direction),
+        // and a regular polygon's vertex set maps onto itself started there
+        const ctr = rp(e.x, e.y);
+        const axisDeg = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
+        return { type: "polygon", id, x: ctr.x, y: ctr.y, radius: e.radius, sides: e.sides, angle: 2 * axisDeg - e.angle, ...c };
+      }
+      case "text": {
+        const at = rp(e.x, e.y); // reflect the anchor; keep the string/style (glyphs aren't mirrored)
+        return { ...e, id, x: at.x, y: at.y };
+      }
+      case "point": {
+        const q = rp(e.x, e.y);
+        return { type: "point", id, x: q.x, y: q.y, ...c };
+      }
+      case "projected":
+        return e; // fixed reference geometry: mirrorClick leaves it out of the selection
     }
-    if (e.type === "circle") {
-      const ctr = rp(e.x, e.y);
-      return { type: "circle", id, radius: e.radius, x: ctr.x, y: ctr.y, ...c };
-    }
-    if (e.type === "rectangle") {
-      // a reflected axis-aligned rectangle stays axis-aligned: reflect the center
-      const ctr = rp(e.x, e.y);
-      return { type: "rectangle", id, width: e.width, height: e.height, x: ctr.x, y: ctr.y, ...c };
-    }
-    if (e.type === "arc") {
-      // reflection flips orientation, so the through-point reflects too
-      const p1 = rp(e.x1, e.y1), p2 = rp(e.x2, e.y2), m = rp(e.mx, e.my);
-      return { type: "arc", id, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, mx: m.x, my: m.y, ...c };
-    }
-    if (e.type === "spline") {
-      return { type: "spline", id, points: e.points.map((q) => rp(q.x, q.y)), ...splineFlags(e), ...c };
-    }
-    if (e.type === "text") {
-      const at = rp(e.x, e.y); // reflect the anchor; keep the string/style (glyphs aren't mirrored)
-      return { ...e, id, x: at.x, y: at.y };
-    }
-    // point
-    const q = rp((e as Extract<ResolvedEntity, { type: "point" }>).x, (e as Extract<ResolvedEntity, { type: "point" }>).y);
-    return { type: "point", id, x: q.x, y: q.y, ...c };
   }
 
   // --- dimension tool ----------------------------------------------------
