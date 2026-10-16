@@ -64,7 +64,10 @@ export async function saveDocument(store: DocumentStore) {
     }
     store.markSaved(store.filePath);
     noteRecent(store.filePath);
-    void clearRecovery(store.filePath); // the on-disk file is now the truth
+    // the on-disk file is now the truth. Awaited: a Save at the window's close
+    // is followed by the window going away, and the slot must be gone first or
+    // the next launch offers to recover what was just saved.
+    await clearRecovery(store.filePath);
   } else {
     await saveDocumentAs(store);
   }
@@ -86,7 +89,7 @@ export async function saveDocumentAs(store: DocumentStore) {
       }
       store.markSaved(path);
       noteRecent(path);
-      void clearRecovery(path);
+      await clearRecovery(path); // awaited for the same reason as in Save
     }
   } else {
     // Plain dev browser: no Tauri, so no container. Geometry lives in the
@@ -116,9 +119,11 @@ export async function saveDocumentAs(store: DocumentStore) {
 export async function confirmDiscardChanges(store: DocumentStore, title: string): Promise<boolean> {
   if (!store.dirty) return true;
   const { choose } = await import("../ui/choice");
-  const pick = await choose<"save" | "discard">(title, [
+  // Save stays first: choose() focuses the first button, so Enter saves.
+  const pick = await choose<"save" | "discard" | "cancel">(title, [
     { value: "save", label: t("file.close.save"), hint: t("file.close.saveHint") },
     { value: "discard", label: t("common.discard"), hint: t("file.close.discardHint") },
+    { value: "cancel", label: t("common.cancel"), hint: t("file.close.cancelHint") },
   ]);
   if (pick === "save") {
     await saveDocument(store);
@@ -131,7 +136,7 @@ export async function confirmDiscardChanges(store: DocumentStore, title: string)
     await clearRecovery(store.filePath);
     return true;
   }
-  return false; // Esc / dismissed
+  return false; // Cancel / Esc / dismissed
 }
 
 /** File ▸ Open. `confirmReplace` is the unsaved-changes guard, and it runs

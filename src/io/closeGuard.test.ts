@@ -1,4 +1,4 @@
-// The unsaved-changes guard in front of New / Open / Close.
+// The unsaved-changes guard in front of New / Open / Close and the window's close.
 //
 // Field report (Doug Smith, #20): "A close file option with a save / discard
 // option so you can work on another model and do not get asked to recover the
@@ -63,11 +63,21 @@ describe("confirmDiscardChanges", () => {
     expect(clearRecovery).not.toHaveBeenCalled();
   });
 
-  it("offers Save as well as Discard, which the binary prompt did not", async () => {
+  it("offers Save, Discard and Cancel, which the binary prompt did not", async () => {
     choose.mockResolvedValue(null);
     await confirmDiscardChanges(fakeStore(true), "title");
     const [, options] = choose.mock.calls[0] as [string, { value: string }[]];
-    expect(options.map((o) => o.value).sort()).toEqual(["discard", "save"]);
+    // Save first: choose() focuses the first button, so Enter saves
+    expect(options.map((o) => o.value)).toEqual(["save", "discard", "cancel"]);
+  });
+
+  // Cancel is the visible Esc: the window's close asks this too (#61), and
+  // there a missing way back would mean Save or lose it.
+  it("refuses to proceed on Cancel and keeps the recovery slot", async () => {
+    choose.mockResolvedValue("cancel");
+    const ok = await confirmDiscardChanges(fakeStore(true), "title");
+    expect(ok).toBe(false);
+    expect(clearRecovery).not.toHaveBeenCalled();
   });
 
   it("passes the caller's title through, so New/Open/Close read differently", async () => {

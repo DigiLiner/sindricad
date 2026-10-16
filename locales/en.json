@@ -865,9 +865,11 @@
   },
   "file": {
     "close": {
+      "cancelHint": "Keep working on this document.",
       "confirmClose": "Save your changes before closing this document?",
       "confirmNew": "Save your changes before starting a new document?",
       "confirmOpen": "Save your changes before opening another document?",
+      "confirmQuit": "Save your changes before closing SindriCAD?",
       "discardHint": "Throw the changes away. Nothing will be offered for recovery next time.",
       "save": "Save",
       "saveHint": "Write the changes to disk first."

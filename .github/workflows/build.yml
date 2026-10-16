@@ -1070,6 +1070,16 @@ jobs:
           SC_CHROME: /usr/bin/google-chrome
         run: node e2e/locale_boot_e2e.cjs
 
+      # GitHub #61: the window's X quit with unsaved work and no question. The
+      # close lives in the Tauri shell, so the spec boots the real bundle on a
+      # fake IPC floor that holds a close the way tauri does and enforces the
+      # capability file; it is the only check that main.ts installs the guard.
+      - name: Unsaved-changes guard end-to-end
+        env:
+          SC_TOKEN: citoken
+          SC_CHROME: /usr/bin/google-chrome
+        run: node e2e/unsaved_changes_guard_e2e.cjs
+
       - name: Sidecar log on failure
         if: failure()
         run: tail -50 /tmp/ci_sidecar.log /tmp/ci_vite.log || true

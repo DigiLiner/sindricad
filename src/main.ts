@@ -34,6 +34,7 @@ import { createBugReporter } from "./ui/bugReporter";
 import "./diagnostics/breadcrumbs"; // installs window error listeners (bug-report trail)
 import { stickyFact, crumb, isBenignBrowserNoise } from "./diagnostics/breadcrumbs";
 import { installAutosave, checkRecovery, clearRecovery } from "./io/recovery";
+import { installWindowCloseGuard } from "./io/windowClose";
 import { WelcomeScreen, welcomeOnStartup, warmAccount } from "./ui/welcome";
 import { openSignInDialog, signOutFlow } from "./tinkeratlas/account";
 import { publishToTinkerAtlas } from "./tinkeratlas/publish";
@@ -219,6 +220,14 @@ void checkRecovery(store);
 const overlay = new SketchOverlay();
 viewport.addToScene(overlay.group);
 const sketch = new SketchMode(viewport, overlay);
+// The window's own close (X, Alt+F4, the WM) asks before unsaved work goes
+// (#61). Installed here, past the viewport, so the GPU-fatal screen keeps an
+// instant close, and past `sketch`, which it reads. An open sketch is not in
+// the store until Finish, so it is committed first: otherwise a clean document
+// closed without asking, and Save wrote the document without the sketch.
+void installWindowCloseGuard(store, () => t("file.close.confirmQuit"), () => {
+  if (sketch.active && sketch.hasDrawnGeometry()) sketch.finish();
+});
 // params engine ↔ sketcher plumbing: closed sketches re-solve headlessly after
 // a parameter edit; the open one refreshes its live dim values itself.
 store.headlessSolve = solveSketchFeature;
