@@ -1563,65 +1563,60 @@ def test_a_job_starts_from_nothing_in_progress():
 
 # --- the fillet/chamfer hang probe -----------------------------------------
 #
-# Same report, the other half of "never finishes". The probe forks a whole
-# interpreter (~1.7 s here, several times that on a cold Windows box) and used to
-# do it once per SIZE, blocking silently for up to _BLEND_PROBE_TIMEOUT. So a
-# drag or a retype paid a fresh fork per value, and a slow one told the
-# supervisor nothing — which reaps a worker whose heartbeat has not moved for 60
-# seconds, and reports it as "one operation stalled over 60 seconds".
+# Same report, the other half of "never finishes". The probe used to start a
+# whole interpreter (~1.7 s here, several times that on a cold Windows box) once
+# per SIZE, blocking silently for up to _BLEND_PROBE_TIMEOUT. So a drag or a
+# retype paid a fresh start per value, and a slow one told the supervisor
+# nothing — which reaps a worker whose heartbeat has not moved for 60 seconds,
+# and reports it as "one operation stalled over 60 seconds".
 
 
-class _FakeForks:
-    """Stand in for the probe's child process, counting forks and never
-    launching one. Patches BOTH subprocess entry points so the count is honest
-    whichever one the code under test reaches for.
+class _EchoChild:
+    """Swap the probe's warm child for a tiny REAL one that answers every recipe
+    after `delay` seconds, counting the recipes asked and the processes started.
+    Real pipes and threads, so a parent that reads before it writes deadlocks
+    here exactly as it would against the real child."""
 
-    `slices` is how many waits the child survives, for the liveness check."""
-
-    def __init__(self, slices=1):
-        self.n = 0
-        self.slices = slices
+    def __init__(self, delay=0.0):
+        self.delay = delay
+        self.n = 0  # recipes asked
+        self.spawns = 0
 
     def __enter__(self):
         import subprocess
 
-        self._sp = subprocess
-        self._run, self._popen = subprocess.run, subprocess.Popen
+        self._sp, self._popen = subprocess, subprocess.Popen
+        self._ask, self._cmd, self._tick = (
+            builder._blend_probe_ask, builder._BLEND_PROBE_CHILD_CMD, builder._BLEND_PROBE_TICK)
         outer = self
 
-        class _Proc:
-            def __init__(self, *_a, **_k):
-                outer.n += 1
-                self.left = outer.slices
-                self.stdin = _Sink()
+        class _Counting(self._popen):
+            def __init__(self, *a, **k):
+                outer.spawns += 1
+                super().__init__(*a, **k)
 
-            def wait(self, timeout=None):
-                self.left -= 1
-                if self.left > 0:
-                    raise outer._sp.TimeoutExpired("probe", timeout or 0)
-                return 0
-
-            def kill(self):
-                self.left = 0
-
-        def _fake_run(*_a, **_k):
+        def _counting_ask(recipe):
             outer.n += 1
-            return None
+            return outer._ask(recipe)
 
-        subprocess.run, subprocess.Popen = _fake_run, _Proc
+        builder._blend_probe_discard(kill=True)
+        builder._BLEND_PROBE_CHILD_CMD = [sys.executable, "-c", (
+            "import json, sys, time\n"
+            "print(json.dumps({'ready': True}), flush=True)\n"
+            "for line in sys.stdin:\n"
+            f"    time.sleep({self.delay})\n"
+            "    print(json.dumps({'id': json.loads(line)['id'], 'blend': True}), flush=True)\n")]
+        builder._BLEND_PROBE_TICK = 0.05
+        builder._blend_probe_ask = _counting_ask
+        subprocess.Popen = _Counting
         return self
 
     def __exit__(self, *_exc):
-        self._sp.run, self._sp.Popen = self._run, self._popen
+        self._sp.Popen = self._popen
+        builder._blend_probe_discard(kill=True)
+        builder._blend_probe_ask = self._ask
+        builder._BLEND_PROBE_CHILD_CMD, builder._BLEND_PROBE_TICK = self._cmd, self._tick
         return False
-
-
-class _Sink:
-    def write(self, _s):
-        pass
-
-    def close(self):
-        pass
 
 
 def _probe_fixture():
@@ -1629,36 +1624,37 @@ def _probe_fixture():
 
     part = Box(20, 20, 10)
     builder._BLEND_PROBE_CACHE.clear()
+    builder._blend_probe_discard(kill=True)
     return part, list(part.edges())[:1]
 
 
 def test_a_blend_probe_costs_one_fork_for_every_size_under_it():
-    """Three descending sizes on one edge set: one fork, not three.
+    """Three descending sizes on one edge set: one probe, not three.
 
     A blend that COMPLETED at 2 mm completes at 0.5 mm — shrinking it cannot
     invent a hang — so the pass covers everything below it. That is the whole
     cost during a drag, and the reason the viewport lagged so far behind the
     typed number that changing it looked like it did nothing."""
     part, edges = _probe_fixture()
-    with _FakeForks() as forks:
+    with _EchoChild() as child:
         for size in (2.0, 1.0, 0.5):
             assert builder._probe_blend(part, edges, "chamfer", size), size
-    assert forks.n == 1, \
-        f"{forks.n} forks for three descending sizes — one per keystroke of a retype"
-    # ...and a LARGER size is a question the pass did not answer, so it is asked.
-    with _FakeForks() as bigger:
+        assert child.n == 1, \
+            f"{child.n} probes for three descending sizes — one per keystroke of a retype"
+        # ...and a LARGER size is a question the pass did not answer, so it is asked.
         builder._probe_blend(part, edges, "chamfer", 4.0)
-    assert bigger.n == 1, "a size above the one that passed was never probed"
-    print(f"{PASS} one fork covers every smaller size; a larger one still probes")
+        assert child.n == 2, "a size above the one that passed was never probed"
+    assert child.spawns == 1, f"{child.spawns} child processes for two probes: the child is not kept warm"
+    print(f"{PASS} one probe covers every smaller size; a larger one still probes")
 
 
 def test_a_slow_blend_probe_keeps_publishing_liveness():
     """A probe that takes several seconds must not look like a wedged worker."""
     part, edges = _probe_fixture()
-    with _FakeForks(slices=3), _Ticks() as t:
+    with _EchoChild(delay=0.5), _Ticks() as t:
         builder._probe_blend(part, edges, "fillet", 3.0)
     assert t.n >= 2, \
-        f"a probe spanning 3 wait slices published {t.n} ticks — silence is what gets reaped"
+        f"a probe spanning several wait slices published {t.n} ticks — silence is what gets reaped"
     assert all(i == builder.HB_KEEP_INDEX for i in t.index), (
         "a probe's liveness tick overwrote the name of the feature that owns it "
         f"(indices {t.index})")

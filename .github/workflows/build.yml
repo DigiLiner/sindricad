@@ -155,6 +155,9 @@ jobs:
           uv run python test_split.py
           uv run python test_mesh_reference.py
           uv run python test_heartbeat.py
+          # TA 5be73f3d: the fillet/chamfer hang probe answers from one warm
+          # child, not a cold interpreter per preview value.
+          uv run python test_blend_probe_warm.py
           uv run python test_sysmem.py
           uv run python test_export_gates.py
           # The glyph-coverage guard: it decides whether text becomes geometry

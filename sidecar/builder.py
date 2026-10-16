@@ -39,6 +39,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import traceback
 import zipfile
@@ -6144,13 +6145,29 @@ _BLEND_PROBE_TICK = 1.0  # how long the wait below goes between liveness ticks
 # (brep, edge indices, kind) -> [largest size that COMPLETED, {sizes that timed
 # out}]. Deliberately not keyed on the size — see _probe_blend.
 _BLEND_PROBE_CACHE = {}
+# The process that answers the probes. Starting one is a cold import of build123d
+# (~1.9 s here, ~16 s on the Windows laptop of field report 5be73f3d) against a
+# 2-10 ms kernel call, and a fresh one per question made every preview value of a
+# blend on a large body cost that start. So ONE is kept warm per worker and asked
+# over a line protocol.
+_BLEND_PROBE_CHILD = None  # _BlendProbeChild, spawned lazily by _blend_probe_child
+_BLEND_PROBE_CHILD_CMD = None  # argv override, the test seam; None = the real child
+# Closed after this long unused. It holds ~270 MB while up, and every expiry
+# re-pays the cold start, which on the reporter's machine is 16 s: two minutes
+# routinely passed while picking the next blend's edges, so it is ten.
+_BLEND_PROBE_IDLE_S = 600.0
+_BLEND_PROBE_RECYCLE = 500  # answers before a fresh process (and a fresh heap)
+_BLEND_PROBE_IDLE_TIMER = None
+_BLEND_PROBE_LOCK = threading.Lock()  # one exchange at a time; the idle expiry skips a busy child
+_BLEND_PROBE_SEQ = 0  # id of the last recipe sent, matched against the reply
 
 
 def _blend_needs_probing(body_shape, edges):
     """Is this blend in the class that can take minutes to fail?
 
-    The probe costs a fork and a full extra kernel run (~1.7 s here, several
-    times that on CI), so paying it for every fillet in the suite added ~27
+    The probe costs a full extra kernel run in another process, and that process
+    a cold start (~1.7 s here, several times that on CI) whenever none is warm;
+    when every probe paid the start, probing every fillet in the suite added ~27
     minutes to the `test` leg. That is worth avoiding, but ONLY where the risk is
     genuinely absent.
 
@@ -6178,12 +6195,12 @@ def _blend_needs_probing(body_shape, edges):
 
 
 def _probe_blend(body_shape, edges, kind, size):
-    """True if this blend completes in a throwaway process inside the timeout.
+    """True if this blend completes in the probe process inside the timeout.
 
-    False means REFUSE it: either it raised there (the real build will raise the
-    same way, with a better message) or it ran past the deadline. Cached on the
-    body's bytes and the edge indices, so an unchanged document pays one fork,
-    not one per rebuild.
+    False means REFUSE it: it ran past the deadline. (A blend that RAISED there
+    passes: the real build will raise the same way, with a better message.)
+    Cached on the body's bytes and the edge indices, so an unchanged document
+    pays one probe, not one per rebuild.
 
     The size is NOT part of the key. A PASS carries downwards — a blend that
     completed at 2 mm completes at 0.5 mm, because shrinking it cannot invent a
@@ -6222,61 +6239,19 @@ def _probe_blend(body_shape, edges, kind, size):
         return True
     if size_f in refused:
         return False
-    import subprocess
-    import threading
-    recipe = json.dumps({"brep": brep, "idxs": idxs, "kind": kind, "size": size_f})
-    # Default True: only a TIMEOUT refuses. If the child RAISED, the real call is
-    # about to raise the same way, and OCCT's own message ("try a smaller length
+    # Only a TIMEOUT refuses. If the child RAISED, the real call is about to
+    # raise the same way, and OCCT's own message ("try a smaller length
     # value(s)") is far more actionable than anything this can say — so let it
     # through and report properly. The probe exists to catch the hang, not to
     # pre-empt an honest failure.
-    #
-    # Nothing is read back: a child that ran to completion — whether it succeeded
-    # or raised — is not a hang, and that is all this decides. So its output goes
-    # to /dev/null, and the recipe is fed from a writer thread, because the child
-    # imports build123d BEFORE it reads stdin and a BREP is routinely larger than
-    # a pipe buffer — writing it inline would block this thread for the whole of
-    # the child's cold start, which is most of what there is to tick through.
-    ok = True
     try:
-        proc = subprocess.Popen(
-            [sys.executable, "-c", "import builder; builder._blend_probe_main()"],
-            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            text=True, cwd=os.path.dirname(os.path.abspath(__file__)),
-        )
+        ok = _blend_probe_ask({"brep": brep, "idxs": idxs, "kind": kind, "size": size_f})
     except Exception:
-        return True  # probe infrastructure failed; do not block a real build
-
-    def _feed():
-        try:
-            proc.stdin.write(recipe)
-            proc.stdin.close()
-        except Exception:
-            pass  # the child died early; the wait below is what decides
-
-    threading.Thread(target=_feed, daemon=True).start()
-    deadline = time.monotonic() + _BLEND_PROBE_TIMEOUT
-    try:
-        while True:
-            try:
-                proc.wait(timeout=_BLEND_PROBE_TICK)
-                break
-            except subprocess.TimeoutExpired:
-                if time.monotonic() >= deadline:
-                    proc.kill()
-                    proc.wait()
-                    ok = False  # the hang this exists for
-                    break
-                # Wait in SLICES and publish liveness between them. A single
-                # blocking wait said nothing for up to 25 s, and the supervisor
-                # reaps a worker whose heartbeat has not moved for 60 — so on a
-                # slow machine a probe could cost the user the whole worker and
-                # be reported as "one operation stalled over 60 seconds".
-                # keep_index=True: the feature that owns this probe has already
-                # announced itself and this must not overwrite its name.
-                progress_tick(keep_index=True)
-    except Exception:
-        ok = True  # probe infrastructure failed; do not block a real build
+        ok = None
+    if ok is None:
+        # No answer at all: the probe machinery failed, which is not evidence of
+        # a hang. Do not block a real build, and remember nothing.
+        return True
     entry = _BLEND_PROBE_CACHE.setdefault(key, [None, set()])
     if ok:
         if entry[0] is None or size_f > entry[0]:
@@ -6286,11 +6261,189 @@ def _probe_blend(body_shape, edges, kind, size):
     return ok
 
 
-def _blend_probe_main():
-    """Child entry point for _probe_blend. Reads one JSON recipe on stdin and
-    prints one JSON line. Runs the SAME kernel call the worker would."""
-    rec = json.loads(sys.stdin.read())
-    out = {"blend": False}
+class _BlendProbeChild:
+    """The warm probe process. A thread drains its stdout into a queue, so the
+    asker can wait in slices and keep publishing liveness between them."""
+
+    def __init__(self, proc):
+        import queue
+
+        self.proc = proc
+        self.replies = queue.Queue()
+        self.ready = False  # build123d is imported and it is reading recipes
+        self.served = 0
+        threading.Thread(target=self._drain, daemon=True).start()
+
+    def _drain(self):
+        try:
+            for line in self.proc.stdout:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue  # kernel/font chatter on stdout, not our protocol
+                if isinstance(rec, dict):
+                    self.replies.put(rec)
+        except Exception:
+            pass
+        self.replies.put(None)  # EOF: the child is gone
+
+
+def _blend_probe_child():
+    """The warm child, started if there is none, replaced if it has died or
+    answered _BLEND_PROBE_RECYCLE recipes (each probe used to get a fresh heap;
+    a long session in one process is new exposure to allocator growth).
+
+    Runs only on the thread that builds, i.e. the worker's main thread, and that
+    is where the child must be spawned: PR_SET_PDEATHSIG (see _die_with_worker)
+    fires when the creating THREAD exits, so a child started from the idle
+    timer's thread would be killed the moment that thread finished."""
+    global _BLEND_PROBE_CHILD
+    import subprocess
+
+    child = _BLEND_PROBE_CHILD
+    if child is not None and (child.served >= _BLEND_PROBE_RECYCLE or child.proc.poll() is not None):
+        _blend_probe_discard(kill=False)
+        child = None
+    if child is None:
+        # font_guard first, as the worker's own initializer does: a bare
+        # `import builder` lets one unreadable system font fail the import, and
+        # the probe would then fail open on every blend on that machine.
+        cmd = _BLEND_PROBE_CHILD_CMD or [
+            sys.executable, "-c",
+            "import font_guard; font_guard.ensure(); import builder; builder._blend_probe_serve()"]
+        child = _BLEND_PROBE_CHILD = _BlendProbeChild(subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", cwd=os.path.dirname(os.path.abspath(__file__)),
+        ))
+    return child
+
+
+def _blend_probe_ask(recipe):
+    """Does this blend complete inside _BLEND_PROBE_TIMEOUT in the warm child?
+
+    True: it completed, raised or not, so it is not a hang. False: it ran past
+    the deadline and the child was killed. None: no answer at all (the child
+    could not start in time, or died), which the caller treats as "do not
+    block". A child that died before it was READY never saw the recipe, so it
+    gets one fresh start; one that died answering would only die again."""
+    with _BLEND_PROBE_LOCK:
+        try:
+            verdict, retry = _blend_probe_exchange(_blend_probe_child(), recipe)
+            if retry:
+                verdict, _retry = _blend_probe_exchange(_blend_probe_child(), recipe)
+            return verdict
+        finally:
+            _blend_probe_arm_idle()
+
+
+def _blend_probe_exchange(child, recipe):
+    """Send one recipe, wait for its reply. Returns (verdict as for
+    _blend_probe_ask, whether the child died before it was ready)."""
+    global _BLEND_PROBE_SEQ
+    import queue
+
+    _BLEND_PROBE_SEQ += 1
+    n = _BLEND_PROBE_SEQ
+    line = json.dumps(dict(recipe, id=n)) + "\n"
+    child.served += 1
+
+    # From a thread: a cold child imports build123d BEFORE it reads stdin and a
+    # BREP is routinely larger than a pipe buffer, so writing inline would block
+    # this thread for the whole of the start, which is most of what there is to
+    # tick through.
+    def _feed():
+        try:
+            child.proc.stdin.write(line)
+            child.proc.stdin.flush()
+        except Exception:
+            pass  # the child died; EOF on its stdout is what decides
+
+    threading.Thread(target=_feed, daemon=True).start()
+    # The budget restarts at READY, so the kernel always gets all of it: a 16 s
+    # cold start used to leave a slow machine 9 s of the 25. A start that is not
+    # ready inside its own budget is the machine, not the blend, so it fails open.
+    deadline = time.monotonic() + _BLEND_PROBE_TIMEOUT
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            _blend_probe_discard(kill=True)
+            return (False if child.ready else None), False  # False: the hang this exists for
+        try:
+            rec = child.replies.get(timeout=min(_BLEND_PROBE_TICK, left))
+        except queue.Empty:
+            # Wait in SLICES and publish liveness between them. A single
+            # blocking wait said nothing for up to 25 s, and the supervisor
+            # reaps a worker whose heartbeat has not moved for 60 — so on a
+            # slow machine a probe could cost the user the whole worker and
+            # be reported as "one operation stalled over 60 seconds".
+            # keep_index=True: the feature that owns this probe has already
+            # announced itself and this must not overwrite its name.
+            progress_tick(keep_index=True)
+            continue
+        if rec is None:
+            _blend_probe_discard(kill=True)
+            return None, not child.ready
+        if rec.get("ready") and not child.ready:
+            child.ready = True
+            deadline = time.monotonic() + _BLEND_PROBE_TIMEOUT
+        elif rec.get("id") == n and "blend" in rec:
+            return True, False
+
+
+def _blend_probe_discard(kill):
+    """Forget the warm child. kill=False closes its stdin, which it answers by
+    exiting cleanly; kill=True is for one that is hung or already dead."""
+    global _BLEND_PROBE_CHILD
+    child, _BLEND_PROBE_CHILD = _BLEND_PROBE_CHILD, None
+    if _BLEND_PROBE_IDLE_TIMER is not None:
+        _BLEND_PROBE_IDLE_TIMER.cancel()
+    if child is None:
+        return
+    proc = child.proc
+    try:
+        if not kill:
+            proc.stdin.close()
+            proc.wait(timeout=5)
+            return
+    except Exception:
+        pass  # it will not go quietly
+    try:
+        proc.kill()
+        proc.wait(timeout=5)
+    except Exception:
+        pass
+
+
+def _blend_probe_arm_idle():
+    """(Re)start the countdown that closes the child once it has sat unused for
+    _BLEND_PROBE_IDLE_S. Nothing is spawned until a large body is blended, so a
+    user who never does that never pays for the child at all."""
+    global _BLEND_PROBE_IDLE_TIMER
+    if _BLEND_PROBE_IDLE_TIMER is not None:
+        _BLEND_PROBE_IDLE_TIMER.cancel()
+    if _BLEND_PROBE_CHILD is None:
+        return
+    timer = threading.Timer(_BLEND_PROBE_IDLE_S, _blend_probe_expire)
+    timer.daemon = True  # a pending expiry must never hold a process open at exit
+    _BLEND_PROBE_IDLE_TIMER = timer
+    timer.start()
+
+
+def _blend_probe_expire():
+    # Timer.cancel() cannot stop a callback that is already running, so act only
+    # while this is still THE timer (a probe since then armed a new one) and no
+    # probe is in flight (that one re-arms the timer when it finishes).
+    if not _BLEND_PROBE_LOCK.acquire(blocking=False):
+        return
+    try:
+        if threading.current_thread() is _BLEND_PROBE_IDLE_TIMER:
+            _blend_probe_discard(kill=False)
+    finally:
+        _BLEND_PROBE_LOCK.release()
+
+
+def _blend_probe_run(rec):
+    """Run the SAME kernel call the worker is about to. True if it returned."""
     try:
         shape = _brep_b64_to_shape(rec["brep"])
         all_edges = list(shape.edges())
@@ -6301,10 +6454,57 @@ def _blend_probe_main():
                 fillet(picked, radius=rec["size"])
             else:
                 chamfer(picked, length=rec["size"])
-            out["blend"] = True
+            return True
     except Exception:
-        out["blend"] = False
-    print(json.dumps(out), flush=True)
+        pass
+    return False
+
+
+def _blend_probe_serve():
+    """Child entry point for _probe_blend: say READY once build123d is imported,
+    then answer each JSON recipe on stdin with one JSON line, until stdin closes.
+    Every line is printed after a newline and the reply carries the recipe's id,
+    so stray kernel/font output on stdout can neither be taken for an answer nor
+    glue itself onto the front of one."""
+    _die_with_worker()
+    print("\n" + json.dumps({"ready": True}), flush=True)
+    for line in sys.stdin:
+        try:
+            rec = json.loads(line)
+        except Exception:
+            continue
+        print("\n" + json.dumps({"id": rec.get("id"), "blend": _blend_probe_run(rec)}), flush=True)
+
+
+def _die_with_worker():
+    """Exit with the worker that asks this child. A worker that exits closes our
+    stdin and the serve loop ends, but one KILLED while this child is inside a
+    hanging kernel call never gets that far. The same branches as
+    server._die_with_parent (builder must not import server): Linux asks for
+    SIGTERM via PR_SET_PDEATHSIG, macOS polls getppid(). Windows is covered by
+    the shell's Job Object (KILL_ON_JOB_CLOSE), which this process inherits."""
+    if sys.platform == "linux":
+        try:
+            import ctypes
+            import signal
+
+            PR_SET_PDEATHSIG = 1
+            libc = ctypes.CDLL("libc.so.6", use_errno=True)
+            libc.prctl(PR_SET_PDEATHSIG, signal.SIGTERM, 0, 0, 0)
+        except Exception:
+            pass  # best-effort; stdin EOF still ends an idle child
+        return
+
+    if sys.platform == "darwin":
+        orig_ppid = os.getppid()
+
+        def _watch():
+            while True:
+                time.sleep(1.0)
+                if os.getppid() != orig_ppid:
+                    os._exit(0)  # the worker is gone (reparented to launchd)
+
+        threading.Thread(target=_watch, daemon=True).start()
 
 
 def _blend_edges(f, ctx, label, combined, one_edge, blend_size):
@@ -6330,7 +6530,7 @@ def _blend_edges(f, ctx, label, combined, one_edge, blend_size):
         if not edges:
             raise GeomError(f"no edge found to {label.lower()} on {BODY_SLOT}",
                             body_id=body["id"], subject=body.get("name"))
-        # Clear the whole blend through a throwaway process FIRST. A refusal
+        # Clear the whole blend through the probe process FIRST. A refusal
         # here is either "it raises" (the real call below reports it properly)
         # or "it never returns", which is the case this exists for and the only
         # one an in-worker guard cannot catch. Refusing costs the user this
