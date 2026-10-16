@@ -25,7 +25,7 @@
 import type { ResolvedEntity } from "./snap";
 import type { DimField, SketchConstraint } from "../types";
 import { isDimConstraint, newConstraintId } from "./id";
-import { entityDims } from "./entityDims";
+import { POLYGON_CENTRE, SLOT_AXIS, entityDims, spansPolygonRadius, spansSlotLength } from "./entityDims";
 import { RIGID_ENTITY_NUM_FIELDS } from "../document/numFields";
 
 const EPS = 1e-9;
@@ -40,9 +40,10 @@ const EPS = 1e-9;
  *  attached to it.
  *
  *  null = no constraint form for TYPING a value; the caller writes the number
- *  into the entity (rectangle W/H, slot width, polygon radius, line angle). A
- *  rectangle's extent does have a constraint form once it is locked — see
- *  lockDimFor and planDimEdit, which is what the callers ask. */
+ *  into the entity (rectangle W/H, slot length and width, polygon radius, line
+ *  angle). A rectangle's extent, a slot's length and a polygon's radius do have
+ *  a constraint form once locked — see lockDimFor and planDimEdit, which is
+ *  what the callers ask. */
 export function drivingDimFor(
   e: { type: ResolvedEntity["type"]; id: string },
   field: DimField,
@@ -119,8 +120,13 @@ function rectExtentSpanned(
  *  dimension tool already puts a p2lDistance on, which sketchSolve compiles via
  *  the rect-edge line registration.
  *
- *  null = this badge cannot be locked: the polygon radius and slot L/W are never
- *  compiled at all, so nothing can move them and a lock would mean nothing. */
+ *  A slot's length and a polygon's radius are solver variables too (a slot's
+ *  two end centres and a polygon's circle are solver geometry, sketchSolve), so
+ *  a drag moves them like any other: the slot's is locked as a `distance` on its
+ *  axis (`S~2`), the polygon's as the distance from its centre to corner 0.
+ *
+ *  null = this badge cannot be locked: a slot's width is pinned to its number
+ *  on every compile, so nothing can move it and a lock would mean nothing. */
 export function lockDimFor(
   e: { type: ResolvedEntity["type"]; id: string },
   field: DimField,
@@ -128,6 +134,10 @@ export function lockDimFor(
 ): SketchConstraint | null {
   const direct = drivingDimFor(e, field, mm);
   if (direct) return direct;
+  if (e.type === "slot" && field === "length") return { type: "distance", line: `${e.id}~${SLOT_AXIS}`, value: mm };
+  if (e.type === "polygon" && field === "radius") {
+    return { type: "p2pDistance", e1: e.id, p1: POLYGON_CENTRE, e2: e.id, p2: 0, value: mm };
+  }
   if (e.type !== "rectangle") return null;
   const edges = rectEdgesFor(e.id, field);
   return edges ? { type: "distance", line: edges[0], value: mm } : null;
@@ -167,6 +177,12 @@ export function governingDimAt(
         return span?.id === e.id && span.field === field;
       };
     }
+  } else if (e.type === "slot" && field === "length") {
+    // Lock's `distance` on the axis, or the Dimension tool's end to end
+    const axis = `${e.id}~${SLOT_AXIS}`;
+    governs = (c) => (c.type === "distance" && c.line === axis) || spansSlotLength(c, e);
+  } else if (e.type === "polygon" && field === "radius") {
+    governs = (c) => spansPolygonRadius(c, e);
   }
   if (!governs) return null;
   const at = constraints.findIndex(governs);
@@ -178,10 +194,15 @@ export function governingDimAt(
  *  way Lock spells it (lockDimFor), at the value the badge reads now. A badge's
  *  own right-click locks one of these; Constraints > Lock Dimension and the
  *  selection's right-click lock all of them (report d3338e3a). Empty when there
- *  is nothing left to lock. */
-export function measuredLocks(constraints: SketchConstraint[], e: ResolvedEntity): SketchConstraint[] {
+ *  is nothing left to lock. `bound` names a field a parameter already sets
+ *  directly (a polygon's radius): that one is held, and is left out. */
+export function measuredLocks(
+  constraints: SketchConstraint[],
+  e: ResolvedEntity,
+  bound: (field: DimField) => boolean = () => false,
+): SketchConstraint[] {
   return entityDims(e).flatMap((d) => {
-    if (governingDimAt(constraints, e, d.field) !== "free") return [];
+    if (bound(d.field) || governingDimAt(constraints, e, d.field) !== "free") return [];
     const c = lockDimFor(e, d.field, d.valueMm);
     return c ? [c] : [];
   });
@@ -248,7 +269,12 @@ export function planDimEdit(
 export function upsertDrivingDim(constraints: SketchConstraint[], c: SketchConstraint): SketchConstraint[] {
   const sameTarget = (k: SketchConstraint): boolean =>
     (c.type === "distance" && k.type === "distance" && k.line === c.line) ||
-    (c.type === "diameter" && k.type === "diameter" && k.circle === c.circle);
+    (c.type === "diameter" && k.type === "diameter" && k.circle === c.circle) ||
+    // the same pair either way round (a polygon's radius lock), as
+    // SketchMode.setDrivingDimension has it
+    (c.type === "p2pDistance" && k.type === "p2pDistance" &&
+      ((k.e1 === c.e1 && k.p1 === c.p1 && k.e2 === c.e2 && k.p2 === c.p2) ||
+        (k.e1 === c.e2 && k.p1 === c.p2 && k.e2 === c.e1 && k.p2 === c.p1)));
   let replacedId: string | undefined;
   const kept = constraints.filter((k) => {
     if (!sameTarget(k)) return true;
@@ -263,10 +289,13 @@ export function upsertDrivingDim(constraints: SketchConstraint[], c: SketchConst
  *  it (the canvas label and the parameters panel ask the same question):
  *    constraint → the driving constraint that holds it, at index `at`
  *    entity     → the shape's own number (a polygon's radius, a slot's width:
- *                 the solver never moves these, so the parameter writes them)
+ *                 the parameter writes them, and the solver holds a bound one
+ *                 still, sketchSolve.BoundFields). A polygon's radius binds
+ *                 here while it is free and to its lock once it has one.
  *    lock       → nothing holds it yet; `c` is the constraint to add first,
  *                 at the value the badge measures, so naming moves nothing
- *  null = it cannot hold one: a slot's length is its two centres, not a number.
+ *                 (a rectangle's extent, a slot's length)
+ *  null = it cannot hold one.
  *
  *  A governing X/Y distance that holds the extent the other way round (a
  *  negative value, see retypeValue) is null too. The badge shows a magnitude,
@@ -294,6 +323,15 @@ export function dimBindingFor(
   return lock ? { kind: "lock", c: lock } : null;
 }
 
+/** Write an entity badge's number the way typing it would (entityDims), when
+ *  it is positive and not already there; true if anything moved. */
+function writeEntityDim(e: ResolvedEntity, field: DimField, mm: number): boolean {
+  const d = entityDims(e).find((x) => x.field === field);
+  if (!d || !(mm > 0) || Math.abs(d.valueMm - mm) <= EPS) return false;
+  d.write(mm);
+  return true;
+}
+
 /** Apply what can be applied without solving. Mutates `entities` in place and
  *  returns true if anything actually moved.
  *
@@ -309,6 +347,13 @@ export function applyDrivingDimsDirect(
 ): boolean {
   let changed = false;
   for (const c of constraints) {
+    // A slot's length or a polygon's radius held point to point (before the
+    // rectangle rule, which would read a slot's end to end as a width)
+    const owner = c.type === "p2pDistance" ? entities.find((x) => x.id === c.e1) : undefined;
+    if (owner && (spansSlotLength(c, owner) || spansPolygonRadius(c, owner))) {
+      if (writeEntityDim(owner, owner.type === "slot" ? "length" : "radius", (c as { value: number }).value)) changed = true;
+      continue;
+    }
     const span = rectExtentSpanned(c);
     if (span) {
       // The dimension the tool writes for a rectangle. Without this, retyping
@@ -335,6 +380,11 @@ export function applyDrivingDimsDirect(
       if (t > 0) {
         const r = entities.find((x) => x.id === c.line.slice(0, t));
         const k = Number(c.line.slice(t + 1));
+        if (r?.type === "slot" && k === SLOT_AXIS) {
+          // a locked slot length: the distance on its axis
+          if (writeEntityDim(r, "length", c.value)) changed = true;
+          continue;
+        }
         if (r?.type !== "rectangle" || !(c.value > 0) || !Number.isInteger(k) || k < 0 || k > 3) continue;
         const field = k === 0 || k === 2 ? "width" : "height"; // 0/2 horizontal, 1/3 vertical
         if (Math.abs(r[field] - c.value) <= EPS) continue;

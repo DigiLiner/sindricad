@@ -192,12 +192,17 @@ describe("planDimEdit: typing a value into a free-but-lockable badge auto-locks 
     expect(plan).toMatchObject({ kind: "upsert", c: { type: "diameter", circle: "c1", value: 20 }, moves: "c1" });
   });
 
-  // Slot width, polygon radius and line angle are explicitly OUT of scope —
-  // lockDimFor has no constraint form for them, so typing stays a direct write.
-  it("leaves a polygon's radius a direct write — no lock representation exists", () => {
+  // A polygon's radius has a lock form now (centre to corner 0), so typing
+  // into a free one locks it, as a rectangle's width does (tracker b6c83f35).
+  it("auto-locks a polygon's radius as the distance from its centre to corner 0", () => {
     const plan = planDimEdit([], { type: "polygon", id: "p1" }, "radius", 12);
-    expect(plan).toMatchObject({ kind: "direct" });
+    expect(plan).toMatchObject({
+      kind: "upsert", c: { type: "p2pDistance", e1: "p1", p1: -1, e2: "p1", p2: 0, value: 12 }, moves: "p1", writeFirst: true,
+    });
   });
+
+  // Slot width and line angle stay OUT of scope: lockDimFor has no constraint
+  // form for them, so typing stays a direct write.
 
   it("leaves a slot's width a direct write — no lock representation exists", () => {
     const plan = planDimEdit([], { type: "slot", id: "s1" }, "width", 12);

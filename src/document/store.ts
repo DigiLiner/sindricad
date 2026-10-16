@@ -1202,10 +1202,11 @@ export class DocumentStore {
    *  coordinates instead is not equivalent — a radius is a free variable to the
    *  solver, so the next solve takes the typed value straight back out.
    *
-   *  Every other dimension (an UNLOCKED rectangle W/H, slot width, polygon
-   *  radius) has no constraint form and stays a coordinate write, exactly as on
-   *  the canvas — but a rectangle whose width has been locked is governed by a
-   *  `distance` on its edge, and that constraint is what gets retyped.
+   *  A rectangle's W/H, a slot's length and a polygon's radius are written and
+   *  then locked, exactly as on the canvas, and once locked it is that lock
+   *  (a `distance` on the rectangle's edge or the slot's axis, a polygon's
+   *  centre to a corner) that gets retyped. A slot's width has no constraint
+   *  form and stays a coordinate write.
    *
    *  `entityIndex` indexes the sketch's own `entities` (which resolveRealEntities
    *  maps 1:1). Serialized on paramChain, and constraint + solved coordinates

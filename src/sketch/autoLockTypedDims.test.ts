@@ -10,9 +10,10 @@
 // e9742a4f: "in other dimensions that are not locked, if I change them they
 // become locked" — true for everything except a rectangle.
 //
-// Decided scope (Thomas): rectangle width/height and circle diameter only.
-// Slot width, polygon radius and line angle stay direct writes — lockDimFor
-// has no constraint form for them, so there is nothing to auto-lock to.
+// Decided scope (Thomas): rectangle width/height and circle diameter only, at
+// draw time. Retyping an EXISTING slot's length or polygon's radius auto-locks
+// too since they gained a lock form (slotPolygonLocks.test.ts); slot width and
+// line angle stay direct writes, lockDimFor has no constraint form for them.
 //
 // These drive the real private methods off SketchMode.prototype — no WebGL,
 // same technique as dimFieldRefusal.test.ts — with the REAL DimInput on the

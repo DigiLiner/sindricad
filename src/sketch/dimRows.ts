@@ -19,7 +19,7 @@ import { t } from "../i18n";
 import type { ResolvedEntity } from "./snap";
 import type { DimField, SketchConstraint } from "../types";
 import { isDriven } from "../types";
-import { constraintDims, entityDims, pointAlignment } from "./entityDims";
+import { SLOT_AXIS, constraintDims, entityDims, pointAlignment, spansPolygonRadius } from "./entityDims";
 import { constraintName } from "./dimConflict";
 import { isDimConstraint } from "./id";
 import { ORIGIN_X_ID, ORIGIN_Y_ID, isOriginGeometry, isOriginId } from "./origin";
@@ -146,15 +146,22 @@ function constraintWord(c: SketchConstraint): string {
 }
 
 /** Is this constraint already listed as an entity's badge? A line's length and
- *  a circle's diameter, and a rectangle's locked width or height (a `distance`
- *  on one of its sides), show their value on the entity's own badge, as they
- *  do on the canvas. Everything else is a row of its own. */
+ *  a circle's diameter, a rectangle's locked width or height (a `distance`
+ *  on one of its sides), a slot's locked length (a `distance` on its axis) and
+ *  a polygon's locked radius (centre to a corner) show their value on the
+ *  entity's own badge, as they do on the canvas. Everything else is a row of
+ *  its own. */
 function shownAsBadge(c: SketchConstraint, byId: Map<string, ResolvedEntity>): boolean {
   if (c.type === "diameter") return byId.get(c.circle)?.type === "circle";
+  if (c.type === "p2pDistance") {
+    const owner = byId.get(c.e1);
+    return owner !== undefined && spansPolygonRadius(c, owner);
+  }
   if (c.type !== "distance") return false;
   const cut = c.line.indexOf("~");
   if (cut < 0) return byId.get(c.line)?.type === "line";
-  return byId.get(c.line.slice(0, cut))?.type === "rectangle";
+  const owner = byId.get(c.line.slice(0, cut));
+  return owner?.type === "rectangle" || (owner?.type === "slot" && c.line.slice(cut + 1) === String(SLOT_AXIS));
 }
 
 /** Every dimension of a sketch, in the order the panel lists them: the

@@ -900,6 +900,26 @@ export function operandPoint(byId: Map<string, ResolvedEntity>, id: string, p: n
   return seg ? (p === 1 ? v(seg.x2, seg.y2) : v(seg.x1, seg.y1)) : null;
 }
 
+/** Does this point-to-point dimension hold slot `e`'s LENGTH: from one end
+ *  centre to the other (p 0 and 1), what the Dimension tool writes for a
+ *  slot's length? The entity is asked for, not just its id, because a line's
+ *  own end to end and a rectangle's corner 0 to 1 are spelled the same. A
+ *  reference dimension holds nothing. */
+export function spansSlotLength(c: SketchConstraint, e: { type: ResolvedEntity["type"]; id: string }): boolean {
+  if (e.type !== "slot" || c.type !== "p2pDistance" || isDriven(c)) return false;
+  if (c.e1 !== e.id || c.e2 !== e.id) return false;
+  return (c.p1 === 0 && c.p2 === 1) || (c.p1 === 1 && c.p2 === 0);
+}
+
+/** Does this point-to-point dimension hold polygon `e`'s RADIUS: from its
+ *  centre (POLYGON_CENTRE) to one of its corners? What Lock writes, and what
+ *  the Dimension tool writes for that pick. */
+export function spansPolygonRadius(c: SketchConstraint, e: { type: ResolvedEntity["type"]; id: string }): boolean {
+  if (e.type !== "polygon" || c.type !== "p2pDistance" || isDriven(c)) return false;
+  if (c.e1 !== e.id || c.e2 !== e.id) return false;
+  return (c.p1 === POLYGON_CENTRE && c.p2 >= 0) || (c.p2 === POLYGON_CENTRE && c.p1 >= 0);
+}
+
 export interface ConstraintDim {
   cIndex: number; // index into the constraints array (write target)
   labelPos: V;
@@ -1031,6 +1051,9 @@ export function constraintDims(ents: ResolvedEntity[], constraints: SketchConstr
       return e ? asRound(e) : null;
     };
     if (c.type === "p2pDistance") {
+      // a polygon's centre to a corner is its radius, shown by its own R badge
+      const owner = byId.get(c.e1);
+      if (owner && spansPolygonRadius(c, owner)) return;
       a = operandPoint(byId, c.e1, c.p1);
       b = operandPoint(byId, c.e2, c.p2);
       value = c.value;

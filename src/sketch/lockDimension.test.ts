@@ -57,9 +57,9 @@ describe("which badge is a measurement and which one drives", () => {
     expect(governingDimAt(tall, rect(100, 50), "height")).toBe(0);
   });
 
-  it("a polygon's radius stays intrinsic — the solver never moves it", () => {
+  it("a polygon's radius is a measurement too: the solver moves it (slotPolygonLocks.test.ts)", () => {
     const poly = { type: "polygon", id: "p1", x: 0, y: 0, radius: 10, sides: 6, angle: 0 } as unknown as ResolvedEntity;
-    expect(governingDimAt([], poly, "radius")).toBeNull();
+    expect(governingDimAt([], poly, "radius")).toBe("free");
   });
 });
 

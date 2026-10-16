@@ -1451,7 +1451,7 @@ export class SketchMode {
    *  this field. */
   private entityDimConstraint(index: number, field: DimField): (() => void) | "free" | null {
     const e = this.entities[index];
-    if (!e) return null;
+    if (!e || this.paramSetsField(e, field)) return null;
     const at = governingDimAt(this.constraints, e, field);
     // A measurement, honestly labelled: the badge shows what the geometry
     // currently IS, and nothing holds it there (reports fd7dcc5f, dff87040).
@@ -1459,12 +1459,20 @@ export class SketchMode {
     return () => this.deleteConstraint(at);
   }
 
+  /** A parameter sets this number on the shape itself (a polygon's radius,
+   *  numFields.RIGID_ENTITY_NUM_FIELDS) and the solver holds it there
+   *  (boundShapeFields). It is driven already, so it offers no Lock: a lock
+   *  would be a second holder, and the binding would no longer show on it. */
+  private paramSetsField(e: ResolvedEntity, field: DimField): boolean {
+    return this.exprFor(`e:${e.id}:${field}`) !== undefined;
+  }
+
   /** "Lock dimension" on a MEASURED entity badge: create the driving constraint
    *  that holds what the badge already reads. No value is retyped, so nothing
    *  should move — which is also why no mover bias is armed. */
   private entityDimLock(index: number, field: DimField): (() => void) | null {
     const e = this.entities[index];
-    if (!e) return null;
+    if (!e || this.paramSetsField(e, field)) return null;
     const dim = entityDims(e).find((d) => d.field === field);
     if (!dim || !lockDimFor(e, field, dim.valueMm)) return null;
     return () => {
@@ -1518,7 +1526,7 @@ export class SketchMode {
   private lockMeasuredDims(ids: ReadonlySet<string>) {
     const locks = this.entities
       .filter((e) => ids.has(e.id) && !isOriginGeometry(e.id))
-      .flatMap((e) => measuredLocks(this.constraints, e));
+      .flatMap((e) => measuredLocks(this.constraints, e, (f) => this.paramSetsField(e, f)));
     if (!locks.length) {
       this.toastLocked(0);
       return;
