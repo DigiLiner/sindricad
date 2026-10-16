@@ -45,3 +45,84 @@ export const noteConstraintId = constraint.note;
 export function isDimConstraint(c: SketchConstraint): c is SketchConstraint & { id?: string; value: number } {
   return "value" in c;
 }
+
+/** Every entity id a constraint names, rewritten through `op`. One arm per
+ *  constraint type and no default, so a constraint type added later fails the
+ *  type check here instead of being copied still naming the ORIGINAL ids
+ *  (Copy sketch to plane, and Copy inside a sketch: copiedConstraints). */
+export function remapConstraint(c: SketchConstraint, op: (id: string) => string): SketchConstraint {
+  switch (c.type) {
+    case "horizontal": case "vertical": case "distance":
+      return { ...c, line: op(c.line) };
+    case "parallel": case "perpendicular": case "equal": case "collinear": case "angle":
+      return { ...c, l1: op(c.l1), l2: op(c.l2) };
+    case "diameter":
+      return { ...c, circle: op(c.circle) };
+    case "tangent":
+      return { ...c, line: op(c.line), circle: op(c.circle) };
+    case "tangent2": case "equalRadius":
+      return { ...c, a: op(c.a), b: op(c.b) };
+    case "coincident": case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY":
+      return { ...c, e1: op(c.e1), e2: op(c.e2) };
+    case "concentric": case "c2cDistance":
+      return { ...c, c1: op(c.c1), c2: op(c.c2) };
+    case "midpoint": case "p2lDistance":
+      return { ...c, e: op(c.e), line: op(c.line) };
+    case "pointOn":
+      return { ...c, e: op(c.e), curve: op(c.curve) };
+    case "splineTangent":
+      return { ...c, spline: op(c.spline), other: op(c.other) };
+    case "symmetric":
+      return { ...c, e1: op(c.e1), e2: op(c.e2), line: op(c.line) };
+    case "radius": case "fix":
+      return { ...c, e: op(c.e) };
+    case "radialGap":
+      return { ...c, inner: op(c.inner), outer: op(c.outer) };
+    case "c2lDistance":
+      return { ...c, circle: op(c.circle), line: op(c.line) };
+    case "p2cDistance":
+      return { ...c, e: op(c.e), circle: op(c.circle) };
+    case "offset":
+      return { ...c, pairs: c.pairs.map((p) => ({ src: op(p.src), cpy: op(p.cpy) })) };
+    default:
+      return c satisfies never;
+  }
+}
+
+/** `id` through `entIds` (old entity id -> new), keeping a compound shape's
+ *  `~<k>` side suffix (`R~0` -> `R2~0`). Null when the entity is not in the map. */
+export function mapOperandId(entIds: ReadonlyMap<string, string>, id: string): string | null {
+  const k = id.indexOf("~");
+  const to = entIds.get(k < 0 ? id : id.slice(0, k));
+  if (to === undefined) return null;
+  return k < 0 ? to : to + id.slice(k);
+}
+
+/** The constraints that come along when the entities in `entIds` are copied
+ *  (in-sketch Copy, 6c0c9504): every one whose operands ALL name a copied
+ *  entity, pointed at the copies. One that names anything else (an entity
+ *  left behind, the origin, a projected curve the copy skipped) stays behind,
+ *  so the copy is never tied to what it came from; an offset keeps just its
+ *  pairs that were copied whole. A dimension keeps its value and gets an id of
+ *  its own: a parameter binding names a dim by id, and the copy's is a plain
+ *  number, not bound to the source's parameter. */
+export function copiedConstraints(cons: readonly SketchConstraint[], entIds: ReadonlyMap<string, string>): SketchConstraint[] {
+  const out: SketchConstraint[] = [];
+  for (const c0 of cons) {
+    let c = structuredClone(c0);
+    if (c.type === "offset") {
+      c.pairs = c.pairs.filter((pr) => mapOperandId(entIds, pr.src) !== null && mapOperandId(entIds, pr.cpy) !== null);
+      if (!c.pairs.length) continue;
+    }
+    let outside = false;
+    c = remapConstraint(c, (id) => {
+      const to = mapOperandId(entIds, id);
+      if (to === null) outside = true;
+      return to ?? id;
+    });
+    if (outside) continue;
+    if (isDimConstraint(c) && c.id) c.id = newConstraintId();
+    out.push(c);
+  }
+  return out;
+}

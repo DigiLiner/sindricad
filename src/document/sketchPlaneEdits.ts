@@ -17,12 +17,11 @@ import type {
   PlaneDef,
   PlaneSpec,
   Selector,
-  SketchConstraint,
   SketchEntity,
   SketchPattern,
   Vec3,
 } from "../types";
-import { isDimConstraint, newConstraintId, newEntityId, newPatternId } from "../sketch/id";
+import { isDimConstraint, mapOperandId, newConstraintId, newEntityId, newPatternId, remapConstraint } from "../sketch/id";
 import { breakLink } from "../sketch/modify";
 import { toSketchEntity } from "../sketch/resolve";
 import type { ResolvedEntity } from "../sketch/snap";
@@ -42,49 +41,6 @@ export interface SketchTarget {
 }
 
 // --- Copy sketch to plane ---------------------------------------------------
-
-/** Every entity id a constraint names, rewritten through `op`. One arm per
- *  constraint type and no default, so a constraint type added later fails the
- *  type check here instead of being copied pointing at the SOURCE sketch's ids
- *  (which the copy does not have, so the sketcher's prune would drop it). */
-function remapConstraint(c: SketchConstraint, op: (id: string) => string): SketchConstraint {
-  switch (c.type) {
-    case "horizontal": case "vertical": case "distance":
-      return { ...c, line: op(c.line) };
-    case "parallel": case "perpendicular": case "equal": case "collinear": case "angle":
-      return { ...c, l1: op(c.l1), l2: op(c.l2) };
-    case "diameter":
-      return { ...c, circle: op(c.circle) };
-    case "tangent":
-      return { ...c, line: op(c.line), circle: op(c.circle) };
-    case "tangent2": case "equalRadius":
-      return { ...c, a: op(c.a), b: op(c.b) };
-    case "coincident": case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY":
-      return { ...c, e1: op(c.e1), e2: op(c.e2) };
-    case "concentric": case "c2cDistance":
-      return { ...c, c1: op(c.c1), c2: op(c.c2) };
-    case "midpoint": case "p2lDistance":
-      return { ...c, e: op(c.e), line: op(c.line) };
-    case "pointOn":
-      return { ...c, e: op(c.e), curve: op(c.curve) };
-    case "splineTangent":
-      return { ...c, spline: op(c.spline), other: op(c.other) };
-    case "symmetric":
-      return { ...c, e1: op(c.e1), e2: op(c.e2), line: op(c.line) };
-    case "radius": case "fix":
-      return { ...c, e: op(c.e) };
-    case "radialGap":
-      return { ...c, inner: op(c.inner), outer: op(c.outer) };
-    case "c2lDistance":
-      return { ...c, circle: op(c.circle), line: op(c.line) };
-    case "p2cDistance":
-      return { ...c, e: op(c.e), circle: op(c.circle) };
-    case "offset":
-      return { ...c, pairs: c.pairs.map((p) => ({ src: op(p.src), cpy: op(p.cpy) })) };
-    default:
-      return c satisfies never;
-  }
-}
 
 /** A projected entity as the native curve Break Link makes of it: the copy
  *  has no business following the SOURCE sketch's references, and on another
@@ -121,12 +77,7 @@ export function copySketch(d: CadDocument, srcId: string, newId: string, target:
 
   const entIds = new Map<string, string>();
   for (const e of src.entities) if (e.id) entIds.set(e.id, newEntityId());
-  const op = (id: string): string => {
-    const k = id.indexOf("~");
-    const to = entIds.get(k < 0 ? id : id.slice(0, k));
-    if (to === undefined) return id;
-    return k < 0 ? to : to + id.slice(k);
-  };
+  const op = (id: string): string => mapOperandId(entIds, id) ?? id;
 
   const entities = src.entities.map((e): SketchEntity => {
     const id = (e.id && entIds.get(e.id)) || newEntityId();

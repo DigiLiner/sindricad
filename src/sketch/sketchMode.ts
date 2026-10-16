@@ -26,7 +26,7 @@ import {
   type DimOptions, type DimPlan, type DimTarget,
 } from "./dimensionTool";
 import { pickEntity, pointBeatsCurve, tangencyPoints, crossingPoints, trimSpan, trimWithConstraints, detachEndpoint, detachableEnd, isBreakCut, filletCorner, chamferCorner, cornerJoins, explodeCompound, polygonRingHolds, rotationTie, translationTie, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, followOffsets, followRefusal, breakWithConstraints, joinLines, extendLine, breakLink, attachmentPoints, bodyDragBlocked, bodyDragFrame, fixPinnedAt, fixPinnedIds, pickDragPoint, FIXED_POINT_MSG, PROJECTED_FIXED_MSG, type ExplodeResult, type OffsetResult, type TrimResult } from "./modify";
-import { newEntityId, newConstraintId, isDimConstraint, notePatternId } from "./id";
+import { newEntityId, newConstraintId, isDimConstraint, notePatternId, copiedConstraints, mapOperandId } from "./id";
 import { angleQuadrant, reflectAcrossLine } from "./geom2d";
 import { SketchHistory, cloneSnapshot, type SketchSnapshot } from "./history";
 import { isPlainNumber, parseField, dimValueOk, fmtLength, fieldText, canonicalDecimal, storedDimExpr } from "../ui/units";
@@ -6334,13 +6334,24 @@ export class SketchMode {
       const sel = new Set<string>();
       const projected = this.warnSelectedProjected(); // linked — can't clone the link
       const owners = this.selectedOwners();
+      const entIds = new Map<string, string>(); // source -> copy
       for (const e of this.entities) {
         if (!owners.has(e.id) || projected.has(e.id)) continue;
         const id = newEntityId();
-        copies.push(translated(e, dx, dy, id));
+        entIds.set(e.id, id);
         sel.add(id);
       }
+      for (const e of this.entities) {
+        const id = entIds.get(e.id);
+        if (id === undefined) continue;
+        const c = translated(e, dx, dy, id);
+        // text on a copied path follows the copy of the path
+        const path = c.type === "text" && c.pathRef !== undefined ? mapOperandId(entIds, c.pathRef) : null;
+        copies.push(c.type === "text" && path ? { ...c, pathRef: path } : c);
+      }
       this.entities = [...this.entities, ...copies];
+      // and the constraints and dimensions among them (6c0c9504)
+      this.constraints = [...this.constraints, ...copiedConstraints(this.constraints, entIds)];
       this.selected = sel; // leave the copies selected (Fusion-style)
       this.afterModify();
     } else {

@@ -31,6 +31,11 @@ import { SketchPlane } from "./plane";
 import { originGeometry } from "./origin";
 import { candidatesFromEntities, type ResolvedEntity, type SnapKind } from "./snap";
 import { PROJECTED_FIXED_MSG } from "./modify";
+import { compileAndSolve } from "./sketchSolve";
+import { SketchHistory } from "./history";
+import { ORIGIN_X_ID } from "./origin";
+import { noteConstraintId } from "./id";
+import type { SketchConstraint } from "../types";
 import { EDGE_HOVER } from "../viewport/colors3d";
 import { t } from "../i18n";
 
@@ -50,6 +55,11 @@ installFakeDocument();
 (g.document as { createElement(tag: string): FakeEl }).createElement = (tag: string) =>
   tag === "input" ? new FakeInput() : new FakeEl(tag);
 vi.stubGlobal("requestAnimationFrame", () => 0);
+// the real planegcs wasm on disk, as constraintSemantics.test.ts reaches it
+declare const process: { cwd(): string };
+vi.mock("@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm?url", () => ({
+  default: process.cwd() + "/node_modules/@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm",
+}));
 
 /** 10 screen px per sketch mm, so the 10 px snap radius is 1 mm. */
 const PX = 10;
@@ -441,5 +451,177 @@ describe("after Enter, the point snaps like a drawing click and the box opens be
     click(20, 10.2);
     click(20, 20.2, { shift: true });
     expect([...s.selected].sort(), "the second pick adds, rather than being taken as the pivot").toEqual(["a", "b"]);
+  });
+});
+
+// Copy carries the constraints and dimensions among what it copies (6c0c9504,
+// promised on GH #41): every one whose operands are ALL in the copied set comes
+// along, pointed at the copies, with its value; one that names anything else
+// (an uncopied curve, the origin) stays behind rather than tying the copy to
+// the original. Driven through the tool's own clicks, and judged by the real
+// solver: an edited copy springs back to its dimensions, and the original
+// does not move.
+describe("Copy carries the constraints inside the copied set", () => {
+  // a hexagon, a slot and two lines nobody copies, beside SHAPES
+  const EXTRA: ResolvedEntity[] = [
+    { type: "polygon", id: "pg", x: 0, y: -30, radius: 5, sides: 6, angle: 0 },
+    { type: "slot", id: "sl", x1: 60, y1: -20, x2: 80, y2: -20, width: 6 },
+    { type: "line", id: "x", x1: 100, y1: 100, x2: 120, y2: 100 },
+    { type: "line", id: "y", x1: 100, y1: 110, x2: 120, y2: 110 },
+  ];
+  // every one already holds on the fixture, so a solve has nothing to move
+  const CONS = (): SketchConstraint[] => [
+    { type: "horizontal", line: "a" },
+    { type: "parallel", l1: "a", l2: "b" },
+    { type: "distance", id: "c1", line: "a", value: 20 },
+    { type: "p2pDistance", id: "c2", e1: "a", p1: 0, e2: "b", p2: 0, value: 10, place: { ox: 1, oy: 2 } },
+    { type: "diameter", id: "c3", circle: "c", value: 10 },
+    { type: "fix", e: "c", p: 0 },
+    { type: "distance", id: "c4", line: "r~0", value: 20 }, // a rectangle edge
+    { type: "horizontal", line: "sl~2" }, // the slot's axis
+    { type: "p2pDistanceX", id: "c5", e1: "pg", p1: -1, e2: "sl", p2: 0, value: 60 }, // hexagon centre to slot end
+    { type: "offset", id: "c6", pairs: [{ src: "a", cpy: "b" }, { src: "x", cpy: "y" }], value: 10 },
+    // these two name something the copy leaves behind
+    { type: "parallel", l1: "b", l2: "x" },
+    { type: "parallel", l1: "a", l2: ORIGIN_X_ID },
+  ];
+  const SOURCE = ["a", "b", "c", "r", "pg", "sl"];
+
+  interface Live extends Priv {
+    constraints: SketchConstraint[];
+    pendingBindings: Map<string, { expr: string; kind: string }>;
+    undoEdit(): boolean;
+    redoEdit(): boolean;
+  }
+  /** Select `sel`, arm Copy, click a base point and a destination (50, 20)
+   *  away. afterModify and the undo history are the real ones; only the solve
+   *  pump is held, so each test runs the solver itself on what Copy left. */
+  function copy(sel: string[]) {
+    const m = makeMode(sel, EXTRA);
+    const s = m.s as unknown as Live & Record<string, unknown>;
+    s.constraints = CONS();
+    for (const c of s.constraints) if ("id" in c) noteConstraintId(c.id); // as opening the sketch does
+    delete s.afterModify;
+    delete s.requestSolve;
+    Object.assign(s, { history: new SketchHistory(), pump: async () => {}, solveDirty: false });
+    (s.history as SketchHistory).reset({ entities: s.entities, constraints: s.constraints, patterns: [] } as never);
+    // the source distance is bound to a parameter (the dims panel's `width`)
+    s.pendingBindings.set("c:c1", { expr: "width", kind: "length" });
+    const before = { entities: structuredClone(s.entities), constraints: structuredClone(s.constraints) };
+    s.setTool("copy");
+    m.click(200, 200);
+    m.click(250, 220);
+    const fresh = s.entities.filter((e) => !before.entities.some((b) => b.id === e.id));
+    // each copy is where its source went, so match them up by position
+    const of = new Map<string, string>();
+    for (const e of before.entities) {
+      if (!sel.includes(e.id)) continue;
+      const moved = fresh.find((f) => canon({ ...f, id: "" }) === canon(shifted(e)));
+      if (moved) of.set(e.id, moved.id);
+    }
+    return { s, before, of };
+  }
+  /** what the copy of `e` must look like, id aside */
+  const shifted = (e: ResolvedEntity): ResolvedEntity => {
+    const o = { ...e, id: "" } as Record<string, unknown>;
+    for (const k of ["x", "x1", "x2"]) if (typeof o[k] === "number") o[k] = (o[k] as number) + 50;
+    for (const k of ["y", "y1", "y2"]) if (typeof o[k] === "number") o[k] = (o[k] as number) + 20;
+    return o as unknown as ResolvedEntity;
+  };
+  const canon = (e: ResolvedEntity) => JSON.stringify(Object.entries(e).sort(([a], [b]) => (a < b ? -1 : 1)));
+  const ids = (c: SketchConstraint) => JSON.stringify(c).match(/"(?:line|l1|l2|circle|e|e1|e2|src|cpy)":"[^"]+"/g) ?? [];
+
+  it("brings every constraint and dimension whose operands are all copied, pointed at the copies", () => {
+    const { s, before, of } = copy(SOURCE);
+    expect(of.size, "one copy per selected entity").toBe(SOURCE.length);
+    expect(s.constraints.slice(0, before.constraints.length), "the original's constraints are untouched").toEqual(before.constraints);
+    const added = s.constraints.slice(before.constraints.length);
+    const to = (id: string) => {
+      const k = id.indexOf("~");
+      return k < 0 ? of.get(id)! : of.get(id.slice(0, k))! + id.slice(k);
+    };
+    const dimIds = added.flatMap((c) => ("id" in c && c.id ? [c.id] : []));
+    expect(added).toEqual([
+      { type: "horizontal", line: to("a") },
+      { type: "parallel", l1: to("a"), l2: to("b") },
+      { type: "distance", id: dimIds[0], line: to("a"), value: 20 },
+      { type: "p2pDistance", id: dimIds[1], e1: to("a"), p1: 0, e2: to("b"), p2: 0, value: 10, place: { ox: 1, oy: 2 } },
+      { type: "diameter", id: dimIds[2], circle: to("c"), value: 10 },
+      { type: "fix", e: to("c"), p: 0 },
+      { type: "distance", id: dimIds[3], line: to("r~0"), value: 20 },
+      { type: "horizontal", line: to("sl~2") },
+      { type: "p2pDistanceX", id: dimIds[4], e1: to("pg"), p1: -1, e2: to("sl"), p2: 0, value: 60 },
+      // the pair naming lines nobody copied is not carried; the other is
+      { type: "offset", id: dimIds[5], pairs: [{ src: to("a"), cpy: to("b") }], value: 10 },
+    ]);
+    // every copied dimension is a dimension of its own: a parameter binding
+    // names a dim by id, so sharing one would bind the copy to the original's
+    expect(new Set(dimIds).size).toBe(6);
+    for (const id of dimIds) expect(["c1", "c2", "c3", "c4", "c5", "c6"]).not.toContain(id);
+    // the copy's distance is the source's value, not its parameter
+    expect([...s.pendingBindings.keys()]).toEqual(["c:c1"]);
+    // nothing shared: moving the copy's label leaves the original's where it is
+    (added[3] as { place: { ox: number } }).place.ox = 99;
+    expect((s.constraints[3] as { place: { ox: number } }).place.ox).toBe(1);
+    // and none of the new ones name an original
+    for (const c of added) for (const op of ids(c)) expect(SOURCE.some((id) => op.includes(`"${id}"`) || op.includes(`"${id}~`))).toBe(false);
+  });
+
+  it("a copy of part of a sketch leaves behind what ties it to the rest", () => {
+    const { s, before, of } = copy(["a"]);
+    const a2 = of.get("a")!;
+    expect(s.constraints.slice(before.constraints.length)).toEqual([
+      { type: "horizontal", line: a2 },
+      { type: "distance", id: expect.any(String), line: a2, value: 20 },
+    ]);
+  });
+
+  it("the solver holds the copy to its dimensions, and editing the copy leaves the original alone", async () => {
+    const { s, of } = copy(SOURCE);
+    const settled = await compileAndSolve([...s.entities], s.constraints);
+    expect(settled.ok).toBe(true);
+    expect(settled.conflicts).toEqual([]);
+    const shift = Math.max(...settled.entities.flatMap((e, i) => {
+      const was = s.entities[i] as unknown as Record<string, unknown>;
+      return Object.entries(e).flatMap(([k, v]) => (typeof v === "number" && typeof was[k] === "number" ? [Math.abs(v - (was[k] as number))] : []));
+    }));
+    expect(shift, "the copy already satisfies what it carried").toBeLessThan(1e-6);
+
+    // stretch the copied line to 30 and shrink the copied circle to r 2
+    const a2 = of.get("a")!, c2 = of.get("c")!;
+    const edited = s.entities.map((e) =>
+      e.id === a2 && e.type === "line" ? { ...e, x2: e.x1 + 30 }
+        : e.id === c2 && e.type === "circle" ? { ...e, radius: 2 } : e);
+    const r = await compileAndSolve(edited, s.constraints);
+    expect(r.ok).toBe(true);
+    const got = (id: string) => r.entities.find((e) => e.id === id)!;
+    const len = (e: ResolvedEntity) => (e.type === "line" ? Math.hypot(e.x2 - e.x1, e.y2 - e.y1) : NaN);
+    expect(len(got(a2)), "the copy springs back to its 20 mm").toBeCloseTo(20, 6);
+    expect((got(c2) as { radius: number }).radius, "and its 10 mm diameter").toBeCloseTo(5, 6);
+    expect(got("a"), "the original line did not move").toEqual(s.entities.find((e) => e.id === "a"));
+    expect(got("c"), "nor the original circle").toEqual(s.entities.find((e) => e.id === "c"));
+  });
+
+  it("text on a copied path rides the copy of the path; on a path left behind, the original", () => {
+    const text = (id: string, pathRef: string) => ({ type: "text", id, text: "hi", x: 10, y: 10, height: 3, pathRef }) as ResolvedEntity;
+    const m = makeMode(["a", "ta", "tx"], [...EXTRA, text("ta", "a"), text("tx", "x")]);
+    m.s.setTool("copy");
+    m.click(200, 200);
+    m.click(250, 220);
+    const copies = m.s.entities.filter((e) => [...m.s.selected].includes(e.id));
+    const a2 = copies.find((e) => e.type === "line")!.id;
+    expect(copies.filter((e) => e.type === "text").map((e) => (e as { pathRef: string }).pathRef)).toEqual([a2, "x"]);
+  });
+
+  it("one Undo takes the copies and their constraints away together, and Redo brings both back", () => {
+    const { s, before } = copy(SOURCE);
+    const after = { entities: structuredClone(s.entities), constraints: structuredClone(s.constraints) };
+    expect(after.constraints.length).toBeGreaterThan(before.constraints.length);
+    s.undoEdit();
+    expect(s.entities).toEqual(before.entities);
+    expect(s.constraints).toEqual(before.constraints);
+    s.redoEdit();
+    expect(s.entities).toEqual(after.entities);
+    expect(s.constraints).toEqual(after.constraints);
   });
 });
