@@ -18,6 +18,95 @@ This file starts on 2026-08-03. For anything before that, see the
 
 ## Unreleased
 
+### Files
+
+- **Closing the window asks before it throws your work away.** The X, Alt+F4 and the
+  window manager's close quit at once with unsaved changes. They now ask Save, Discard
+  or Cancel, like New, Open and Close, which gain a Cancel button too. On macOS, Cmd+Q
+  still quits without asking.
+- **Undo can no longer step back across File > Open, the recent list or Recover.** One
+  undo too many brought the previous document back under the new file's name, and Save
+  then wrote it over that file.
+- **The welcome screen's recent files ask before replacing unsaved work.** A click on a
+  recent file replaced the open document without the save prompt File > Open shows.
+- **Recovered work is not offered again once you have saved it.** Recovering left the
+  old snapshot behind, so the next launch offered the same work again.
+- **Moving the timeline marker counts as a change.** The marker's position is saved in
+  the file, but moving it never marked the document as changed, so closing could drop it
+  without asking.
+
+### Sketching
+
+- **Copy in a sketch brings the constraints and dimensions along.** Every constraint and
+  dimension between things you copied is on the copy too, with the same values, so the
+  copy holds its shape when you drag or edit it. One that ties to something you did not
+  copy, or to the origin, stays behind. A dimension driven by a parameter comes over as
+  its current number.
+- **A slot's length and a polygon's radius can be locked.** Lock Dimension used to say
+  there was nothing to lock, and a drag stretched the slot anyway. Typing a value into
+  either now locks it, as it already did for a rectangle's width.
+- **Mirroring a rectangle across a slanted line gives its true mirror image.** The copy
+  used to come out square to the sketch axes, up to 16 mm off. It is now four lines kept
+  square to each other, as Rotate makes; across a horizontal, vertical or 45 degree line
+  it is still a rectangle.
+- **A point placed on a line's end, midpoint, a corner or a centre stays joined to it.**
+  The Point tool snapped there but recorded no join, so the point was left behind when
+  that geometry moved.
+- **Showing all sketches no longer stalls on projects with many of them.** Clicking the
+  Sketches eye, or the Bodies eye while sketches were shown, redrew every sketch from
+  scratch. A sketch is now only redrawn when it changes.
+
+### Modelling
+
+- **Chamfers and fillets on bodies with many edges no longer stall on every value.**
+  Dragging the size or clicking in another edge started a fresh helper process each
+  time, about 2 seconds here and up to 16 on some Windows machines. One helper now stays
+  ready and each step takes milliseconds. It holds about 270 MB while it waits and
+  closes itself after ten minutes unused. Your first rebuild after updating is a slow
+  one.
+- **A STEP file with a sweep or revolve in it imports again.** Exporting such a model to
+  STEP and importing it back crashed the geometry engine, and the error then called the
+  file too heavy. The file was fine: a surface-tidying step I ran on import hit a crash
+  inside the OpenCascade kernel, and that step is gone. If a STEP import ever crashes the
+  engine again, I retry it once without that step and say plainly what happened.
+- **Shell says so when it cannot hollow a body.** Shelling through a face whose rim
+  blends smoothly into its neighbours (a fillet, a rounded sketch corner, a slot's flat
+  side) left the body unchanged while the feature showed green. It now turns red and
+  tells you to shell first and round the edges afterwards.
+- **Clicking a body after a fillet lights the right body.** After a fillet or chamfer
+  added faces to one body, clicking or hovering that body could light up the next body
+  instead.
+- **Fillet and Chamfer wait for a running rebuild.** Started or reopened while the model
+  was still rebuilding, they offered the old model's edges, or the blend's own edges.
+  They now wait for the new model and say so.
+
+### Languages
+
+- **The SOLID tab, the view buttons, Fit and the Units label now follow your language.**
+  They stayed in English in every language because the step that translates them never
+  ran.
+
+### Bug reports
+
+- **Bug reports keep your username out in more places.** Paths on removable drives
+  (`/media`, `/run/media`), names with accented letters in the engine log, and the
+  import and texture file paths inside an attached document are now scrubbed too. Your
+  body names and text are sent as you wrote them.
+
+### Security
+
+- **urllib3 2.7.0 to 2.8.0** ([GHSA-8988-9cw3-xx77](https://github.com/advisories/GHSA-8988-9cw3-xx77) and
+  [GHSA-vxq7-64xx-v4gw](https://github.com/advisories/GHSA-vxq7-64xx-v4gw), high;
+  [GHSA-gh4c-6fx4-qh6g](https://github.com/advisories/GHSA-gh4c-6fx4-qh6g), medium). urllib3 ships inside the
+  bundled Python runtime, but the geometry sidecar never opens an HTTP connection, so none of the three was
+  reachable in a shipped build.
+- **vitest 4.1.10 to 4.1.11** ([GHSA-82fw-gwwq-j7x9](https://github.com/advisories/GHSA-82fw-gwwq-j7x9), medium),
+  **source-map-js 1.2.1 to 1.2.2** ([GHSA-68fv-2mgg-jv7q](https://github.com/advisories/GHSA-68fv-2mgg-jv7q),
+  high) and **nanoid 3.3.16 to 3.3.20** ([GHSA-2v37-7h3g-55p8](https://github.com/advisories/GHSA-2v37-7h3g-55p8),
+  high). All three are test and build tools that are not part of the app you download.
+
+## 0.1.251 (2026-10-16)
+
 ### Sketching
 
 - **Circles and arcs that cross other shapes fill and select cleanly again.**
