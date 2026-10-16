@@ -812,10 +812,18 @@ export class SketchOverlay {
     for (const o of objects) this.activeSketch.add(o);
   }
 
-  /** The in-progress rubber-band entity (rebuilt every pointer move). */
+  /** The in-progress rubber-band entity (rebuilt every pointer move).
+   *
+   *  Asks for its own frame. A pointer move gets one from the viewport's
+   *  listener anyway, but a preview rebuilt from anywhere else stayed stale
+   *  until the mouse moved: a typed or Tab-locked Offset value did exactly
+   *  that (field report 8159018e, fixed at its call site in 72f6433). Safe
+   *  here because the render loop never reaches setPreview (unlike
+   *  setActiveSketch, which rescaleToZoom calls from inside the frame). */
   setPreview(objects: THREE.Object3D[]) {
     this.clearGroup(this.previewGroup);
     for (const o of objects) this.previewGroup.add(o);
+    this.onRepaintNeeded();
   }
 
   /** The geometry a parameters-panel row measures, lit while the row is

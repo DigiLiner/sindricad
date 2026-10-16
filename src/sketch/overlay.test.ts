@@ -315,3 +315,24 @@ describe("setSnap — a midpoint gets a triangle, not the ring every other kind 
     expect(shown[0]!.geometry).not.toBeInstanceOf(THREE.ShapeGeometry);
   });
 });
+
+// The preview is the one thing on the sketch overlay that changes on every
+// pointer move, and it asked for no frame of its own: it relied on the
+// viewport's own pointermove listener to request one. Anything that rebuilt it
+// from elsewhere (a typed or Tab-locked Offset value, field report 8159018e,
+// fixed at that call site in 72f6433) left the old preview on screen until the
+// mouse moved. setActiveSketch must NOT ask: the render loop itself reaches it
+// (SketchMode.rescaleToZoom), and that call is already the frame.
+describe("setPreview asks for the frame that shows it", () => {
+  it("a new preview and a cleared one each request a repaint; the active sketch does not", () => {
+    const overlay = new SketchOverlay();
+    let repaints = 0;
+    overlay.onRepaintNeeded = () => { repaints++; };
+    overlay.setPreview([new THREE.Group()]);
+    expect(repaints).toBe(1);
+    overlay.setPreview([]);
+    expect(repaints).toBe(2);
+    overlay.setActiveSketch([]);
+    expect(repaints).toBe(2);
+  });
+});
