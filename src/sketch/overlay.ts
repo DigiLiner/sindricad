@@ -245,6 +245,13 @@ export class SketchOverlay {
    *  drawn on, kept from update() so a pick can name a sketch POINT or LINE
    *  (Extrude's start and end objects, GH #41) without resolving it again. */
   private committedSketches: { sketchId: string; plane: SketchPlane; ents: ResolvedEntity[] }[] = [];
+  /** What update() last built for each committed sketch, kept while the sketch
+   *  is hidden, so showing it again (the Sketches eye, and the Bodies eye, which
+   *  repaints through onBuild) reattaches it instead of rebuilding it. Showing
+   *  all of 15-20 sketches cost 40-130 ms of region detection and tessellation
+   *  per click (6660a646, GH #41). Freed when the sketch changes or leaves the
+   *  document; the cost is the GPU buffers of every sketch shown this session. */
+  private drawings = new Map<string, SketchDrawing>();
   private activeRegions: WorldRegion[] = []; // active-sketch regions (sketch mode)
   // selection is a set of world interior points (parametric: re-resolved each rebuild
   // against region material, so it survives sketch edits and the sketch→model swap)
@@ -331,46 +338,73 @@ export class SketchOverlay {
    *  as sketchVisible; the app points it at viewport.requestRender(). */
   onRepaintNeeded: () => void = () => {};
 
-  /** Rebuild committed sketch curves + region fills from the document. */
+  /** Draw committed sketch curves + region fills from the document, rebuilding
+   *  only the sketches whose drawing changed since the last call. */
   update(doc: CadDocument, hiddenSketchId: string | null = null) {
     const resolved = this.resolvedPlanes();
-    this.clearGroup(this.committed);
-    this.clearGroup(this.fills);
+    // detach only: the drawings are owned by `drawings` and disposed there
+    this.committed.clear();
+    this.fills.clear();
     this.regions = [];
     this.committedSketches = [];
+    const inDoc = new Set<string>();
 
     for (const f of doc.features) {
       if (f.type !== "sketch") continue;
+      inDoc.add(f.id);
       if (f.id === hiddenSketchId) continue; // active sketch drawn by the editor
       if (!this.sketchVisible(f.id)) continue; // hidden (e.g. consumed by a feature)
-      const plane = this.planeFor(planeOf(f, resolved, doc.features));
+      const spec = planeOf(f, resolved, doc.features);
       const ents = resolveEntities(f, doc.parameters);
-      this.committedSketches.push({ sketchId: f.id, plane, ents });
-
-      for (const obj of curveObjects(ents, plane, CURVE_COLOR)) {
-        obj.userData.sketchId = f.id; // + entityId from curveObjects → Project-tool picking
-        this.committed.add(obj);
+      // Everything the drawing is made from: the plane it sits on and the
+      // resolved entities (parameters applied, ids, construction, projection
+      // state). An entity saved without an id gets a fresh one on every
+      // resolve, so such a sketch never matches and is rebuilt each time, as
+      // it always was.
+      const key = (typeof spec === "string" ? spec : JSON.stringify(spec)) + "\u0000" + JSON.stringify(ents);
+      let d = this.drawings.get(f.id);
+      if (!d || d.volatile || d.key !== key) {
+        if (d) disposeDrawing(d);
+        d = this.buildDrawing(f.id, this.planeFor(spec), ents, key);
+        this.drawings.set(f.id, d);
       }
-      for (const region of detectRegions(f.id, ents)) {
-        const wr: WorldRegion = {
-          sketchId: f.id,
-          region,
-          plane,
-          centroid3D: plane.to3D(region.centroid.x, region.centroid.y),
-          interior3D: plane.to3D(region.interior.x, region.interior.y),
-        };
-        wr.fill = fillMesh(region, plane, this.fillMaterial(wr));
-        this.fills.add(wr.fill);
-        this.regions.push(wr);
-      }
-      // Text glyphs are selectable/extrudable profiles too, but they skip line/arc
-      // region detection — build them from the cached glyph tessellation instead.
-      for (const wr of this.glyphWorldRegions(ents, plane, f.id)) {
-        wr.fill = fillMesh(wr.region, plane, this.fillMaterial(wr));
-        this.fills.add(wr.fill);
+      this.committedSketches.push({ sketchId: f.id, plane: d.plane, ents: d.ents });
+      for (const obj of d.curves) this.committed.add(obj);
+      for (const wr of d.regions) {
+        // the selection or hover may have changed while it was hidden
+        wr.fill!.material = this.fillMaterial(wr);
+        this.fills.add(wr.fill!);
         this.regions.push(wr);
       }
     }
+    for (const [id, d] of this.drawings) {
+      if (inDoc.has(id)) continue;
+      disposeDrawing(d);
+      this.drawings.delete(id);
+    }
+  }
+
+  private buildDrawing(sketchId: string, plane: SketchPlane, ents: ResolvedEntity[], key: string): SketchDrawing {
+    const curves = curveObjects(ents, plane, CURVE_COLOR);
+    for (const obj of curves) obj.userData.sketchId = sketchId; // + entityId from curveObjects → Project-tool picking
+    const regions: WorldRegion[] = [];
+    for (const region of detectRegions(sketchId, ents)) {
+      regions.push({
+        sketchId,
+        region,
+        plane,
+        centroid3D: plane.to3D(region.centroid.x, region.centroid.y),
+        interior3D: plane.to3D(region.interior.x, region.interior.y),
+      });
+    }
+    // Text glyphs are selectable/extrudable profiles too, but they skip line/arc
+    // region detection — build them from the cached glyph tessellation instead.
+    regions.push(...this.glyphWorldRegions(ents, plane, sketchId));
+    for (const wr of regions) wr.fill = fillMesh(wr.region, plane, FILL_MAT); // coloured on attach
+    // Glyph outlines land asynchronously and are not in the key, so a sketch
+    // with text is rebuilt on every update, as before.
+    const volatile = ents.some((e) => e.type === "text");
+    return { key, volatile, plane, ents, curves, regions };
   }
 
   /** Selectable regions for each non-construction text entity's glyph faces,
@@ -1134,6 +1168,24 @@ export function dimensionLineObjects(
   const line = new THREE.LineSegments(g, lineMat(color));
   line.renderOrder = 11;
   return [line];
+}
+
+/** One committed sketch as update() drew it. */
+interface SketchDrawing {
+  key: string;
+  volatile: boolean;
+  plane: SketchPlane;
+  ents: ResolvedEntity[];
+  curves: THREE.Object3D[];
+  regions: WorldRegion[];
+}
+
+/** Geometry only, nested included (a circle is a group of curve + centre
+ *  marker); the materials are module-shared. */
+function disposeDrawing(d: SketchDrawing) {
+  for (const o of [...d.curves, ...d.regions.map((wr) => wr.fill!)]) {
+    o.traverse((c) => (c as THREE.Mesh).geometry?.dispose());
+  }
 }
 
 function fillMesh(region: Region, plane: SketchPlane, material: THREE.Material): THREE.Mesh {
