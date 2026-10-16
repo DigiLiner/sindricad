@@ -113,6 +113,7 @@ jobs:
           uv run python test_projected.py
           uv run python test_val_guard.py
           uv run python test_body_binding.py
+          uv run python test_shell_unchanged.py
           uv run python test_selector_ambiguity.py
           uv run python test_error_codes.py
           # Field report 88042d97: a degenerate line/arc/spline must name and

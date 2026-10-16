@@ -13810,8 +13810,9 @@ def _shell(shape, thickness, openings):
     amt = -abs(thickness)  # negative = hollow inward
     try:
         if openings:
-            return offset(shape, amount=amt, openings=list(openings), kind=Kind.INTERSECTION)
-        return offset(shape, amount=amt, kind=Kind.INTERSECTION)
+            out = offset(shape, amount=amt, openings=list(openings), kind=Kind.INTERSECTION)
+        else:
+            out = offset(shape, amount=amt, kind=Kind.INTERSECTION)
     except Exception as ex:
         # A wall thicker than the solid's own narrowest span has nowhere to go;
         # OCCT surfaces that as a bare RuntimeError, which told the user nothing
@@ -13821,6 +13822,19 @@ def _shell(shape, thickness, openings):
             "thicker than the body's narrowest span; try a smaller thickness. "
             f"[{type(ex).__name__}]"
         )
+    # When the opening runs smoothly into a neighbour (a filleted rim, a rounded
+    # sketch corner, a slot's flat side), the Intersection join hands the INPUT
+    # back with no error, and the feature stayed green on an unchanged body. A
+    # shell that removed no material is never right; say so, like the boolean
+    # no-op guard.
+    if abs(out.volume - shape.volume) <= 1e-9 * max(1.0, abs(shape.volume)):
+        raise ValueError(
+            "Shell left the body unchanged: the kernel cannot open a face whose "
+            "rim blends smoothly into the faces around it (a fillet, a rounded "
+            "sketch corner, the flat side of a slot). Shell first and round the "
+            "edges afterwards, or open a face with sharp edges."
+        )
+    return out
 
 
 def _rot_for(axis, deg):
