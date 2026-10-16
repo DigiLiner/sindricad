@@ -549,32 +549,66 @@ const LOG_TAIL_BYTES: usize = 100_000;
 const MAX_DOCUMENT_BYTES: usize = 1_500_000;
 
 /// Redact the username segment of OS user directories, generically: any
-/// `\Users\<name>` (drive or UNC form) and `/home/<name>` / `/Users/<name>`.
-/// Pattern-based rather than resolving THIS machine's home dir, so paths
-/// embedded from other machines/users (in logs or pasted text) scrub too.
+/// `Users/<name>` or `home/<name>` directory, case-insensitive, with either
+/// separator (drive, UNC, `/home`, macOS `/Users`). Pattern-based rather than
+/// resolving THIS machine's home dir, so paths embedded from other
+/// machines/users (in logs or pasted text) scrub too. A RUN of separators
+/// counts as one, because escaped text doubles them: Rust's `{:?}` and
+/// Python's `repr` both write `C:\\Users\\name`, and old logs on users' disks
+/// are in that shape.
 fn redact_user_paths(s: &str) -> String {
-    fn redact_after(hay: &str, needle_lower: &str, sep: &[char]) -> String {
-        let mut out = String::with_capacity(hay.len());
-        let lower = hay.to_lowercase();
-        let mut i = 0;
-        while let Some(rel) = lower[i..].find(needle_lower) {
-            let start = i + rel + needle_lower.len();
-            out.push_str(&hay[i..start]);
-            let rest = &hay[start..];
-            let seg_end = rest
-                .find(|c: char| sep.contains(&c) || c.is_whitespace() || c == '"' || c == '\'')
-                .unwrap_or(rest.len());
-            if seg_end > 0 {
-                out.push_str("[REDACTED]");
-            }
-            i = start + seg_end;
-        }
-        out.push_str(&hay[i..]);
-        out
+    // A Windows profile folder may hold spaces ("John Smith"), so the name
+    // runs to the next separator, quote or line end, not the next space.
+    // Past this length that span is more likely prose after the path, and
+    // the name is cut at whitespace instead.
+    const MAX_NAME_BYTES: usize = 64;
+    fn is_sep(b: u8) -> bool {
+        b == b'\\' || b == b'/'
     }
-    let s = redact_after(s, "\\users\\", &['\\', '/']);
-    let s = redact_after(&s, "/home/", &['/', '\\']);
-    redact_after(&s, "/users/", &['/', '\\'])
+    fn name_len(rest: &str) -> usize {
+        let end = rest
+            .find(|c: char| c == '\\' || c == '/' || c == '"' || c == '\'' || c.is_control())
+            .unwrap_or(rest.len());
+        if end <= MAX_NAME_BYTES {
+            return end;
+        }
+        rest.find(char::is_whitespace).map_or(end, |ws| ws.min(end))
+    }
+
+    // Matching is on bytes against ASCII patterns: an ASCII byte never occurs
+    // inside a multi-byte UTF-8 character, so every offset found here is a
+    // char boundary. (Offsets from `to_lowercase()` are NOT: 'İ' grows from
+    // 2 bytes to 3, which panicked or silently skipped the name.)
+    let bytes = s.as_bytes();
+    let mut out = String::with_capacity(s.len());
+    let mut copied = 0;
+    let mut i = 0;
+    while i < bytes.len() {
+        let root_end = ["users", "home"].iter().find_map(|root| {
+            let end = i + 1 + root.len();
+            let matched = is_sep(bytes[i])
+                && end < bytes.len()
+                && bytes[i + 1..end].eq_ignore_ascii_case(root.as_bytes())
+                && is_sep(bytes[end]);
+            matched.then_some(end)
+        });
+        let Some(mut name_start) = root_end else {
+            i += 1;
+            continue;
+        };
+        while name_start < bytes.len() && is_sep(bytes[name_start]) {
+            name_start += 1;
+        }
+        let len = name_len(&s[name_start..]);
+        if len > 0 {
+            out.push_str(&s[copied..name_start]);
+            out.push_str("[REDACTED]");
+            copied = name_start + len;
+        }
+        i = name_start + len;
+    }
+    out.push_str(&s[copied..]);
+    out
 }
 
 /// FNV-1a 64-bit, hex — dedup fingerprint (collision-tolerant grouping key,
@@ -837,6 +871,43 @@ mod tests {
         );
         // untouched text stays byte-identical
         assert_eq!(redact_user_paths("no paths here"), "no paths here");
+    }
+
+    #[test]
+    fn user_path_redaction_survives_escaped_and_odd_paths() {
+        let cases: &[(&str, &str)] = &[
+            // The spawn line as 0.1.248 and earlier wrote it: Debug formatting
+            // doubles every backslash. Logs in this shape are already on disk.
+            (
+                r#"spawn: "C:\\Users\\jrabi\\AppData\\python.exe" "server.py" (cwd "C:\\Users\\jrabi\\app")"#,
+                r#"spawn: "C:\\Users\\[REDACTED]\\AppData\\python.exe" "server.py" (cwd "C:\\Users\\[REDACTED]\\app")"#,
+            ),
+            // Escaped UNC form
+            (r"\\\\HOST\\Users\\someone\\share", r"\\\\HOST\\Users\\[REDACTED]\\share"),
+            // Windows with forward slashes, and mixed separators
+            (
+                "C:/Users/name/x and C:\\Users/other\\y",
+                "C:/Users/[REDACTED]/x and C:\\Users/[REDACTED]\\y",
+            ),
+            // A profile folder with a space must not leak its second word
+            (r"C:\Users\John Smith\AppData", r"C:\Users\[REDACTED]\AppData"),
+            (r#""C:\Users\John Smith""#, r#""C:\Users\[REDACTED]""#),
+            // Non-ASCII names, including text whose lowercase changes byte
+            // length ('İ' is 2 bytes, its lowercase "i̇" is 3) BEFORE the
+            // match, which misaligns offsets taken from a lowercased copy.
+            (r"C:\Users\Jörg\x", r"C:\Users\[REDACTED]\x"),
+            (r"İİİİ C:\Users\İlker\x", r"İİİİ C:\Users\[REDACTED]\x"),
+            ("ẞẞ Ⱥ /home/ẞtraße/x", "ẞẞ Ⱥ /home/[REDACTED]/x"),
+        ];
+        let failed: Vec<String> = cases
+            .iter()
+            .filter_map(|(input, want)| {
+                let got = std::panic::catch_unwind(|| redact_user_paths(input))
+                    .unwrap_or_else(|_| "<panicked>".to_string());
+                (got != *want).then(|| format!("\n  in:   {input}\n  got:  {got}\n  want: {want}"))
+            })
+            .collect();
+        assert!(failed.is_empty(), "{} of {} cases wrong:{}", failed.len(), cases.len(), failed.concat());
     }
 
     #[test]

@@ -426,7 +426,14 @@ impl Sidecar {
                     std::env::consts::OS,
                     std::env::consts::ARCH
                 );
-                let _ = writeln!(f, "spawn: {:?} {:?} (cwd {:?})", rt.python, rt.script, rt.cwd);
+                // display(), not {:?}: Debug doubles every Windows backslash
+                let _ = writeln!(
+                    f,
+                    "spawn: \"{}\" \"{}\" (cwd \"{}\")",
+                    rt.python.display(),
+                    rt.script.display(),
+                    rt.cwd.display()
+                );
             }
         }
 
