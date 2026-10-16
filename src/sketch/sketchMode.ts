@@ -250,6 +250,11 @@ function fpClose(a: EdgeFingerprint, b: EdgeFingerprint): boolean {
 // start/stop point pick uses the same reach.
 const PROJECT_POINT_PX = 8;
 
+// How far the zoom may drift (as a fraction of the mm-per-pixel they were drawn
+// at) before rescaleToZoom redraws the pixel-sized arrowheads and dots: a 6 px
+// arrowhead is then never more than ~0.6 px off its size.
+const ZOOM_REDRAW = 0.1;
+
 /** The selector a Project pick sends for a body edge: by:"nearest" at the
  *  middle of its middle drawn segment. NOT the picker's own selector: its
  *  nearest point is the line's mid VERTEX, which for a 2-point straight edge is
@@ -554,6 +559,10 @@ export class SketchMode {
    *  updateGridScale on the first rendered frame. */
   private gridCell = GRID_STEP;
   private gridKey = ""; // cell+centre the grid was last built for
+  /** The mm-per-pixel the arrowheads, endpoint dots and badge clearance were
+   *  last drawn at (refreshActive); rescaleToZoom redraws them once the zoom
+   *  has drifted from it. 0 until the first refresh. */
+  private drawnPxScale = 0;
   // Sketch Palette options
   private gridVisible = true;
   private gridSnap = true;
@@ -744,7 +753,12 @@ export class SketchMode {
     // The grid rescales with zoom from here on. Registered on the viewport
     // rather than polled, because the only honest source for "how far are we
     // zoomed in" is the frame that is about to be drawn.
-    this.viewport.onZoomScale = (wpp, tx, ty, tz) => this.updateGridScale(wpp, tx, ty, tz);
+    // So do the arrowheads and endpoint dots, which are sized in pixels but
+    // drawn in plane mm (rescaleToZoom).
+    this.viewport.onZoomScale = (wpp, tx, ty, tz) => {
+      this.updateGridScale(wpp, tx, ty, tz);
+      this.rescaleToZoom();
+    };
 
     const el = this.viewport.domElement;
     el.addEventListener("pointerdown", this.boundDown);
@@ -998,7 +1012,8 @@ export class SketchMode {
     this.entityVersion++; // bump guards in-flight constraint solves against staleness
     // current zoom → mm-per-pixel, so dimension badges keep screen clearance
     // from the geometry they label (they're click targets in the select tool)
-    setDimPixelScale(this.viewport.pixelWorldSize(this.plane.origin));
+    this.drawnPxScale = this.viewport.pixelWorldSize(this.plane.origin);
+    setDimPixelScale(this.drawnPxScale);
     const derived = this.derivedEntities(); // computed once, shared below
     this.overlay.setActiveSketch(this.activeCurves(derived));
     // profile-area fills for the active sketch (hidden from overlay.update),
@@ -7793,6 +7808,33 @@ export class SketchMode {
     this.gridKey = key;
     this.gridCell = cell;
     this.addGrid(cell, cx, cy);
+  }
+
+  /** Redraw what is sized in PIXELS but drawn in plane mm (dimension
+   *  arrowheads, endpoint dots, and the clearance that keeps a badge off its
+   *  geometry) once the zoom has drifted from the scale they were drawn at.
+   *  They used to be redrawn only by refreshActive, so between edits they
+   *  grew and shrank with the zoom like the geometry, then snapped back to
+   *  size at the next click (cf780621/120226bc/02ed8057).
+   *
+   *  Called every rendered frame (`onZoomScale`), so it returns at once until
+   *  the scale has moved by ZOOM_REDRAW: one wheel notch is ~17%, so a zoom
+   *  redraws about once a notch, not once a frame, and a big sketch stays
+   *  smooth. Only the curves and the badge positions are redrawn, not the
+   *  regions and snap candidates refreshActive also rebuilds, which a zoom
+   *  does not change. */
+  private rescaleToZoom() {
+    if (!this.active || this.drawnPxScale <= 0) return;
+    const now = this.viewport.pixelWorldSize(this.plane.origin);
+    if (!(now > 0) || Math.abs(now / this.drawnPxScale - 1) < ZOOM_REDRAW) return;
+    this.drawnPxScale = now;
+    setDimPixelScale(now);
+    this.overlay.setActiveSketch(this.activeCurves(this.derivedEntities()));
+    if (this.dimsVisible) {
+      // badges sit at the clearance just rescaled, so they move with their lines
+      const extras = this.constraintDimExtras();
+      if (!this.dims.follow(this.entities, extras)) this.dims.show(this.entities, this.plane, extras);
+    }
   }
 
   private addGrid(cell = this.gridCell, cx = 0, cy = 0) {
