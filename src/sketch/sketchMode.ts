@@ -45,7 +45,7 @@ import { applyDrivingDimsDirect, dimBindingFor, governingDimAt, lockDimFor, meas
 import { constraintDimKey, rowConstraintAt, sketchDimRows, type SketchDimRow } from "./dimRows";
 import { dimConflictMsg, withdrawTrial, type SketchTrial } from "./dimConflict";
 import { expandPattern, translated, rotated, scaled } from "./pattern";
-import { candidatesFromEntities, snap, snapCoincidences, snapPointOns, type SnapKind, type SnapCandidate, type PointRef, type CurveRef } from "./snap";
+import { candidatesFromEntities, curveRefOf, snap, snapCoincidences, snapPointOns, type SnapKind, type SnapCandidate, type PointRef, type CurveRef } from "./snap";
 import type { ResolvedEntity } from "./snap";
 import {
   curvesEndingAt, inferArcTangents, inferLineRelations, isGeometrySnap, relationConstraints,
@@ -2761,7 +2761,7 @@ export class SketchMode {
     const p = hit.p;
     this.lastSnapKind = hit.kind;
     this.lastSnapRef = hit.ref ?? null;
-    this.lastSnapCurve = hit.curve ? { id: hit.curve, at: p.clone() } : null;
+    this.lastSnapCurve = curveRefOf(hit, p, this.entities);
 
     if (this.tool === "select") {
       this.clearSelectHover();
@@ -2958,7 +2958,7 @@ export class SketchMode {
       this.base = p.clone();
       this.basePinned = isGeometrySnap(hit.kind);
       this.baseRef = hit.ref ?? null;
-      this.baseCurve = hit.curve ? { id: hit.curve, at: p.clone() } : null;
+      this.baseCurve = curveRefOf(hit, p, this.entities);
       if (this.tool === "line") this.chainStart = p.clone(); // remember loop start
       this.showDimFields();
       return;
@@ -4570,7 +4570,7 @@ export class SketchMode {
     this.lastCursor.copy(hit.p);
     this.lastSnapKind = hit.kind; // kept in step with lastCursor: the Enter-key commit reads both
     this.lastSnapRef = hit.ref ?? null;
-    this.lastSnapCurve = hit.curve ? { id: hit.curve, at: hit.p.clone() } : null;
+    this.lastSnapCurve = curveRefOf(hit, hit.p, this.entities);
     this.showSnap(hit);
 
     if (this.tool === "arc") {

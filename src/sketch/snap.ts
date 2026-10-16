@@ -5,7 +5,7 @@
 
 import * as THREE from "three";
 import type { DimPlace, ProjectedCurve, ProjectedSource, SketchConstraint } from "../types";
-import { RECT_CENTRE, asRound, dimRefPoints, lineOperandAt, refPoint } from "./entityDims";
+import { RECT_CENTRE, asRound, dimRefPoints, lineOperand, lineOperandAt, refPoint } from "./entityDims";
 import { polygonPoints, rectCorners } from "./region";
 
 export type SnapKind =
@@ -170,11 +170,34 @@ export function snapCoincidences(
 export interface CurveRef {
   id: string;
   at: THREE.Vector2;
+  /** The click took this LINE's midpoint snap (a line, a shape's side, a
+   *  projected line): the join is a midpoint, not just a point on the line
+   *  (report a0dc70e5). See curveRefOf. */
+  midpoint?: boolean;
+}
+
+/** The CurveRef a snap hit names, or null when it landed on no curve. A
+ *  midpoint snap is marked only on a line operand: an arc's "midpoint"
+ *  candidate is its through-point, which need not be its middle, and the
+ *  midpoint constraint only solves against a line (sketchSolve). */
+export function curveRefOf(
+  hit: { kind: SnapKind; curve?: string | undefined },
+  at: THREE.Vector2,
+  entities: readonly ResolvedEntity[],
+): CurveRef | null {
+  if (!hit.curve) return null;
+  const ref: CurveRef = { id: hit.curve, at: at.clone() };
+  if (hit.kind !== "midpoint") return ref;
+  const cut = hit.curve.indexOf("~");
+  const owner = entities.find((e) => e.id === (cut < 0 ? hit.curve : hit.curve!.slice(0, cut)));
+  return owner && lineOperand(new Map([[owner.id, owner]]), hit.curve) ? { ...ref, midpoint: true } : ref;
 }
 
 /** The `pointOn` constraints a freshly drawn entity owes to snaps that placed
  *  one of its points on the MIDDLE of an existing line, arc or
- *  rectangle/polygon/slot edge — an on-curve snap, never the curve's own
+ *  rectangle/polygon/slot edge — or the `midpoint` one, where the snap was a
+ *  line's midpoint (CurveRef.midpoint), the way a snap onto an endpoint is a
+ *  coincident and not merely a point on the line. An on-curve snap, never the curve's own
  *  endpoints/corners/centre (that join is `snapCoincidences`'s: a candidate's
  *  `ref` and `curve` are mutually exclusive, so one commit never emits both
  *  for the same click).
@@ -208,9 +231,12 @@ export function snapPointOns(
     if (idx === undefined) continue; // the point landed elsewhere
     const already = (c: SketchConstraint) =>
       (c.type === "pointOn" && c.e === entity.id && c.p === idx && c.curve === ref.id)
+      || (c.type === "midpoint" && c.e === entity.id && c.p === idx && c.line === ref.id)
       || (c.type === "coincident" && ((c.e1 === entity.id && c.p1 === idx) || (c.e2 === entity.id && c.p2 === idx)));
     if (constraints.some(already)) continue;
-    out.push({ type: "pointOn", e: entity.id, p: idx, curve: ref.id });
+    out.push(ref.midpoint
+      ? { type: "midpoint", e: entity.id, p: idx, line: ref.id }
+      : { type: "pointOn", e: entity.id, p: idx, curve: ref.id });
   }
   return out;
 }
