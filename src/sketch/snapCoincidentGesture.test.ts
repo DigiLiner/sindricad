@@ -45,6 +45,7 @@ vi.mock("@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm?url", () => ({
 }));
 const { toasts } = vi.hoisted(() => ({ toasts: [] as string[] }));
 vi.mock("../ui/toast", () => ({ toast: (m: string) => void toasts.push(m) }));
+vi.mock("../ui/prompt", () => ({ setPrompt: () => {} }));
 import * as THREE from "three";
 import { SketchMode } from "./sketchMode";
 import { circumcenter } from "./arc";
@@ -54,6 +55,7 @@ import { candidatesFromEntities, type ResolvedEntity } from "./snap";
 import { rectCorners } from "./region";
 import { originGeometry } from "./origin";
 import { RECT_CENTRE, refPoint } from "./entityDims";
+import { SketchHistory } from "./history";
 import type { SketchConstraint } from "../types";
 
 const PX = 100; // screen px per sketch mm
@@ -62,8 +64,8 @@ type Line = Extract<ResolvedEntity, { type: "line" }>;
 const line = (id: string, x1: number, y1: number, x2: number, y2: number): Line =>
   ({ type: "line", id, x1, y1, x2, y2 });
 
-const press = (x: number, y: number) => ({
-  button: 0, shiftKey: false, ctrlKey: false, metaKey: false,
+const press = (x: number, y: number, ctrlKey = false) => ({
+  button: 0, shiftKey: false, ctrlKey, metaKey: false,
   clientX: x * PX, clientY: y * PX, pointerId: 1,
   preventDefault: () => {}, stopPropagation: () => {},
 }) as unknown as PointerEvent;
@@ -80,7 +82,7 @@ interface Handlers {
 /** A SketchMode with the given entities on the sketch and `tool` armed.
  *  `typed` is what the user has typed into the dim box, by field name. */
 function drawing(
-  tool: "line" | "arc" | "select" | "rectangle" | "centerRectangle" | "arcCenter",
+  tool: "line" | "arc" | "select" | "rectangle" | "centerRectangle" | "arcCenter" | "point",
   entities: ResolvedEntity[],
   typed: Record<string, number> = {},
 ) {
@@ -94,7 +96,7 @@ function drawing(
     entities: [...entities], constraints: [],
     candidates: candidatesFromEntities(entities),
     base: null, chainStart: null, basePinned: false, baseRef: null,
-    lastSnapKind: "free", lastSnapRef: null, lastCursor: new THREE.Vector2(),
+    lastSnapKind: "free", lastSnapRef: null, lastSnapCurve: null, lastCursor: new THREE.Vector2(),
     arcStart: null, arcEnd: null, arcStartRef: null, arcEndRef: null, arcCenterRef: null, clickPts: [], arcSweep: 0,
     constructionMode: false, gridSnap: false, glyphsVisible: false, pendingGlyphs: null,
     dim: {
@@ -137,7 +139,8 @@ function drawing(
   const h = s as unknown as Handlers;
   return {
     h,
-    click: (x: number, y: number) => h.onPointerDown(press(x, y)),
+    /** a click; with `ctrl`, Ctrl held, which draws without snapping */
+    click: (x: number, y: number, ctrl = false) => h.onPointerDown(press(x, y, ctrl)),
     /** a move in a frame of its own: the previous frame runs first */
     hover: (x: number, y: number) => {
       for (const fn of frames.splice(0)) fn();
@@ -899,5 +902,156 @@ describe("a point drawn onto a line's MIDPOINT snap is held at the middle (a0dc7
     const [n] = d.drawn() as Line[];
     expect(midpoints(d.h.constraints)).toEqual([]);
     expect(pointOns(d.h.constraints)).toEqual([{ type: "pointOn", e: n!.id, p: 1, curve: "c" }]);
+  });
+});
+
+// --- 10. the Point tool joins what it is snapped onto ---------------------------
+//
+// Every draw tool recorded the join its snaps promise except the Point tool: a
+// point clicked onto a line's middle, an end, a corner or a centre landed
+// exactly there and was tied to nothing, so the next edit that moved the
+// carrier left it behind. It records what a line end would.
+
+describe("a point placed with the Point tool is joined to what it snapped onto", () => {
+  type Pt = Extract<ResolvedEntity, { type: "point" }>;
+  type Slot = Extract<ResolvedEntity, { type: "slot" }>;
+  /** the one point the click made */
+  const placed = (d: ReturnType<typeof drawing>) => {
+    const pts = d.drawn().filter((e): e is Pt => e.type === "point");
+    expect(pts, "the click placed no point").toHaveLength(1);
+    return pts[0]!;
+  };
+  const ofType = (cs: SketchConstraint[], type: string) => cs.filter((c) => c.type === type);
+  /** where `pt` is after a solve */
+  const at = (es: ResolvedEntity[], pt: Pt) => byId<Pt>(es, pt.id);
+
+  it("a line's midpoint: a midpoint, and the point stays at the middle when the line is stretched", async () => {
+    const d = drawing("point", [line("a", 0, 0, 10, 0)]);
+    d.click(5, 0);
+    const pt = placed(d);
+    expect(d.h.constraints).toEqual([{ type: "midpoint", e: pt.id, p: 0, line: "a" }]);
+    const r = await displaced(d.h.entities, d.h.constraints, "a", { x2: 30 });
+    expect(r.fixed.ok && r.fixed.conflicts.length === 0).toBe(true);
+    const a = byId<Line>(r.fixed.entities, "a");
+    expect(gap(start(a), end(a)), "the line was not stretched").toBeGreaterThan(15);
+    expect(gap(at(r.fixed.entities, pt), { x: (a.x1 + a.x2) / 2, y: (a.y1 + a.y2) / 2 })).toBeLessThan(1e-6);
+    const ca = byId<Line>(r.control.entities, "a");
+    expect(gap(at(r.control.entities, pt), { x: (ca.x1 + ca.x2) / 2, y: (ca.y1 + ca.y2) / 2 }),
+      "the control followed the middle too: this oracle measures nothing").toBeGreaterThan(5);
+  });
+
+  it("a line's end: a coincident, and the point goes where the end goes", async () => {
+    const d = drawing("point", [line("a", 0, 0, 10, 0)]);
+    d.click(10, 0);
+    const pt = placed(d);
+    expect(d.h.constraints).toEqual([{ type: "coincident", e1: "a", p1: 1, e2: pt.id, p2: 0 }]);
+    const r = await displaced(d.h.entities, d.h.constraints, "a", { x2: 30, y2: 7 });
+    expect(gap(at(r.fixed.entities, pt), end(byId<Line>(r.fixed.entities, "a")))).toBeLessThan(1e-6);
+    expect(gap(at(r.control.entities, pt), end(byId<Line>(r.control.entities, "a")))).toBeGreaterThan(5);
+  });
+
+  it("a rectangle's corner: a coincident naming the corner that sits there", async () => {
+    const R: Rect = { type: "rectangle", id: "R", x: 20, y: 10, width: 30, height: 20 };
+    const d = drawing("point", [R]);
+    d.click(35, 20); // the top right corner
+    const pt = placed(d);
+    const cs = coincidents(d.h.constraints) as Extract<SketchConstraint, { type: "coincident" }>[];
+    expect(d.h.constraints).toHaveLength(1);
+    expect(cs[0]).toMatchObject({ e1: "R", e2: pt.id, p2: 0 });
+    expect(gap(refPoint(R, cs[0]!.p1)!, { x: 35, y: 20 })).toBeLessThan(1e-9);
+    const r = await displaced(d.h.entities, d.h.constraints, "R", { x: 25, width: 40 });
+    const fixedR = byId<Rect>(r.fixed.entities, "R");
+    expect(gap(at(r.fixed.entities, pt), refPoint(fixedR, cs[0]!.p1)!)).toBeLessThan(1e-6);
+    const controlR = byId<Rect>(r.control.entities, "R");
+    expect(gap(at(r.control.entities, pt), refPoint(controlR, cs[0]!.p1)!)).toBeGreaterThan(5);
+  });
+
+  it("a circle's centre: a coincident, and the point moves with the circle", async () => {
+    const c: ResolvedEntity = { type: "circle", id: "c", x: 50, y: 50, radius: 5 };
+    const d = drawing("point", [c]);
+    d.click(50, 50);
+    const pt = placed(d);
+    const cs = coincidents(d.h.constraints) as Extract<SketchConstraint, { type: "coincident" }>[];
+    expect(d.h.constraints).toHaveLength(1);
+    expect(cs[0]).toMatchObject({ e1: "c", e2: pt.id, p2: 0 });
+    const r = await displaced(d.h.entities, d.h.constraints, "c", { x: 58 });
+    const fc = byId<Extract<ResolvedEntity, { type: "circle" }>>(r.fixed.entities, "c");
+    expect(gap(at(r.fixed.entities, pt), fc)).toBeLessThan(1e-6);
+    const cc = byId<Extract<ResolvedEntity, { type: "circle" }>>(r.control.entities, "c");
+    expect(gap(at(r.control.entities, pt), cc)).toBeGreaterThan(5);
+  });
+
+  it("another point: a coincident that the solver takes without amber", async () => {
+    const q: ResolvedEntity = { type: "point", id: "q", x: 70, y: 0 };
+    const d = drawing("point", [q]);
+    d.click(70, 0);
+    const pt = placed(d);
+    expect(d.h.constraints).toEqual([{ type: "coincident", e1: "q", p1: 0, e2: pt.id, p2: 0 }]);
+    const quiet = console.log;
+    console.log = () => {};
+    try {
+      const r = await compileAndSolve(d.h.entities, d.h.constraints);
+      expect(r.conflicts).toEqual([]);
+      expect(r.overDefined).toEqual([]);
+    } finally {
+      console.log = quiet;
+    }
+  });
+
+  it("a slot's flat at its middle: a midpoint on that side, which the point follows", async () => {
+    const S: Slot = { type: "slot", id: "S", x1: 40, y1: -40, x2: 60, y2: -40, width: 8 };
+    const d = drawing("point", [S]);
+    d.click(50, -44);
+    const pt = placed(d);
+    const mids = ofType(d.h.constraints, "midpoint") as Extract<SketchConstraint, { type: "midpoint" }>[];
+    expect(d.h.constraints).toHaveLength(1);
+    expect(mids[0]).toMatchObject({ e: pt.id, p: 0 });
+    expect(mids[0]!.line.startsWith("S~")).toBe(true);
+    const r = await displaced(d.h.entities, d.h.constraints, "S", { x1: 50, x2: 70 });
+    const fs = byId<Slot>(r.fixed.entities, "S");
+    expect(gap(at(r.fixed.entities, pt), { x: (fs.x1 + fs.x2) / 2, y: fs.y1 - 4 })).toBeLessThan(1e-6);
+    const cs = byId<Slot>(r.control.entities, "S");
+    expect(gap(at(r.control.entities, pt), { x: (cs.x1 + cs.x2) / 2, y: cs.y1 - 4 })).toBeGreaterThan(5);
+  });
+
+  it("an arc's through-point: only a point on the arc, as a line end gets", () => {
+    const arc: ResolvedEntity = { type: "arc", id: "c", x1: 10, y1: 0, x2: -10, y2: 0, mx: 0, my: 10 };
+    const d = drawing("point", [arc]);
+    d.click(0, 10);
+    const pt = placed(d);
+    expect(d.h.constraints).toEqual([{ type: "pointOn", e: pt.id, p: 0, curve: "c" }]);
+  });
+
+  it("CONTROL: a click on nothing, and a Ctrl-click (no snap) on a line's end, join nothing", () => {
+    const d = drawing("point", [line("a", 0, 0, 10, 0)]);
+    d.click(3.3, 7.7);
+    d.click(10, 0, true);
+    expect(d.drawn().filter((e) => e.type === "point")).toHaveLength(2);
+    expect(d.h.constraints).toEqual([]);
+  });
+
+  it("the join is in the solve the click starts (a sketch with one DOF fewer), and one undo takes point and join together", async () => {
+    const d = drawing("point", [line("a", 0, 0, 10, 0)]);
+    const wait = solving(d.h);
+    const s = d.h as unknown as {
+      history: SketchHistory; lastDof: number; armPreEdit(): void; undoEdit(): boolean; redoEdit(): boolean;
+    };
+    s.history = new SketchHistory();
+    s.armPreEdit();
+    d.click(5, 0);
+    await wait();
+    expect(s.lastDof, "line 4 + point 2 - midpoint 2").toBe(4);
+    const pts = () => d.h.entities.filter((e) => e.type === "point");
+    expect(pts()).toHaveLength(1);
+    expect(ofType(d.h.constraints, "midpoint")).toHaveLength(1);
+    s.undoEdit();
+    await wait();
+    expect(pts()).toEqual([]);
+    expect(d.h.constraints).toEqual([]);
+    s.redoEdit();
+    await wait();
+    expect(pts()).toHaveLength(1);
+    expect(ofType(d.h.constraints, "midpoint")).toEqual([{ type: "midpoint", e: pts()[0]!.id, p: 0, line: "a" }]);
+    expect(s.lastDof).toBe(4);
   });
 });

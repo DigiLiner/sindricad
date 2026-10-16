@@ -104,6 +104,7 @@ export const JOIN_TOL = 1e-6;
  *     the way the drag went, so it is the one of `dimRefPoints` that sits on
  *     the snapped point, never an assumed 0: the two corner orders in this
  *     codebase agree on corner 0 and nowhere else.
+ *   - a POINT's one point (idx 0), from `startRef`: the Point tool's click.
  *  A CIRCLE is not emitted for: its second click lands on the rim, which is no
  *  solver point. SPLINES are excluded for a duller reason — their ends carry
  *  refs (see candidatesFromEntities) but `finishSpline` commits them by a path
@@ -139,6 +140,7 @@ export function snapCoincidences(
     entity.type === "line" ? [[startRef, [0]], [endRef, [1]]]
     : entity.type === "arc" ? [[startRef, [0]], [endRef, [1]], [centerRef, [2]]]
     : entity.type === "rectangle" ? [[startRef, corners], [endRef, corners], [centerRef, [RECT_CENTRE]]]
+    : entity.type === "point" ? [[startRef, [0]]]
     : [];
   const out: SketchConstraint[] = [];
   for (const [ref, candidates] of placed) {
@@ -219,6 +221,7 @@ export function snapPointOns(
     entity.type === "line" ? [[startRef, [0]], [endRef, [1]]]
     : entity.type === "arc" ? [[startRef, [0]], [endRef, [1]], [centerRef, [2]]]
     : entity.type === "rectangle" ? [[startRef, corners], [endRef, corners], [centerRef, [RECT_CENTRE]]]
+    : entity.type === "point" ? [[startRef, [0]]]
     : [];
   const out: SketchConstraint[] = [];
   for (const [ref, candidates] of placed) {

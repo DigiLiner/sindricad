@@ -3343,6 +3343,9 @@ export class SketchMode {
     const ent: ResolvedEntity = { type: "point", id: newEntityId(), x: p.x, y: p.y };
     if (this.constructionMode) ent.construction = true;
     this.entities.push(ent);
+    // joined to what it snapped onto, as a line end is; before the solve, which
+    // banks the undo step
+    this.emitSnapCoincidences(ent, this.lastSnapRef, null, null, this.lastSnapCurve, null);
     this.refreshActive();
     this.overlay.setPreview([]);
     this.requestSolve();
