@@ -3708,8 +3708,10 @@ export class SketchMode {
     const end = this.circle2End(a, p);
     const center = a.clone().add(end).multiplyScalar(0.5);
     const r = a.distanceTo(end) / 2;
+    // Lock a typed ⌀ BEFORE hiding the box: hide() empties its fields, after
+    // which nothing reads as typed and nothing would lock (95108ab8).
+    this.commitCircle(center, r, ["diameter"]);
     this.dim.hide();
-    this.commitCircle(center, r);
   }
 
   // --- circle through 3 points ------------------------------------------
@@ -3725,11 +3727,14 @@ export class SketchMode {
     this.commitCircle(cc, cc.distanceTo(a));
   }
 
-  private commitCircle(center: THREE.Vector2, r: number) {
+  /** `lockTyped`: the dim-box fields to lock if the user typed them (see
+   *  lockTypedDrawDims) — the 2-point circle's ⌀; the 3-point circle has none. */
+  private commitCircle(center: THREE.Vector2, r: number, lockTyped: readonly DimField[] = []) {
     if (r < 1e-4) return;
     const ent: ResolvedEntity = { type: "circle", id: newEntityId(), radius: r, x: center.x, y: center.y };
     if (this.constructionMode) ent.construction = true;
     this.entities.push(ent);
+    this.lockTypedDrawDims(ent, lockTyped);
     this.refreshActive();
     this.requestSolve();
     this.onState?.();

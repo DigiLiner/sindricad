@@ -160,6 +160,21 @@ describe("71b9955e/75d4e294/95108ab8: a draw-time typed value locks on commit", 
     expect(governingDimAt(s.constraints, rect, "height")).toBe("free"); // left to the drag, as always
   });
 
+  it("a 2-point circle's typed diameter locks on commit", () => {
+    const { s, dim } = multiClickTyped("circle2", new THREE.Vector2(0, 0), new THREE.Vector2(5, 0), [[0, "20"]]);
+    const circle = s.entities[0]!;
+    expect(circle).toMatchObject({ type: "circle", radius: 10 });
+    expect(s.constraints).toMatchObject([{ type: "diameter", circle: circle.id, value: 20 }]);
+    expect(dim.isActive).toBe(false);
+  });
+
+  it("an un-typed 2-point circle (clicked size) stays free", () => {
+    const { s } = multiClickTyped("circle2", new THREE.Vector2(0, 0), new THREE.Vector2(5, 0), []);
+    const circle = s.entities[0]!;
+    expect(circle).toMatchObject({ type: "circle", radius: 2.5 });
+    expect(governingDimAt(s.constraints, circle, "diameter")).toBe("free");
+  });
+
   it("a corner-to-corner rectangle's typed width/height locks the same way", () => {
     // cursor ignored: both fields are typed
     const { s } = dragDrawTyped("rectangle", new THREE.Vector2(0, 0), new THREE.Vector2(5, 5), [[0, "60"], [1, "40"]]);
