@@ -9,7 +9,9 @@
 // This drives the tool through its REAL pick-phase entry point (the
 // pointerdown listener registered in start(), not the pre-selection bypass
 // edgeFeatureToolPreview.test.ts uses, which never reaches tangentChain at
-// all — visibleEdgeLines there is always empty).
+// all — visibleEdgeLines there is always empty). The chain walks the tool's
+// snapshot of these edges (blendInputEdges.ts); the preview cases are in
+// edgeFeatureInputEdges.test.ts.
 import { describe, it, expect } from "vitest";
 import * as THREE from "three";
 import { FakeEl } from "../ui/fakeDom.testkit";
@@ -17,6 +19,7 @@ import { edgeSelectorFrom, type Vec3 } from "../viewport/edgeMatch";
 import type { DocumentStore } from "../document/store";
 import type { Viewport } from "../viewport/viewport";
 import type { EdgeHit } from "../viewport/picking";
+import type { BodyEdges } from "../viewport/edgeLines";
 import type { Feature } from "../types";
 
 const promptEl = new FakeEl("div");
@@ -92,21 +95,21 @@ function harness() {
     camera,
     domElement: el,
     suspendPicking: false,
-    emphasizeEdges() {},
     clearHover() {},
-    hoverEdge() {},
     requestRender() {},
     addToScene() {},
     removeFromScene() {},
+    addEdgeOverlay() {},
     selectedEdgeSelectors: () => [], // empty — start() goes to the real pick phase
-    edgeLineByMid: () => null,
     visibleEdgeLines: () => all as unknown[],
     projectToScreen: () => ({ x: 100, y: 100 }),
     pixelWorldSize: () => 1,
     rayFrom: () => new THREE.Ray(new THREE.Vector3(0, 0, 100), new THREE.Vector3(0, 0, -1)),
     // the test always "clicks" the arc; which screen point is irrelevant
-    pickEdgeAt: (): EdgeHit =>
-      ({ kind: "edge", edge: arc as unknown as EdgeHit["edge"], selector: edgeSelectorFrom(arc)! }),
+    pickEdgeOn: (_x: number, _y: number, input: BodyEdges[]): EdgeHit | null => {
+      const edge = input.flatMap((d) => d.refs).find((r) => r.points === arc.points);
+      return edge ? { kind: "edge", edge, selector: edgeSelectorFrom(arc)! } : null;
+    },
   } as unknown as Viewport;
 
   const tool = new EdgeFeatureTool(viewport, store);

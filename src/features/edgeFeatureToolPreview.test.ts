@@ -82,15 +82,14 @@ function harness() {
     camera,
     domElement: el,
     suspendPicking: false,
-    emphasizeEdges() {},
     clearHover() {},
     requestRender() {},
     addToScene() {},
     removeFromScene() {},
+    addEdgeOverlay() {},
     selectedEdgeSelectors: () => [EDGE],
     // no rendered line for the pick: the selector still commits, and the tool
     // skips the Line2 ghost it would otherwise build (see seedGhosts)
-    edgeLineByMid: () => null,
     visibleEdgeLines: () => [],
     projectToScreen: () => ({ x: 100, y: 100 }),
     pixelWorldSize: () => 1,

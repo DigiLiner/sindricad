@@ -39,7 +39,7 @@ const { EdgeFeatureTool } = await import("./../features/edgeFeatureTool");
 // A diagonal edge from (0,0,0) to (10,10,0) — 45° off world X, so its
 // cross-with-forward axis differs from the camera-right fallback (1,0,0).
 const DIAGONAL: Selector = { kind: "edge", point: [5, 5, 0] } as unknown as Selector;
-const DIAGONAL_LINE = { points: [[0, 0, 0], [10, 10, 0]], body: undefined };
+const DIAGONAL_LINE = { id: "e0", points: [[0, 0, 0], [10, 10, 0]], body: undefined };
 
 function harness() {
   const el = { style: { cursor: "" }, addEventListener() {}, removeEventListener() {} };
@@ -61,15 +61,14 @@ function harness() {
     camera,
     domElement: el,
     suspendPicking: false,
-    emphasizeEdges() {},
     clearHover() {},
     requestRender() {},
     addToScene() {},
+    addEdgeOverlay() {},
     removeFromScene() {},
     // pre-selection: a single diagonal edge, the Ctrl-click entry point
     selectedEdgeSelectors: () => [DIAGONAL],
-    edgeLineByMid: () => DIAGONAL_LINE,
-    visibleEdgeLines: () => [],
+    visibleEdgeLines: () => [DIAGONAL_LINE],
     projectToScreen: () => ({ x: 100, y: 100 }),
     pixelWorldSize: () => 1,
   } as unknown as Viewport;

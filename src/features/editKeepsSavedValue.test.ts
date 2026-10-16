@@ -162,13 +162,13 @@ describe("re-opening a fillet and pressing Enter", () => {
       camera,
       domElement,
       suspendPicking: false,
-      emphasizeEdges() {},
       clearHover() {},
       hoverDatum() {},
       requestRender() {},
       addToScene() {},
       removeFromScene() {},
-      edgeLineByMid: () => null, // no rendered line: the selector is carried, no ghost
+      addEdgeOverlay() {},
+      visibleEdgeLines: () => [], // no rendered line: the selector is carried, no ghost
       projectToScreen: () => ({ x: 0, y: 0 }),
     } as unknown as Viewport;
     const tool = new EdgeFeatureTool(viewport, store);

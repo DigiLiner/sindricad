@@ -2045,6 +2045,26 @@ export class Viewport {
     return this.picker.pickEdge(clientX, clientY, rect, this.rig.active, this.model, undefined, this.pickClip());
   }
 
+  /** pickEdgeAt over an edge set the caller drew itself (addEdgeOverlay)
+   *  rather than the model on screen: the fillet/chamfer tool's snapshot of
+   *  its input edges, taken before its own live preview replaced them. */
+  pickEdgeOn(clientX: number, clientY: number, overlay: BodyEdges[]): EdgeHit | null {
+    const targets = overlay.filter((d) => d.pickable).map((d) => d.object);
+    if (!targets.length) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    return this.picker.pickEdgeOn(clientX, clientY, rect, this.rig.active, targets, undefined, this.pickClip());
+  }
+
+  /** Show a caller-owned edge set over the model, cut by the section plane
+   *  the way the model's own edges are. Remove each with removeFromScene. */
+  addEdgeOverlay(overlay: BodyEdges[]) {
+    for (const d of overlay) {
+      d.material.clippingPlanes = this.clipPlane ? [this.clipPlane] : null;
+      d.setResolution(this.resolution);
+      this.addToScene(d.object);
+    }
+  }
+
   /** All visible edge lines of the current model — for tangent-chain expansion. */
   visibleEdgeLines(): EdgeRef[] {
     return this.model ? this.picker.visibleEdges(this.model) : [];

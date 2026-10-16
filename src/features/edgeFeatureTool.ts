@@ -9,6 +9,8 @@
 import * as THREE from "three";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import type { EdgeRef } from "../viewport/edgeLines";
+import type { EdgeHit } from "../viewport/picking";
+import { BlendInputEdges } from "./blendInputEdges";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import type { Viewport } from "../viewport/viewport";
@@ -62,6 +64,11 @@ export class EdgeFeatureTool {
   // drawn through the model (depthTest off) so inner/occluded members stay
   // visible, and click-toggleable in both modes. ---
   private ghosts: GhostEdge[] = []; // membership display + toggle targets
+  // the edges this blend is made from — every pick, hover and chain walk reads
+  // these, never the model on screen, which is the live preview (see
+  // blendInputEdges.ts). Null until taken: at start, or in edit mode once the
+  // rolled-back model arrives.
+  private input: BlendInputEdges | null = null;
   private unmatchedSels: Selector[] = []; // saved selectors we couldn't visualize (kept for commit)
 
   // --- edit mode (re-opening a committed fillet/chamfer) ---
@@ -147,7 +154,7 @@ export class EdgeFeatureTool {
     this.tangent = null;
     this.previewId = ""; // no preview yet — nothing for a build to blame on us
     this.viewport.suspendPicking = true; // we drive our own edge-only picking
-    this.viewport.emphasizeEdges(true); // light up all edges so they're easy to target
+    this.snapshotInput(); // before any preview exists — this model IS the input
     const el = this.viewport.domElement;
     el.addEventListener("pointermove", this.boundMove);
     el.addEventListener("pointerdown", this.boundDown, true);
@@ -200,7 +207,6 @@ export class EdgeFeatureTool {
     this.awaitingRollback = true;
 
     this.viewport.suspendPicking = true;
-    this.viewport.emphasizeEdges(true); // additions should be easy to see
     const el = this.viewport.domElement;
     el.addEventListener("pointermove", this.boundMove);
     el.addEventListener("pointerdown", this.boundDown, true);
@@ -216,6 +222,7 @@ export class EdgeFeatureTool {
       if (s.building || !s.result) return;
       if (this.awaitingRollback) {
         this.awaitingRollback = false;
+        this.snapshotInput(); // the rolled-back model: the edges before this feature
         this.seedGhosts(sels);
         this.enterEditUI();
         this.pushPreview();
@@ -237,10 +244,36 @@ export class EdgeFeatureTool {
         continue;
       }
       const mid = sel.point as Vec3;
-      const line = this.viewport.edgeLineByMid(mid);
+      const line = this.input?.byMid(mid);
       if (line) this.addGhost(sel, line.points as Vec3[]);
       else this.unmatchedSels.push(sel);
     }
+  }
+
+  /** Freeze the model's visible edges as this blend's input and draw them as
+   *  the pickable set (in place of emphasizeEdges, which would light up the
+   *  preview's generated edges too). */
+  private snapshotInput() {
+    this.disposeInput();
+    this.input = new BlendInputEdges(this.viewport.visibleEdgeLines());
+    this.viewport.addEdgeOverlay(this.input.draws);
+  }
+
+  private disposeInput() {
+    if (!this.input) return;
+    for (const d of this.input.draws) this.viewport.removeFromScene(d.object);
+    this.input.dispose();
+    this.input = null;
+  }
+
+  /** The input edge under the cursor (see snapshotInput), or null. */
+  private pickInput(clientX: number, clientY: number): EdgeHit | null {
+    return this.input ? this.viewport.pickEdgeOn(clientX, clientY, this.input.draws) : null;
+  }
+
+  private hoverInput(edge: EdgeRef | null) {
+    this.input?.hover(edge);
+    this.viewport.requestRender();
   }
 
   private chainCounter = 0; // one id per add gesture (chain toggles as a unit)
@@ -335,16 +368,20 @@ export class EdgeFeatureTool {
   // addSingle) is the reliable escape hatch for that case, and for a
   // genuinely non-planar tangent loop (a blend around a 3D corner) the guard
   // would otherwise be too strict for.
+  //
+  // The chain used to walk the model ON SCREEN, which once a preview is up is
+  // the blend itself, so the "near-duplicate ring" was most likely the
+  // preview's own fillet boundary rather than a tessellation artefact. It now
+  // walks the input edges (blendInputEdges.ts), where no preview edge can
+  // appear. The plane guard stays: a blend committed EARLIER in the timeline
+  // puts the same kind of generated edges into the input body for real.
 
-  /** All model edges tangent-connected to `start` (including `start`), walked
+  /** All input edges tangent-connected to `start` (including `start`), walked
    *  breadth-first across shared endpoints whose end-tangents are colinear
    *  AND which stay in the flat plane the chain has established so far. */
   private tangentChain(start: EdgeRef): EdgeRef[] {
-    const all = this.viewport.visibleEdgeLines();
-    const bb = this.store.buildState.result?.bbox;
-    const diag = bb
-      ? Math.hypot(bb.max[0] - bb.min[0], bb.max[1] - bb.min[1], bb.max[2] - bb.min[2])
-      : 100;
+    const all = this.input?.refs ?? [];
+    const diag = this.input?.diag ?? 100;
     const joinTol = Math.max(1e-4, 1e-5 * diag); // endpoint coincidence
     const G1_COS = Math.cos((10 * Math.PI) / 180); // tangents within 10°
     const PLANE_TOL = Math.max(1e-3, 1e-4 * diag); // flatness of a rim/loop
@@ -505,8 +542,8 @@ export class EdgeFeatureTool {
 
   private onMove(e: PointerEvent) {
     if (this.phase === "pick") {
-      const hit = this.viewport.pickEdgeAt(e.clientX, e.clientY);
-      this.viewport.hoverEdge(hit?.edge ?? null);
+      const hit = this.pickInput(e.clientX, e.clientY);
+      this.hoverInput(hit?.edge ?? null);
       this.viewport.domElement.style.cursor = hit ? "pointer" : "default";
       return;
     }
@@ -528,18 +565,19 @@ export class EdgeFeatureTool {
     if (!this.hovering) {
       // ghosts and bare edges are toggle targets in BOTH modes — show it
       const g = this.ghostAt(e.clientX, e.clientY);
-      const hit = g ? null : this.viewport.pickEdgeAt(e.clientX, e.clientY);
-      this.viewport.hoverEdge(hit?.edge ?? null);
+      const hit = g ? null : this.pickInput(e.clientX, e.clientY);
+      this.hoverInput(hit?.edge ?? null);
       this.viewport.domElement.style.cursor = g || hit ? "pointer" : "default";
       return;
     }
+    this.hoverInput(null);
     this.viewport.domElement.style.cursor = "grab";
   }
 
   private onDown(e: PointerEvent) {
     if (e.button !== 0) return;
     if (this.phase === "pick") {
-      const hit = this.viewport.pickEdgeAt(e.clientX, e.clientY);
+      const hit = this.pickInput(e.clientX, e.clientY);
       if (!hit) return; // missed an edge — let the click orbit
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -580,11 +618,11 @@ export class EdgeFeatureTool {
       this.downOnGizmo = true;
       return;
     }
-    const hit = this.viewport.pickEdgeAt(e.clientX, e.clientY);
+    const hit = this.pickInput(e.clientX, e.clientY);
     if (hit) {
       e.preventDefault();
       e.stopImmediatePropagation();
-      this.viewport.clearHover();
+      this.hoverInput(null);
       if (e.shiftKey) this.addSingle(hit.edge);
       else this.addWithChain(hit.edge);
       this.afterMembershipChange();
@@ -629,7 +667,7 @@ export class EdgeFeatureTool {
     } else {
       this.seedGhosts(edges);
       for (const g of [...this.ghosts]) {
-        const line = this.viewport.edgeLineByMid(g.mid);
+        const line = this.input?.byMid(g.mid);
         if (line) this.addWithChain(line);
       }
     }
@@ -646,8 +684,8 @@ export class EdgeFeatureTool {
     this.previewId = this.store.nextId();
     this.axis.copy(this.computeAxis());
     this.quat.setFromUnitVectors(Y_AXIS, this.axis);
-    // keep edges emphasized: more edges can be clicked into the set mid-drag
-    this.viewport.clearHover();
+    // the input edges stay drawn: more can be clicked into the set mid-drag
+    this.hoverInput(null);
     this.buildGizmo();
     this.dim.show([{ ...this.field, kind: "length" }], () => this.commit(), () => this.cancel());
     const s = this.viewport.projectToScreen(this.anchor);
@@ -803,7 +841,7 @@ export class EdgeFeatureTool {
     this.awaitingRollback = false;
     this.basePrompt = "";
     this.failureText = null;
-    this.viewport.emphasizeEdges(false);
+    this.disposeInput();
     this.viewport.clearHover();
     this.viewport.suspendPicking = false;
     this.active = false;

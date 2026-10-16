@@ -202,7 +202,22 @@ export class Picker {
     maxDepth?: number,
     clip: PickClip | null = null,
   ): EdgeHit | null {
-    const eHits = this.castEdges(clientX, clientY, rect, camera, view);
+    return this.pickEdgeOn(clientX, clientY, rect, camera, this.edgeTargets(view), maxDepth, clip);
+  }
+
+  /** pickEdge over edge objects the caller supplies instead of a model's —
+   *  the fillet/chamfer tool picks from a snapshot of its input edges, because
+   *  the model on screen is its own live preview (see edgeFeatureTool.ts). */
+  pickEdgeOn(
+    clientX: number,
+    clientY: number,
+    rect: DOMRect,
+    camera: THREE.Camera,
+    targets: THREE.Object3D[],
+    maxDepth?: number,
+    clip: PickClip | null = null,
+  ): EdgeHit | null {
+    const eHits = this.castEdges(clientX, clientY, rect, camera, targets);
     if (!eHits.length) return null;
 
     let best = eHits[0];
@@ -235,7 +250,7 @@ export class Picker {
 
   /** Every edge line within the edge-pick radius of the cursor, as the
    *  raycaster reports them (sorted by depth, not by screen distance). */
-  private castEdges(clientX: number, clientY: number, rect: DOMRect, camera: THREE.Camera, view: ModelView) {
+  private castEdges(clientX: number, clientY: number, rect: DOMRect, camera: THREE.Camera, targets: THREE.Object3D[]) {
     this.ndc.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
@@ -252,7 +267,7 @@ export class Picker {
     // (render.ts) — no per-move sync needed here.
     // skip hidden lines (flush-seam-hidden contact rims, hidden bodies) — the
     // raycaster tests invisible objects too, which would give ghost edge picks
-    return this.raycaster.intersectObjects(this.edgeTargets(view), false);
+    return this.raycaster.intersectObjects(targets, false);
   }
 
   /** A test for "this world point lies BEHIND the first visible body surface
@@ -309,7 +324,7 @@ export class Picker {
     behind = this.occluderAt(clientX, clientY, rect, camera, view, clip),
   ): { point: THREE.Vector3; edges: EdgeRef[] } | null {
     const near = new Set<EdgeRef>();
-    for (const h of this.castEdges(clientX, clientY, rect, camera, view)) {
+    for (const h of this.castEdges(clientX, clientY, rect, camera, this.edgeTargets(view))) {
       const ref = (h.object.userData.edges as BodyEdges | undefined)?.refAtSegment(h.faceIndex ?? -1);
       if (ref) near.add(ref);
     }
