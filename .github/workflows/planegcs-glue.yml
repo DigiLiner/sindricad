@@ -170,7 +170,7 @@ jobs:
           echo "patched wasm: $pat"
           echo "published wasm: $PUBLISHED_WASM_SHA256"
           if [ "$ctl" != "$PUBLISHED_WASM_SHA256" ]; then
-            echo "::warning::The control wasm does not match the published one. Expected: this build is not reproducible for the wasm. The wasm is not vendored, so this does not block."
+            echo "::warning::The control wasm does not match the published one. Expected: this build is not reproducible for the wasm. Not a gate: the vendored pair is checked by the solver suites instead."
           fi
 
       - name: The sink MUST be gone from the patched glue
@@ -201,9 +201,10 @@ jobs:
             echo
             echo "The unpatched control build reproduced the published 1.1.7 planegcs.js"
             echo "byte for byte. The WASM is deliberately NOT compared: it does not build"
-            echo "reproducibly in this toolchain (see the workflow comments), and it is not"
-            echo "vendored - the app keeps loading the published wasm from the npm package."
-            echo "Only planegcs.js is intended for vendoring."
+            echo "reproducibly in this toolchain (see the workflow comments). Both patched"
+            echo "files are vendored as a pair: the flags change the wasm too (the heap"
+            echo "limits live in its memory section), so its correctness is argued by the"
+            echo "solver suites on the vendoring commit, not by a hash."
             echo
             cat /out/SHA256SUMS.txt
           } > /out/PROVENANCE.txt

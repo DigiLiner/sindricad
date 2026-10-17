@@ -36,7 +36,10 @@ This file starts on 2026-08-03. For anything before that, see the
   so dimensioned shapes ran the solver out of memory on its first solve, and from then on
   nothing solved and drags stopped following until a restart. I now solve each independent
   part on its own, and if one connected part really is too big, I say so once and keep
-  solving everything else.
+  solving everything else. One connected part can now be about four times bigger before
+  that happens: up to about 1,000 joined, dimensioned lines (it was about 280). While you
+  drag a part that big, it follows the cursor unsolved and settles when you let go,
+  so the view never freezes mid-drag.
 
 ### Welcome screen
 
