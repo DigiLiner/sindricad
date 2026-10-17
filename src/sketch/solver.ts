@@ -239,9 +239,10 @@ export async function initSolver(): Promise<boolean> {
   }
 }
 
-/** planegcs ran out of heap on one solve: a connected part of the sketch is too
- *  big for it to diagnose (see SYSTEM_BUDGET). Not a dead solver. The module
- *  that aborted is dropped, and the next solve starts on a fresh one. */
+/** planegcs aborted on one solve, which in practice means it ran out of heap: a
+ *  connected part of the sketch is too big for it to diagnose (see
+ *  SYSTEM_BUDGET). Not a dead solver. The module that aborted is dropped, and
+ *  the next solve starts on a fresh one. */
 export class SolverOutOfMemory extends Error {
   constructor(readonly cause: unknown) {
     super(t("sketch.solver.tooLarge"));
@@ -252,18 +253,20 @@ export class SolverOutOfMemory extends Error {
 /** Most dense-Jacobian entries (constraint rows by free parameters) one planegcs
  *  system is handed.
  *
- *  The wasm heap is FIXED at 16 MB, 5 MB of it stack (the published build sets
- *  no ALLOW_MEMORY_GROWTH), and every solve first diagnoses the WHOLE system it
- *  was given with dense matrices of that size, several copies at once. So its
- *  memory grows with the square of the system: measured at about 20 bytes per
- *  entry, it aborts with Aborted(OOM) somewhere past half a million entries.
- *  Between 110 and 120 dimensioned rectangles reach that, and the GH #17
- *  probe's 350 rectangles, circles and arcs did. That is the system planegcs is
+ *  Every solve first diagnoses the WHOLE system it was given with dense
+ *  matrices of that size, several copies at once, so its memory grows with the
+ *  square of the system (about 20 bytes per entry) and its time faster still.
+ *  The published build's FIXED 16 MB heap aborted somewhere past half a million
+ *  entries: between 110 and 120 dimensioned rectangles, or the GH #17 probe's
+ *  350 rectangles, circles and arcs. The vendored build's heap grows to 256 MB
+ *  (vendor/planegcs/PROVENANCE.md), which moves that wall but not the square:
+ *  one connected 500-line staircase takes 0.75 s, 1,500 lines 19 s. That is the
+ *  system planegcs is
  *  handed, though, not the problem: parts of a sketch that share no free
  *  parameter are independent, and planegcs's own solve already treats them one
  *  by one. Grouped into systems of at most this many entries they cost a few
- *  MB however large the sketch, and only one connected part too big on its own
- *  can still run out.
+ *  MB and milliseconds however large the sketch, and only one connected part
+ *  too big on its own can still be slow or run out.
  *
  *  A sketch under the budget is one system, exactly as before. */
 const SYSTEM_BUDGET = 100_000;
@@ -308,10 +311,23 @@ async function solveSystem(input: SolveInput): Promise<SolveResult> {
     // heap keeps everything that solve had allocated: measured, a 200-line
     // staircase that a fresh module solves in 4 MB runs out on the module a
     // bigger one aborted. Never solve on that module again.
-    if (err instanceof WebAssembly.RuntimeError) {
+    //
+    // Any "Aborted(...)" counts as running out. A heap that cannot grow aborts
+    // with "Aborted(OOM)", but this build's heap GROWS (to 256 MB), and when a
+    // growth is refused, at the cap or by the engine, the failed allocation
+    // ends the solve one of two ways, depending on which allocation it was
+    // (both measured with growth refused past 300 pages, a 500-line
+    // staircase): a bare "Aborted()", or a C++ exception, which this build
+    // cannot catch and whose glue (__cxa_throw) throws the exception's
+    // POINTER, a plain number. Either way the C++ was unwound without its
+    // destructors. Other traps (an out-of-bounds access, unreachable) still
+    // drop the module but are not reported as a sketch too big.
+    const cxxThrow = typeof err === "number";
+    if (err instanceof WebAssembly.RuntimeError || cxxThrow) {
       aborted = true;
       modulePromise = null;
-      if (err.message.includes("OOM")) throw new SolverOutOfMemory(err);
+      // i18n-ignore emscripten's abort message, matched, never shown
+      if (cxxThrow || err.message.startsWith("Aborted(")) throw new SolverOutOfMemory(err);
     }
     throw err;
   } finally {
