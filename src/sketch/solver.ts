@@ -258,9 +258,10 @@ export class SolverOutOfMemory extends Error {
  *  square of the system (about 20 bytes per entry) and its time faster still.
  *  The published build's FIXED 16 MB heap aborted somewhere past half a million
  *  entries: between 110 and 120 dimensioned rectangles, or the GH #17 probe's
- *  350 rectangles, circles and arcs. The vendored build's heap grows to 256 MB
+ *  350 rectangles, circles and arcs. The vendored build's heap grows to 128 MB
  *  (vendor/planegcs/PROVENANCE.md), which moves that wall but not the square:
- *  one connected 500-line staircase takes 0.75 s, 1,500 lines 19 s. That is the
+ *  one connected 500-line staircase takes 0.6 s, 1,000 lines 5 s, and 1,050
+ *  run out. That is the
  *  system planegcs is
  *  handed, though, not the problem: parts of a sketch that share no free
  *  parameter are independent, and planegcs's own solve already treats them one
@@ -313,7 +314,7 @@ async function solveSystem(input: SolveInput): Promise<SolveResult> {
     // bigger one aborted. Never solve on that module again.
     //
     // Any "Aborted(...)" counts as running out. A heap that cannot grow aborts
-    // with "Aborted(OOM)", but this build's heap GROWS (to 256 MB), and when a
+    // with "Aborted(OOM)", but this build's heap GROWS (to 128 MB), and when a
     // growth is refused, at the cap or by the engine, the failed allocation
     // ends the solve one of two ways, depending on which allocation it was
     // (both measured with growth refused past 300 pages, a 500-line

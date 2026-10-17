@@ -11,7 +11,7 @@
 // that one solve, not the solver; and the vendored build's heap GROWS, so the
 // staircase that is too big for a capped heap solves without the cap.
 //
-// The vendored heap grows to 256 MB, which no test here can afford to reach, so
+// The vendored heap grows to 128 MB, which no test here can afford to reach, so
 // every test runs with growth refused past CAPPED_PAGES (the cap below): the
 // REAL abort planegcs makes when a growth is refused, at a known limit.
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -472,7 +472,7 @@ describe("SketchMode after a solve runs out of heap", () => {
 // module holds enough memory that no capped test after it could run out.
 describe("the vendored heap grows", () => {
   it("solves the staircase that is too big for a capped heap", async () => {
-    cap.pages = 4096; // the vendored MAXIMUM_MEMORY, 256 MB
+    cap.pages = 2048; // the vendored MAXIMUM_MEMORY, 128 MB
     const big = staircase(500);
     const r = await compileAndSolve(big.entities, big.constraints);
     expect(r.ok).toBe(true);

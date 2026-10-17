@@ -3,7 +3,7 @@
 // WHY THIS EXISTS: the published 1.1.7 glue needs 'unsafe-eval' in the CSP,
 // because embind hands source text to the Function constructor. The vendored
 // build is the same commit with `-s DYNAMIC_EXECUTION=0`, which removes that
-// sink, plus `-s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=256MB` in place of the
+// sink, plus `-s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=128MB` in place of the
 // published fixed 16 MB heap. See vendor/planegcs/PROVENANCE.md for what is and
 // is not established.
 //
@@ -69,4 +69,4 @@ for (const name of ["planegcs.js", "planegcs.wasm"]) {
   copyFileSync(from, join(dest, name));
 }
 
-console.log("[planegcs] vendored glue installed (DYNAMIC_EXECUTION=0, no 'unsafe-eval' needed; heap grows to 256 MB)");
+console.log("[planegcs] vendored glue installed (DYNAMIC_EXECUTION=0, no 'unsafe-eval' needed; heap grows to 128 MB)");

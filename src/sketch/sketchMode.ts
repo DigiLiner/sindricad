@@ -259,7 +259,7 @@ const ZOOM_REDRAW = 0.1;
  *  part live (SketchMode.liveSolveOff) and leaves it to the release. Measured
  *  on one connected staircase of dimensioned lines (each H or V, each with a
  *  length): 100 lines solve in 11 ms, 200 in 42-47, 280 in 108-113, 500 in
- *  0.6 s and 1,500 in 19 s, which the growable heap now lets happen. A frame
+ *  0.6 s and 1,000 in 5 s, which the growable heap now lets happen. A frame
  *  is 16 ms at 60 Hz, so 50 ms is three frames: everything up to about 200
  *  joined lines still follows the cursor, and nothing larger freezes it. A
  *  split sketch's parts are each far under it (the GH #17 probe's 350 shapes
