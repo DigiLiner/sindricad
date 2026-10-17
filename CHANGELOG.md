@@ -25,6 +25,26 @@ This file starts on 2026-08-03. For anything before that, see the
   welcome screen shows the same card. Nothing pops up by itself; the panel can hide the
   pill for good, and Help > Support SindriCAD still opens it after that.
 
+### Sketching
+
+- **Large sketches stay quick to work in.** Hovering, drawing and dragging slowed down with
+  every line in the sketch, and dragging a whole line re-solved the entire sketch on every
+  frame. A drag now solves and redraws only the geometry it can move, and snapping no longer
+  measures the window once per point. On a 400-line sketch a line drag takes about a fifth
+  of the work it did, and hovering about a tenth.
+- **A big sketch no longer switches the constraint solver off.** A sketch with a hundred or
+  so dimensioned shapes ran the solver out of memory on its first solve, and from then on
+  nothing solved and drags stopped following until a restart. I now solve each independent
+  part on its own, and if one connected part really is too big, I say so once and keep
+  solving everything else.
+
+### Welcome screen
+
+- **The offline message is plain, and its Retry button is button-sized.** It used to
+  stretch the full height of the pane.
+
+## 0.1.254 (2026-10-17)
+
 ### Files
 
 - **Closing the window asks before it throws your work away.** The X, Alt+F4 and the
