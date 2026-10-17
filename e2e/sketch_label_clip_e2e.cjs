@@ -140,9 +140,19 @@ const DOC = {
     // A badge is drawn only where its ANCHOR is still on the canvas. One
     // straddling the edge is legitimate and gets trimmed by the clip — that
     // half is what the panel sweep below proves never paints or hit-tests.
+    //
+    // A dimension badge is centred on its anchor; a point glyph is not. Fix,
+    // Coincident and Point-On sit ON_POINT_OFFSET_PX (12) above and to one
+    // side of their point so it shows through (sketchGlyphs.ts), so an anchor
+    // just inside the right edge puts the ⚓'s centre just outside it. Taking
+    // the centre for the anchor failed this 6 runs in 10 after two notches,
+    // where one fix point lands about 2 px inside the edge and run-to-run
+    // jitter decided which side of it. Allow exactly that nudge for those.
+    const ON_POINT = new Set(["⊙", "∈", "⚓"]);
     const escaped = labels.filter((n) => {
+      const nudge = n.cls.startsWith("sketch-glyph") && ON_POINT.has(n.text) ? 12 : 0;
       const cx = (n.l + n.r) / 2, cy = (n.t + n.b) / 2;
-      return cx < vp.l || cx > vp.r || cy < vp.t || cy > vp.b;
+      return cx < vp.l - nudge || cx > vp.r + nudge || cy < vp.t - nudge || cy > vp.b + nudge;
     });
 
     // Sweep the panels: is a sketch label the TOPMOST thing anywhere over them?
