@@ -255,21 +255,52 @@ describe("SketchMode after a solve runs out of heap", () => {
     await live.settle();
     expect(wasm.starts - after[11]!, "the release tries again").toBe(1);
 
-    // a body drag of the rectangle's bottom side solves the whole sketch,
-    // which holds the staircase: the frame the drag starts on tries (the
-    // pinned pass, then the free retry beneath it), and no later frame does
-    before = wasm.starts;
-    after = await frames([5, 0], [5, -3], 12);
-    const trying = after.filter((n, i) => n > (i ? after[i - 1]! : before)).length;
-    expect(trying, `frames that started a module: ${JSON.stringify([before, ...after])}`).toBe(1);
-    expect(after[11]! - before).toBeLessThanOrEqual(2);
-    // the side still follows the cursor, unsolved
-    const r0 = live.ent("r0") as Line;
-    expect(r0.y1).toBeCloseTo(-3, 6);
-    expect(r0.y2).toBeCloseTo(-3, 6);
-    live.release();
-    await live.settle();
-    expect(wasm.starts, "the release tries again").toBeGreaterThan(after[11]!);
+    // A body drag solves only what the dragged side is joined to (GH #17), so
+    // the module count no longer says whether a solve was tried: a failure on
+    // a module that is already up starts nothing. Count the passes that ran
+    // out instead; pump() logs each one.
+    let outOfMemory = 0;
+    const errors = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+      if (a.some((x) => x instanceof SolverOutOfMemory)) outOfMemory++;
+    });
+    try {
+      // the rectangle's bottom side: its part is the rectangle, which fits, so
+      // every frame solves and nothing runs out
+      await frames([5, 0], [5, -3], 12);
+      expect(live.s.moveDrag, "a body drag").not.toBeNull();
+      expect(outOfMemory, "drag frames that ran out").toBe(0);
+      const r0 = live.ent("r0") as Line, r1 = live.ent("r1") as Line;
+      expect(r0.y1).toBeCloseTo(-3, 6);
+      expect(r0.y2).toBeCloseTo(-3, 6);
+      expect(r1.x1).toBeCloseTo(r1.x2, 9); // solved: the side it carries stays vertical
+      live.release();
+      await live.settle();
+      expect(outOfMemory, "the release solves the whole sketch, and tries the staircase").toBe(1);
+
+      // a side of the staircase: its part IS the one too big. The frame the
+      // drag starts on tries, no later frame does, and the release tries again
+      outOfMemory = 0;
+      const tries: number[] = [];
+      // zoomed in far enough that the middle of a 1 mm step is not a vertex
+      (live.s as unknown as { pickTol: () => number }).pickTol = () => 0.2;
+      live.press(100.5, 0);
+      expect(live.s.moveDrag, "a body drag").not.toBeNull();
+      for (let i = 1; i <= 12; i++) {
+        live.move(100.5, -i / 4);
+        await live.settle();
+        tries.push(outOfMemory);
+      }
+      expect(tries.filter((n, i) => n > (i ? tries[i - 1]! : 0)).length, `frames that ran out: ${JSON.stringify(tries)}`).toBe(1);
+      // the side still follows the cursor, unsolved
+      const s0 = live.ent("s0") as Line;
+      expect(s0.y1).toBeCloseTo(-3, 6);
+      expect(s0.y2).toBeCloseTo(-3, 6);
+      live.release();
+      await live.settle();
+      expect(outOfMemory - tries[11]!, "the release tries again").toBe(1);
+    } finally {
+      errors.mockRestore();
+    }
 
     expect(toasts).toEqual([t("sketch.solver.tooLarge")]);
     expect(live.s.solverDead).toBe(false);
