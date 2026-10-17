@@ -1298,6 +1298,9 @@ export interface FeatureError {
    *  parts in all (`parts`). Ours, never document text. */
   count?: number;
   parts?: number;
+  /** Another feature the sentence is about, by id (blendCornerTaken: the
+   *  earlier fillet in the way). featureErrorText names it as the timeline does. */
+  feature_ref?: string;
 }
 
 /** One body's exact kernel mass properties, or a record of why it has none.

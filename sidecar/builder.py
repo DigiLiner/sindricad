@@ -6564,12 +6564,74 @@ def _blend_edges(f, ctx, label, combined, one_edge, blend_size):
                 # the feature FAILS — never a partial solid, never a smaller radius.
                 # Paint exactly the offenders red, then re-raise the original error.
                 _report_edge_failures(f, ctx, unresolved, one_edge)
+                # OCCT's "try a smaller value" is misleading when the edge runs
+                # into a corner an earlier blend already rounded: measured on a
+                # 41-degree tip under a filleted top loop, the tip edge builds only
+                # below about a TENTH of the loop's radius, while both edges in one
+                # fillet, or the tip edge first, build at the size asked for.
+                try:
+                    earlier = _earlier_blend_at_corner(body, unresolved, ctx)
+                except Exception:
+                    earlier = None  # cannot tell: the kernel's own message stands
+                if earlier is not None:
+                    kind = next(x.get("type") for x in ctx.features if x.get("id") == earlier)
+                    raise GeomError(
+                        f"{label} failed on {BODY_SLOT}: this edge runs into a corner an "
+                        f"earlier {kind} already shaped, and a {label.lower()} this size does "
+                        f"not fit there. Edit that {kind} and add this edge to it, or move this "
+                        f"{label.lower()} before it in the timeline. A smaller size may also build.",
+                        code=errors_mod.BLEND_CORNER_TAKEN, body_id=body["id"],
+                        subject=body.get("name"), feature_ref=earlier,
+                    ) from combined_err
                 raise GeomError(f"{label} failed on {BODY_SLOT}: {combined_err}",
                                 body_id=body["id"],
                                 subject=body.get("name")) from combined_err
         staged.append((body, new_shape))
     for body, shape in staged:
         body["shape"] = shape
+
+
+def _earlier_blend_at_corner(body, edges, ctx):
+    """The id of an earlier fillet/chamfer that already shaped a corner one of
+    `edges` ends in, or None.
+
+    The sign is the corner itself: at an end of the edge, two or more faces
+    other than the edge's own two belong to the same blend (the two fillets
+    meeting in a mitre over a tip). The edge's own faces are left out because a
+    blend also takes ownership of every face it trims: after ONE fillet on a
+    box's top edge, the vertical edge below it ends on its two trimmed sides and
+    one fillet face, and there a smaller size is the honest advice. Faces are
+    attributed through `body["_owners"]`, which holds the body as it stood
+    before this feature."""
+    owners = body.get("_owners") or {}
+    blends = {x.get("id") for x in ctx.features or () if x.get("type") in ("fillet", "chamfer")}
+    if not owners or not blends:
+        return None
+    from OCP.TopAbs import TopAbs_FACE, TopAbs_VERTEX
+    from OCP.TopExp import TopExp
+    from OCP.TopTools import TopTools_IndexedDataMapOfShapeListOfShape
+
+    vmap = TopTools_IndexedDataMapOfShapeListOfShape()
+    TopExp.MapShapesAndAncestors_s(body["shape"].wrapped, TopAbs_VERTEX, TopAbs_FACE, vmap)
+    for e in edges:
+        for v in e.vertices():
+            if not vmap.Contains(v.wrapped):
+                continue
+            # The list names a face once per edge it meets the vertex by, so
+            # count distinct faces per owner, not list entries.
+            by_owner = {}
+            for face in vmap.FindFromKey(v.wrapped):
+                face = Face(face)
+                if any(e.wrapped.IsSame(x.wrapped) for x in face.edges()):
+                    continue  # one of the edge's own two faces
+                fp = _face_fp(face)
+                owner = owners.get(fp)
+                if owner in blends:
+                    by_owner.setdefault(owner, set()).add(fp)
+            for owner, faces in by_owner.items():
+                if len(faces) >= 2:
+                    return owner
+    return None
 
 
 def _handle_fillet(f, ctx):
@@ -10118,6 +10180,10 @@ def rebuild(document, diagnostics=None, resume=None, snapshots_out=None, persist
             for _k in ("count", "parts"):
                 if isinstance(getattr(ex, _k, None), int):
                     entry[_k] = getattr(ex, _k)
+            # Another feature the sentence is about, by id: the app names it.
+            _ref = getattr(ex, "feature_ref", None)
+            if isinstance(_ref, str):
+                entry["feature_ref"] = _ref
             errors.append(entry)
         except Exception as ex:
             # Anything NOT a hand-authored ValueError is an unexpected internal

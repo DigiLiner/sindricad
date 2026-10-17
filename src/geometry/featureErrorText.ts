@@ -29,7 +29,11 @@ export const BODY_SLOT = "{body}";
  *  document text too, and the frontend holds every sketch, so the coded
  *  sentence carries the slot and the name goes in here, as {body}'s does. */
 export const SKETCH_SLOT = "{sketch}";
-const SLOTS = /\{body\}|\{sketch\}/g;
+/** The token a translation leaves where ANOTHER feature the sentence is about
+ *  is named (`blendCornerTaken`: the earlier fillet in the way). The sidecar
+ *  sends that feature's id as `feature_ref`; the name is the timeline's. */
+export const FEATURE_SLOT = "{feature}";
+const SLOTS = /\{body\}|\{sketch\}|\{feature\}/g;
 
 /** Matches sidecar `untrusted.MAX_SUBJECT`, so a name substituted here is bounded
  *  the same way one that arrived as `subject` already is. */
@@ -54,6 +58,8 @@ export interface FeatureErrorLike {
    *  `count` is the bodies they are in (`splitDamagedAllMore`). Passed as
    *  `{parts}`; it picks no plural form. Ours, never document text. */
   parts?: number;
+  /** Another feature the sentence names through `{feature}`, by id. */
+  feature_ref?: string;
 }
 
 /** Just enough of a body to name it. */
@@ -84,6 +90,17 @@ function sketchNameOf(features: readonly SketchedFeature[] | undefined, featureI
   return sketch ? sketchLabel(sketch, i) : undefined;
 }
 
+/** Feature `featureId` as the timeline shows it: its tool's name and its step,
+ *  or undefined when it is not in `features`. */
+function featureNameOf(features: readonly SketchedFeature[] | undefined, featureId: string | undefined): string | undefined {
+  if (!features || !featureId) return undefined;
+  const i = features.findIndex((f) => f.id === featureId);
+  const type = features[i]?.type;
+  if (type === undefined) return undefined;
+  const name = hasKey(`tool.${type}`) ? t(`tool.${type}`) : type;
+  return t("engine.featureAt", { name, index: i + 1 });
+}
+
 /**
  * `e.message` with its `{body}` and `{sketch}` slots filled in.
  *
@@ -105,12 +122,12 @@ export function featureErrorText(
   // `{body}` is handed back to t() as itself: the split codes are the first
   // translations to carry the slot, and t() warns on any placeholder it is not
   // given a value for. The name goes in below, by function, not through t().
-  const params: Params = { body: BODY_SLOT, sketch: SKETCH_SLOT };
+  const params: Params = { body: BODY_SLOT, sketch: SKETCH_SLOT, feature: FEATURE_SLOT };
   if (typeof e.count === "number") params.count = e.count;
   if (typeof e.parts === "number") params.parts = e.parts;
   const coded = e.code && hasKey(codeText) ? t(codeText, params) : undefined;
   const msg = coded ?? e.message ?? "";
-  if (!msg.includes(BODY_SLOT) && !msg.includes(SKETCH_SLOT)) return msg;
+  if (!msg.includes(BODY_SLOT) && !msg.includes(SKETCH_SLOT) && !msg.includes(FEATURE_SLOT)) return msg;
 
   const live = e.body_id ? bodies?.find((b) => b.id === e.body_id)?.name : undefined;
   // Trim each candidate BEFORE choosing, not after: a body named "   " is
@@ -118,13 +135,14 @@ export function featureErrorText(
   // collapse to nothing, skipping `subject` entirely.
   const name = (live?.trim() || e.subject?.trim() || "").slice(0, MAX_NAME).trim() || t("common.thisBody");
   const sketch = (sketchNameOf(features, e.feature_id)?.trim() ?? "").slice(0, MAX_NAME).trim() || t("common.itsSketch");
+  const feature = featureNameOf(features, e.feature_ref) ?? t("common.anEarlierBlend");
 
   // The replacement MUST go through a function. A plain string replacement
   // interprets $&, $`, $' and $$ as patterns, so a body named `$&` would splice
   // the matched token back into its own substitution — a name is data, not a
-  // format string. Both slots in ONE pass, so a name holding the other slot's
+  // format string. Every slot in ONE pass, so a name holding another slot's
   // token is never read as a slot.
-  return msg.replace(SLOTS, (slot) => (slot === BODY_SLOT ? name : sketch));
+  return msg.replace(SLOTS, (slot) => (slot === BODY_SLOT ? name : slot === SKETCH_SLOT ? sketch : feature));
 }
 
 /** What featureErrorMessages reads off a build: the reply's failing features

@@ -163,3 +163,32 @@ describe("featureErrorText on a Cut placed by a lost projection", () => {
     expect(featureErrorText(cut("x"), BODIES, features)).toContain(`Edit ${BODY_SLOT} $&, delete`);
   });
 });
+
+// Field lead 55a4cca2: a fillet whose edge runs into a corner an earlier fillet
+// already rounded used to say "try a smaller value or use max_fillet()". The
+// sidecar now names that fillet by id (`feature_ref`); the sentence names it as
+// the timeline lists it, by its tool and its step.
+describe("featureErrorText on a blend into an earlier blend's corner", () => {
+  const FEATURES = [
+    { id: "f1", type: "sketch" },
+    { id: "f2", type: "extrude", sketch: "f1" },
+    { id: "f4", type: "fillet" },
+    { id: "f6", type: "chamfer" },
+    { id: "f9", type: "fillet" },
+  ];
+  const blocked = (feature_ref: string) => ({ message: "x", code: "blendCornerTaken", feature_id: "f9", feature_ref });
+
+  it("names the earlier fillet or chamfer by its step in the timeline", () => {
+    const text = featureErrorText(blocked("f4"), BODIES, FEATURES);
+    expect(text).toBe(
+      "This edge runs into a corner that the Fillet at step 3 in the timeline already shaped, and I can't fit this size into it. " +
+        "Add this edge to that one instead, or move this feature in front of it in the timeline. A smaller size may also work.",
+    );
+    expect(featureErrorText(blocked("f6"), BODIES, FEATURES)).toContain("a corner that the Chamfer at step 4 in the timeline already shaped");
+  });
+
+  it("says 'an earlier fillet or chamfer' when it cannot tell which", () => {
+    expect(featureErrorText(blocked("gone"), BODIES, FEATURES)).toContain("a corner that an earlier fillet or chamfer already shaped");
+    expect(featureErrorText(blocked("f4"), BODIES)).toContain("a corner that an earlier fillet or chamfer already shaped");
+  });
+});

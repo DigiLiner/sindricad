@@ -1858,7 +1858,7 @@ def _ok(req_id, result):
 # why they are separate fields instead of words in `message`.
 # `count`/`parts`: the numbers a coded sentence counts (errors.GeomError), which
 # the app's translation needs as much as it needs `code`.
-_ERR_FIELDS = ("message", "feature_id", "code", "body_id", "subject", "count", "parts")
+_ERR_FIELDS = ("message", "feature_id", "code", "body_id", "subject", "count", "parts", "feature_ref")
 
 
 def _err_entry(e):

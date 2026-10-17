@@ -102,6 +102,7 @@ and on `ResolveDiag` entries.
 | `cutOnlyHidden` | warning (`ResolveDiag` with a `reason`): a Cut (extrude, revolve, loft or sweep) removed nothing because the only material it reaches is in bodies that were hidden when it was made; `{body}` is the first of them and `count` how many. Not an error: the feature did what it was told |
 | `cutLostProjection` | an extrude Cut removed nothing, and its profile is placed by a projected entity in its sketch whose source no longer resolves (stale in the document, or gone stale in this rebuild's `projectionUpdates`): the entity bounds one of the cut's areas, or is reached from one through the sketch's constraints, not passing through another projected entity. Takes the place of the plain "Cut removed nothing" message, and ends with its advice: reached is not proof the lost edge is why. The app's sentence names the sketch through a `{sketch}` slot it fills from the document (featureErrorText); the reply carries no name |
 | `joinPiecesLeftOut` | warning (`ResolveDiag` with a `reason`): a join (Combine join, or a Join-mode extrude, revolve, sweep, loft or thicken) left `count` of the pieces going into it out of `{body}`: they do not touch it, and the debris rule drops a floating solid under 0.1% of the biggest. Counts the solids of the target, the tools, the prism and every body a Join-mode feature fused in (a whole body can go), as the user saw them: a chip an earlier cut left floating in a body, which its own final pass already hid, is not counted; every solid of a body imported whole (`_intact`) is. Not reported: when the join's clean-up (`_unify_body`) refuses its result, the glued original keeps its floating pieces and the final pass drops them later with no warning. The geometry is unchanged; only the word is new. The `reason` says "the joined body" and never names it: the result goes by the target's (or a Join's first hit's) name, which can be the piece that went |
+| `blendCornerTaken` | a fillet or chamfer failed, and an edge it could not blend runs into a corner the earlier fillet or chamfer `feature_ref` already shaped: at one end of the edge, two or more faces other than the edge's own two belong to that feature (two fillets meeting in a mitre over a tip). Takes the place of OCCT's "try a smaller value", which is little help there: on the measured case only about a tenth of the size builds, while both edges in one feature, or this one first, build at the size asked for. The app's sentence names that feature as its timeline does, through a `{feature}` slot it fills from the document (featureErrorText); the reply carries only the id |
 | `joinPiecesApart` | warning (`ResolveDiag` with a `reason`): a join stamped `joinTouchingOnly` (a Combine join, or a Join-mode extrude, revolve, sweep, loft or thicken made by a build that stamps it) kept `count` pieces in `{body}` that do not touch the rest of it, as pieces of their own. Counts the connected pieces of the result (solids sharing a vertex) that hold none of the material of the bodies joined into: the Combine's target, or the bodies a Join feature took in. A piece one of those bodies already had is not counted. Such a join never drops a piece as debris, so it never raises `joinPiecesLeftOut`; the body is exempt from the final debris pass once it holds more than one solid |
 
 **Treat an unrecognised code as unclassified, never as an error.** The set only grows, and
@@ -214,7 +215,8 @@ Reply `result` is one of:
   for a single-line banner; `featureErrors` carries all of them. Each entry may also
   carry `code`, `body_id` and `subject` (see **Untrusted text** below), and `count` and
   `parts`: integers a coded sentence counts, which its translation takes as `{count}`
-  (it also picks the plural form) and `{parts}`.
+  (it also picks the plural form) and `{parts}`, and `feature_ref`: the id of another
+  feature the sentence is about (`blendCornerTaken`), which the app names in a `{feature}` slot.
 
   `diagnostics` is omitted when empty, but when present it is **complete for the whole
   document** — an incrementally-resumed rebuild replays the diagnostics of its cached
@@ -298,7 +300,7 @@ Export is "export what built": a feature failure never blocks exporting the bodi
 did build; only zero live bodies is a hard `{ "error": {...} }`.
 
 `warnings` carries two kinds of entry. One WITH a `feature_id` key (built by `_err_entry`,
-so it may also carry `code`, `body_id`, `subject`, `count`, `parts`, and the id may be
+so it may also carry `code`, `body_id`, `subject`, `count`, `parts`, `feature_ref`, and the id may be
 `null`) is a feature that failed: its geometry is missing from the file. One WITHOUT is a
 note about a file that was written in full: `{ "message": "..." }` only (unmatched edges,
 a very dense mesh, texture a STEP file cannot carry). The frontend tells them apart by that

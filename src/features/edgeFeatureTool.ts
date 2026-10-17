@@ -139,7 +139,7 @@ export class EdgeFeatureTool {
    */
   private reportPreviewFailure(result: RebuildResult) {
     const err = (result.featureErrors ?? []).find((e) => e.feature_id === this.previewId);
-    const text = err ? featureErrorText(err, result.bodies) : null;
+    const text = err ? featureErrorText(err, result.bodies, this.store.document.features) : null;
     if (text === this.failureText) return;
     this.failureText = text;
     setPrompt(text ? t(`feature.edge.previewFailed.${this.kind}`, { text }) : this.basePrompt);

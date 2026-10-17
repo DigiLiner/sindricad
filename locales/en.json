@@ -117,6 +117,7 @@
   },
   "common": {
     "add": "Add",
+    "anEarlierBlend": "an earlier fillet or chamfer",
     "angle": "Angle",
     "apply": "Apply",
     "bodies": {
@@ -240,6 +241,7 @@
     "down": "the geometry engine is not running; restart SindriCAD",
     "error": {
       "badRequest": "the geometry engine rejected this request (update SindriCAD)",
+      "blendCornerTaken": "This edge runs into a corner that {feature} already shaped, and I can't fit this size into it. Add this edge to that one instead, or move this feature in front of it in the timeline. A smaller size may also work.",
       "bodyTooLarge": "this body is too large to process",
       "budgetExhausted": "this operation ran out of its time budget",
       "cancelled": "cancelled",
@@ -338,6 +340,7 @@
       "tooLargeRefused": "That model is too large for the geometry engine to accept. Remove or simplify the imported body, then try again.",
       "unknownOp": "the geometry engine does not know this operation (update SindriCAD)"
     },
+    "featureAt": "the {name} at step {index} in the timeline",
     "reportHere": "click the bug button in the bottom-right corner so I get the log",
     "warning": {
       "splitMissed": "The plane does not pass through {body}, so I left it as it was."

@@ -90,6 +90,8 @@ JOIN_ONLY_HIDDEN = "joinOnlyHidden"         # a Join added a new body instead of
 # Join warning (a Combine join, or a join-mode extrude/revolve/sweep/loft/thicken):
 JOIN_PIECES_LEFT_OUT = "joinPiecesLeftOut"  # `count` pieces going into the join do not touch {body} and were left out (the debris rule)
 JOIN_PIECES_APART = "joinPiecesApart"  # `count` pieces of a `joinTouchingOnly` join do not touch the rest of {body} and stay in it as pieces of their own
+# Fillet/chamfer error (the feature changed nothing, so it is red):
+BLEND_CORNER_TAKEN = "blendCornerTaken"  # an edge runs into a corner the earlier fillet/chamfer `feature_ref` already shaped
 
 ALL = frozenset({
     AMBIGUOUS_REFERENCE, REFERENCE_NOT_FOUND, CANCELLED, TIMED_OUT, STALLED,
@@ -104,6 +106,7 @@ ALL = frozenset({
     MERGE_DROPPED_SURFACES, MERGE_DAMAGED_LEFT_OUT, MERGE_SEPARATE_PIECES,
     SEPARATE_DROPPED_SURFACES, SEPARATE_DROPPED_FACES, CUT_ONLY_HIDDEN, CUT_LOST_PROJECTION,
     JOIN_ONLY_HIDDEN, JOIN_PIECES_LEFT_OUT, JOIN_PIECES_APART, INSERT_NOTHING_BUILT, INSERT_NO_BODIES,
+    BLEND_CORNER_TAKEN,
 })
 
 # --- the body slot -----------------------------------------------------------
@@ -151,15 +154,21 @@ class GeomError(ValueError):
     `count` and `parts` are numbers the coded sentence counts (how many damaged
     parts a split left whole, and in how many bodies). The app passes them to
     the translation, where `count` also picks the plural form. Ours, ints only.
+
+    `feature_ref` is the id of ANOTHER feature the sentence is about (the
+    earlier fillet a `blendCornerTaken` edge runs into). The app names it as
+    its timeline does; its name never enters the prose.
     """
 
-    def __init__(self, message, code=None, body_id=None, subject=None, count=None, parts=None):
+    def __init__(self, message, code=None, body_id=None, subject=None, count=None, parts=None,
+                 feature_ref=None):
         super().__init__(message)
         self.code = code
         self.body_id = body_id
         self.subject = subject
         self.count = count
         self.parts = parts
+        self.feature_ref = feature_ref
 
 
 def code_of(ex, default=None):

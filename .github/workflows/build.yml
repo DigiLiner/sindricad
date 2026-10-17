@@ -158,6 +158,9 @@ jobs:
           # TA 5be73f3d: the fillet/chamfer hang probe answers from one warm
           # child, not a cold interpreter per preview value.
           uv run python test_blend_probe_warm.py
+          # TA 55a4cca2: a fillet into a corner an earlier fillet already
+          # rounded names that fillet instead of "try a smaller value".
+          uv run python test_blend_corner.py
           uv run python test_sysmem.py
           uv run python test_export_gates.py
           # The glyph-coverage guard: it decides whether text becomes geometry

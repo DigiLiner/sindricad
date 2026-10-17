@@ -52,7 +52,7 @@ const { EdgeFeatureTool } = await import("./edgeFeatureTool");
 
 const EDGE: Selector = { kind: "edge", point: [10, 0, 5] } as unknown as Selector;
 
-function harness() {
+function harness(features: Partial<Feature>[] = []) {
   const el = {
     style: { cursor: "" },
     addEventListener() {},
@@ -61,7 +61,7 @@ function harness() {
   const previews: (Feature | null)[] = [];
   let onBuild: ((s: unknown) => void) | null = null;
   const store = {
-    document: { features: [], parameters: [] },
+    document: { features, parameters: [] },
     buildState: { result: null },
     nextId: () => "prev1",
     setPreview: (f: Feature | null) => previews.push(f),
@@ -126,6 +126,22 @@ describe("a fillet/chamfer preview the kernel refuses", () => {
         "sat there unchanged, which is what a0a76571 reported as 'the same size regardless'",
     ).toContain(REFUSAL);
     expect(promptEl.textContent, "the message must name the operation").toContain("chamfer");
+  });
+
+  // Field lead 55a4cca2: the edge runs into a corner an earlier fillet already
+  // rounded. The sidecar names that fillet by id; the prompt names it as the
+  // timeline does, from the document the tool is working on.
+  it("names the earlier fillet in the way by its step in the timeline", () => {
+    const h = harness([
+      { id: "f1", type: "sketch" },
+      { id: "f2", type: "extrude" },
+      { id: "f3", type: "fillet" },
+    ] as Partial<Feature>[]);
+    h.emitBuild({
+      featureErrors: [{ feature_id: "prev1", message: "x", code: "blendCornerTaken", feature_ref: "f3" }],
+    } as unknown as RebuildResult);
+    expect(promptEl.textContent).toContain("a corner that the Fillet at step 3 in the timeline already shaped");
+    expect(promptEl.textContent).not.toContain("try a smaller");
   });
 
   it("clears back to the tool's instructions once a size builds", () => {
