@@ -12,10 +12,11 @@ import { setTitle, t } from "../i18n";
 import * as THREE from "three";
 import type { Viewport } from "../viewport/viewport";
 import { camHash } from "../viewport/camHash";
-import { overlayHost, outsideRect, clampIntoRect } from "../viewport/overlayHost";
+import { overlayHost, outsideRect, clampIntoRect, placeBadge } from "../viewport/overlayHost";
 import { BadgeRightPress, forwardPress, forwardWheel } from "./badgeNav";
 import type { SketchPlane } from "./plane";
 import type { ResolvedEntity } from "./snap";
+import type { DimPlace } from "../types";
 import { entityDims, staggeredDefaults, type DimField, type ConstraintDim, type EntityDim } from "./entityDims";
 import { entityDimKey } from "./dimRows";
 import { isOriginGeometry } from "./origin";
@@ -32,6 +33,8 @@ const fmtDim = (mm: number, kind?: "length" | "angle", driven?: boolean, fx?: bo
 
 interface DimLabel {
   el: HTMLDivElement;
+  /** what loop() last wrote to its style (placeBadge) */
+  placed?: string;
   anchor: THREE.Vector2;
   valueMm: number;
   commit: (mm: number) => void; // writes the value (entity field or constraint)
@@ -114,12 +117,12 @@ export function dimBadgeFields(d: ConstraintDim): Pick<ExtraDim, "anchor" | "val
 }
 
 /** Every entity badge show() builds, in the order it builds them, so follow()
- *  can match a new layout to the labels already on screen one for one. */
-function entityLabels(entities: ResolvedEntity[]): { i: number; d: EntityDim }[] {
-  // neighbour-aware default placements (concentric circles fan their diameter
-  // badges out instead of stacking) — the same call dimensionSegments makes,
-  // so a label and its own annotation lines never disagree
-  const defaults = staggeredDefaults(entities);
+ *  can match a new layout to the labels already on screen one for one.
+ *  `defaults` are the neighbour-aware default placements (concentric circles
+ *  fan their diameter badges out instead of stacking), the same ones
+ *  dimensionSegments uses, so a label and its own annotation lines never
+ *  disagree. */
+function entityLabels(entities: ResolvedEntity[], defaults = staggeredDefaults(entities)): { i: number; d: EntityDim }[] {
   const out: { i: number; d: EntityDim }[] = [];
   entities.forEach((e, i) => {
     // The origin carries no dimensions. Its axes are conceptually INFINITE and
@@ -290,17 +293,20 @@ export class SketchDimensions {
    *  the badges used to stay frozen until the button came up. Returns false, and
    *  changes nothing, when the list of dimensions is not the one on screen; the
    *  caller falls back to show(). */
-  follow(entities: ResolvedEntity[], extras: ExtraDim[] = []): boolean {
+  follow(entities: ResolvedEntity[], extras: ExtraDim[] = [], defaults?: Map<string, DimPlace>): boolean {
     const next: Pick<DimLabel, "anchor" | "valueMm" | "place">[] = [];
-    for (const { d } of entityLabels(entities)) next.push({ anchor: d.labelPos, valueMm: d.valueMm, place: d.place });
+    for (const { d } of entityLabels(entities, defaults)) next.push({ anchor: d.labelPos, valueMm: d.valueMm, place: d.place });
     for (const x of extras) next.push({ anchor: x.anchor, valueMm: x.valueMm, ...(x.place ? { place: x.place } : {}) });
     if (next.length !== this.labels.length) return false;
     this.labels.forEach((l, k) => {
       const n = next[k]!;
+      const changed = l.valueMm !== n.valueMm;
       l.anchor = n.anchor;
       l.valueMm = n.valueMm;
       if (n.place) l.place = n.place;
-      if (l.el.querySelector("input")) return; // being typed into: the editor owns the text
+      // only a new value needs new text (most of a drag frame's labels keep
+      // theirs), and one being typed into keeps the editor's
+      if (!changed || l.el.querySelector("input")) return;
       const text = fmtDim(l.valueMm, l.kind, l.driven, !!l.expr && !isPlainNumber(l.expr));
       if (l.el.textContent !== text) l.el.textContent = text;
     });
@@ -688,7 +694,7 @@ export class SketchDimensions {
       const off = outsideRect(p);
       const editing = off ? l.el.querySelector("input") : null;
       if (off && !editing) {
-        l.el.style.visibility = "hidden";
+        placeBadge(l, null);
         continue;
       }
       // The one exception is the badge being typed into. Hiding it would drop
@@ -700,8 +706,7 @@ export class SketchDimensions {
       const at = editing
         ? clampIntoRect(p, { width: l.el.offsetWidth || 0, height: l.el.offsetHeight || 0 })
         : p;
-      l.el.style.visibility = "";
-      l.el.style.transform = `translate(${at.x}px, ${at.y}px) translate(-50%, -50%)`;
+      placeBadge(l, `translate(${at.x}px, ${at.y}px) translate(-50%, -50%)`);
     }
   };
 }

@@ -70,3 +70,21 @@ export function clampIntoRect(
     y: pin(p.y, p.height, size.height / 2),
   };
 }
+
+/** Put a badge where it goes, or hide it (`at` null), writing its style only
+ *  when that differs from what this last wrote. A drag frame re-runs the
+ *  placement pass for every badge, and only the few that moved need a style
+ *  write: 1,200 of them per frame on a 400-line sketch was the badges' share
+ *  of a drag (GH #17). Fresh elements start with nothing written. */
+export function placeBadge(b: { el: HTMLElement; placed?: string }, at: string | null): void {
+  const next = at ?? "hidden";
+  const was = b.placed;
+  if (was === next) return;
+  b.placed = next;
+  if (at === null) {
+    b.el.style.visibility = "hidden";
+    return;
+  }
+  if (was === undefined || was === "hidden") b.el.style.visibility = "";
+  b.el.style.transform = at;
+}

@@ -8,7 +8,7 @@ import { setTitle } from "../i18n";
 import * as THREE from "three";
 import type { Viewport } from "../viewport/viewport";
 import { camHash } from "../viewport/camHash";
-import { overlayHost, outsideRect } from "../viewport/overlayHost";
+import { overlayHost, outsideRect, placeBadge } from "../viewport/overlayHost";
 import { BadgeRightPress, forwardPress, forwardWheel } from "./badgeNav";
 import type { SketchPlane } from "./plane";
 import { diagnosisOf, type ConstraintGlyph } from "./glyphs";
@@ -22,6 +22,8 @@ interface GlyphEl {
    *  sketch-plane endpoints of the line this badge sits at the midpoint of, so
    *  loop() below can nudge it clear of the line on screen. */
   linePts?: [THREE.Vector2, THREE.Vector2];
+  /** what loop() last wrote to its style (placeBadge) */
+  placed?: string;
 }
 
 /** Badges anchored exactly on the point they mark (glyphs.ts's `refPos`), rather
@@ -245,7 +247,7 @@ export class SketchGlyphs {
       this.plane.to3D(g.pos.x, g.pos.y, this.scratch);
       const p = this.viewport.projectToOverlay(this.scratch);
       if (outsideRect(p)) {
-        g.el.style.visibility = "hidden";
+        placeBadge(g, null);
         continue;
       }
       const key = `${Math.round(p.x)},${Math.round(p.y)}`;
@@ -256,11 +258,10 @@ export class SketchGlyphs {
     for (const { g, p, key } of placed) {
       const n = taken.get(key) ?? 0;
       taken.set(key, n + 1);
-      g.el.style.visibility = "";
       if (onPointGroup.has(key)) {
         const side = n % 2 === 0 ? 1 : -1;
         const x = p.x + side * (ON_POINT_OFFSET_PX + Math.floor(n / 2) * SketchGlyphs.SIDE_BY_SIDE_PX);
-        g.el.style.transform = `translate(${x}px, ${p.y - ON_POINT_OFFSET_PX}px) translate(-50%, -50%)`;
+        placeBadge(g, `translate(${x}px, ${p.y - ON_POINT_OFFSET_PX}px) translate(-50%, -50%)`);
         continue;
       }
       this.layoutLineBadge(g, p, n);
@@ -288,6 +289,6 @@ export class SketchGlyphs {
         y += (dx / len) * LINE_MIDPOINT_OFFSET_PX;
       }
     }
-    g.el.style.transform = `translate(${x + n * SketchGlyphs.SIDE_BY_SIDE_PX}px, ${y}px) translate(-50%, -50%)`;
+    placeBadge(g, `translate(${x + n * SketchGlyphs.SIDE_BY_SIDE_PX}px, ${y}px) translate(-50%, -50%)`);
   }
 }

@@ -465,6 +465,9 @@ export class SketchMode {
   /** A body drag that the solver holds nothing of moved its entity, and the
    *  screen has not caught up yet (see queueBodyDrag). */
   private bodyDragUndrawn = false;
+  /** What the last drag frame drew for each entity (refreshDragGeometry);
+   *  dropped by refreshActive, which redraws everything. */
+  private dragCurves: { color: number; dotR: number; byEntity: Map<ResolvedEntity, THREE.Object3D[]> } | null = null;
   /** The button came up while the gesture's last move was still waiting for its
    *  frame. pump() finishes the release once that move is solved (see endDrag). */
   private dragRelease: { pointerId: number | undefined } | null = null;
@@ -1029,6 +1032,7 @@ export class SketchMode {
    * dimension labels. Called when the entity list changes — and on drag end. */
   private refreshActive() {
     this.entityVersion++; // bump guards in-flight constraint solves against staleness
+    this.dragCurves = null;
     // current zoom → mm-per-pixel, so dimension badges keep screen clearance
     // from the geometry they label (they're click targets in the select tool)
     this.drawnPxScale = this.viewport.pixelWorldSize(this.plane.origin);
@@ -1106,12 +1110,30 @@ export class SketchMode {
   private refreshDragGeometry() {
     this.entityVersion++;
     this.bodyDragUndrawn = false;
-    const objs = curveObjects(this.entities, this.plane, this.activeColor(), false, this.endpointDotRadius());
+    // Only what moved is rebuilt (GH #17: 3 new meshes per line, every frame,
+    // was most of a drag frame on a 400-line sketch). A solve hands back new
+    // objects for what it solved and the drag's merge keeps the rest by
+    // identity, so an entity that is the same object as last frame is drawn
+    // by the same meshes. They count only while still on screen: anything
+    // else that redraws the sketch (refreshActive, a zoom rescale) has
+    // replaced and disposed them.
+    const color = this.activeColor(), dotR = this.endpointDotRadius();
+    const prev = this.dragCurves?.color === color && this.dragCurves.dotR === dotR ? this.dragCurves.byEntity : null;
+    const byEntity = new Map<ResolvedEntity, THREE.Object3D[]>();
+    const objs: THREE.Object3D[] = [];
+    for (const e of this.entities) {
+      const was = prev?.get(e);
+      const drawn = was && was.every((o) => o.parent) ? was : curveObjects([e], this.plane, color, false, dotR);
+      byEntity.set(e, drawn);
+      objs.push(...drawn);
+    }
+    this.dragCurves = { color, dotR, byEntity };
     if (this.dimsVisible) {
       this.cdims = constraintDims(this.entities, this.constraints);
-      objs.push(...dimensionLineObjects(this.entities, this.plane, this.cdims.flatMap((d) => d.lines)));
+      const placed = staggeredDefaults(this.entities); // once for the lines and the labels both
+      objs.push(...dimensionLineObjects(this.entities, this.plane, this.cdims.flatMap((d) => d.lines), undefined, placed));
       const extras = this.constraintDimExtras();
-      if (!this.dims.follow(this.entities, extras)) this.dims.show(this.entities, this.plane, extras);
+      if (!this.dims.follow(this.entities, extras, placed)) this.dims.show(this.entities, this.plane, extras);
     }
     this.overlay.setActiveSketch(objs);
     if (this.glyphsVisible && !this.glyphs.follow(constraintGlyphs(this.entities, this.constraints))) {

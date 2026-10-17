@@ -175,6 +175,36 @@ function closedLoops(ents: ResolvedEntity[], tol: number): { ring: ResolvedEntit
     .filter((s): s is { e: ResolvedEntity; ep: [V, V] } => s.ep !== null);
   const used = new Set<string>();
   const near = (a: V, b: V) => a.distanceTo(b) <= tol;
+  // Every endpoint in a grid of tol-sized cells, so the next member of a ring
+  // is looked for among the few ends in the 3x3 cells around the tail, not
+  // among every segment: a scan of the whole list per step made this
+  // quadratic, and it runs on every drag frame (GH #17). Still the FIRST
+  // unused segment in list order, as the scan found it.
+  // A cell's key may collide with another's; that only adds candidates, which
+  // the distance test then drops.
+  const key = (cx: number, cy: number) => cx * 1000003 + cy;
+  const grid = new Map<number, number[]>();
+  segs.forEach((s, i) => {
+    for (const q of s.ep) {
+      const k = key(Math.floor(q.x / tol), Math.floor(q.y / tol));
+      const at = grid.get(k);
+      if (!at) grid.set(k, [i]);
+      else if (at[at.length - 1] !== i) at.push(i);
+    }
+  });
+  const nextAt = (tail: V) => {
+    const cx = Math.floor(tail.x / tol), cy = Math.floor(tail.y / tol);
+    let best = -1;
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (const i of grid.get(key(cx + dx, cy + dy)) ?? []) {
+          const s = segs[i]!;
+          if ((best < 0 || i < best) && !used.has(s.e.id) && (near(s.ep[0], tail) || near(s.ep[1], tail))) best = i;
+        }
+      }
+    }
+    return best < 0 ? undefined : segs[best];
+  };
   const out: { ring: ResolvedEntity[]; verts: V[] }[] = [];
   for (const start of segs) {
     if (used.has(start.e.id)) continue;
@@ -187,7 +217,7 @@ function closedLoops(ents: ResolvedEntity[], tol: number): { ring: ResolvedEntit
         if (ring.length >= 3) out.push({ ring, verts });
         break;
       }
-      const next = segs.find((s) => !used.has(s.e.id) && (near(s.ep[0], tail) || near(s.ep[1], tail)));
+      const next = nextAt(tail);
       if (!next) break; // open chain, not a ring — leave its lines alone
       used.add(next.e.id);
       ring.push(next.e);
@@ -379,9 +409,11 @@ export function entityDims(e: ResolvedEntity, defaults?: DimPlace): EntityDim[] 
  *  dimension box shows but not the dimension marker lines"). The origin is
  *  what that filter was really for: its axes are construction lines 20 m long,
  *  and they carry no dimension. */
-export function dimensionSegments(ents: ResolvedEntity[]): [V, V][] {
+export function dimensionSegments(
+  ents: ResolvedEntity[],
+  defaults = staggeredDefaults(ents), // labels and their lines must agree
+): [V, V][] {
   const out: [V, V][] = [];
-  const defaults = staggeredDefaults(ents); // labels and their lines must agree
   for (const e of ents) {
     if (isOriginGeometry(e.id)) continue;
     for (const d of entityDims(e, defaults.get(e.id))) out.push(...d.lines);

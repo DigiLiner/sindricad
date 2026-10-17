@@ -8,7 +8,7 @@
 // geometry only and leaves the shared materials intact.
 
 import * as THREE from "three";
-import type { CadDocument, PlaneDef, PlaneSpec } from "../types";
+import type { CadDocument, DimPlace, PlaneDef, PlaneSpec } from "../types";
 import { planeOf } from "../document/planeOf";
 import { SketchPlane } from "./plane";
 import { resolveEntities } from "./resolve";
@@ -806,10 +806,14 @@ export class SketchOverlay {
     return entity ? { entity, plane: this.planeFor(planeOf(f, this.resolvedPlanes())) } : null;
   }
 
-  /** The active sketch's committed curves (rebuilt only when entities change). */
+  /** The active sketch's committed curves (rebuilt only when entities change).
+   *  An object already on screen may be handed back: a drag frame redraws only
+   *  the entities that moved and keeps the rest (refreshDragGeometry), so only
+   *  what is dropped is disposed. */
   setActiveSketch(objects: THREE.Object3D[]) {
-    this.clearGroup(this.activeSketch);
-    for (const o of objects) this.activeSketch.add(o);
+    const keep = new Set(objects);
+    this.clearGroup(this.activeSketch, keep);
+    for (const o of objects) if (o.parent !== this.activeSketch) this.activeSketch.add(o);
   }
 
   /** The in-progress rubber-band entity (rebuilt every pointer move).
@@ -901,9 +905,11 @@ export class SketchOverlay {
     this.onRepaintNeeded();
   }
 
-  /** geometry is per-object (dispose); materials are module-shared (keep). */
-  private clearGroup(g: THREE.Group) {
+  /** geometry is per-object (dispose); materials are module-shared (keep).
+   *  `keep` stays in the group, undisposed. */
+  private clearGroup(g: THREE.Group, keep?: Set<THREE.Object3D>) {
     for (const c of [...g.children]) {
+      if (keep?.has(c)) continue;
       g.remove(c);
       (c as any).geometry?.dispose?.();
     }
@@ -1167,8 +1173,9 @@ export function dimensionLineObjects(
   plane: SketchPlane,
   extraSegs: [THREE.Vector2, THREE.Vector2][] = [],
   color: number = DIM_COLOR,
+  defaults?: Map<string, DimPlace>, // staggeredDefaults(ents), when the caller has it already
 ): THREE.Object3D[] {
-  const segs = [...dimensionSegments(ents), ...extraSegs];
+  const segs = [...dimensionSegments(ents, defaults), ...extraSegs];
   if (!segs.length) return [];
   const pts: THREE.Vector3[] = [];
   for (const [a, b] of segs) pts.push(plane.to3D(a.x, a.y), plane.to3D(b.x, b.y));

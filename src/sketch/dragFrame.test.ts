@@ -41,6 +41,7 @@ import { SketchPlane } from "./plane";
 import { SketchHistory } from "./history";
 import { SketchDimensions } from "./sketchDimensions";
 import { SketchGlyphs } from "./sketchGlyphs";
+import { SketchOverlay } from "./overlay";
 import { compileAndSolve } from "./sketchSolve";
 import { initSolver } from "./solver";
 import type { ResolvedEntity } from "./snap";
@@ -78,7 +79,7 @@ type Mode = Record<string, any>;
 /** A SketchMode on the select tool where one screen px is one sketch mm, so a
  *  pointer event's clientX/Y IS the plane point. `frames` is what the viewport
  *  would run at the start of its next frame (Viewport.beforeNextDraw). */
-function mount(opts: { badges?: boolean; more?: SketchConstraint[]; moreEnts?: ResolvedEntity[] } = {}) {
+function mount(opts: { badges?: boolean; more?: SketchConstraint[]; moreEnts?: ResolvedEntity[]; overlay?: SketchOverlay } = {}) {
   const { ents, cons } = doc();
   ents.push(...(opts.moreEnts ?? []));
   cons.push(...(opts.more ?? []));
@@ -119,7 +120,7 @@ function mount(opts: { badges?: boolean; more?: SketchConstraint[]; moreEnts?: R
     glyphsVisible: !!opts.badges,
     patternFlow: { pending: null },
     viewport,
-    overlay: {
+    overlay: opts.overlay ?? {
       setActiveSketch: () => {
         seen.redraws++;
         seen.drawnB = JSON.stringify(s.entities.find((e: ResolvedEntity) => e.id === "B"));
@@ -307,6 +308,8 @@ describe("a sketch drag solves a frame's first move at once and the rest once, a
   });
 });
 
+const line = (s: Mode, id: string) => s.entities.find((e: ResolvedEntity) => e.id === id) as Extract<ResolvedEntity, { type: "line" }>;
+
 /** The overlay elements a layer has drawn, by their class prefix. */
 function drawn(root: FakeEl, cls: string): FakeEl[] {
   const out: FakeEl[] = [];
@@ -407,7 +410,6 @@ describe("a mid-drag frame solves only the dragged point's cluster (GH #17 drag 
 });
 
 describe("a body drag frame solves only the dragged body's cluster (GH #17 drag speed)", () => {
-  type Line = Extract<ResolvedEntity, { type: "line" }>;
   // B is held vertical by a parallel to F, a FIXED line far away, and has a
   // driven length; A (fixed start, horizontal) carries B's start. C and the
   // G square share nothing with any of them.
@@ -429,7 +431,6 @@ describe("a body drag frame solves only the dragged body's cluster (GH #17 drag 
     { type: "horizontal", line: "G3" },
     { type: "vertical", line: "G4" },
   ] as SketchConstraint[];
-  const line = (s: Mode, id: string) => s.entities.find((e: ResolvedEntity) => e.id === id) as Line;
   /** every constraint above, as its own geometric residual */
   const residuals = (s: Mode) => {
     const A = line(s, "A"), B = line(s, "B"), F = line(s, "F");
@@ -516,5 +517,147 @@ describe("a body drag frame solves only the dragged body's cluster (GH #17 drag 
         }
       });
     }
+  });
+});
+
+describe("a drag frame redraws only what moved (GH #17)", () => {
+  // a square and a circle the drag cannot reach
+  const still: ResolvedEntity[] = [
+    { type: "line", id: "G1", x1: 300, y1: 0, x2: 340, y2: 0 },
+    { type: "line", id: "G2", x1: 340, y1: 0, x2: 340, y2: 40 },
+    { type: "line", id: "G3", x1: 340, y1: 40, x2: 300, y2: 40 },
+    { type: "line", id: "G4", x1: 300, y1: 40, x2: 300, y2: 0 },
+    { type: "circle", id: "C", x: 500, y: 500, radius: 3 },
+  ];
+  const stillCons = [
+    { type: "horizontal", line: "G1" },
+    { type: "vertical", line: "G2" },
+    { type: "horizontal", line: "G3" },
+    { type: "vertical", line: "G4" },
+  ] as SketchConstraint[];
+
+  /** What the overlay has on screen for the active sketch, by entity id. */
+  const onScreen = (ov: SketchOverlay) => {
+    const by = new Map<string, THREE.Object3D[]>();
+    for (const o of (ov as unknown as { activeSketch: THREE.Group }).activeSketch.children) {
+      const id = o.userData.entityId as string | undefined;
+      if (id !== undefined) by.set(id, [...(by.get(id) ?? []), o]);
+    }
+    return by;
+  };
+  /** Every drawn curve and endpoint dot sits on the coordinates the sketch holds. */
+  const drawnMatchesSolved = (m: ReturnType<typeof mount>, ov: SketchOverlay) => {
+    const by = onScreen(ov);
+    for (const e of m.s.entities as ResolvedEntity[]) {
+      if (e.type !== "line") continue;
+      const objs = by.get(e.id) ?? [];
+      const curve = objs.find((o) => o.userData.pts);
+      expect(curve, `${e.id} is drawn`).toBeDefined();
+      const pts = curve!.userData.pts as THREE.Vector3[];
+      expect(pts[0]!.distanceTo(new THREE.Vector3(e.x1, e.y1, 0)), `${e.id} start`).toBeLessThan(1e-9);
+      expect(pts.at(-1)!.distanceTo(new THREE.Vector3(e.x2, e.y2, 0)), `${e.id} end`).toBeLessThan(1e-9);
+      for (const dot of objs.filter((o) => !o.userData.pts)) {
+        const box = new THREE.Box3().setFromObject(dot);
+        const c = box.getCenter(new THREE.Vector3());
+        const d = Math.min(c.distanceTo(new THREE.Vector3(e.x1, e.y1, 0)), c.distanceTo(new THREE.Vector3(e.x2, e.y2, 0)));
+        expect(d, `${e.id}'s endpoint dot`).toBeLessThan(1e-9);
+      }
+    }
+  };
+
+  for (const kind of ["point", "body"] as const) {
+    it(`keeps the meshes of untouched geometry through a ${kind} drag, disposes what it replaces, and draws the solved positions`, async () => {
+      const ov = new SketchOverlay();
+      const m = mount({ overlay: ov, moreEnts: structuredClone(still), more: structuredClone(stillCons) });
+      m.s.refreshActive(); // what enter() draws
+      const before = (m.s.entities as ResolvedEntity[]).map((e) => structuredClone(e));
+      const disposed = new Set<THREE.BufferGeometry>();
+      const watch = () => {
+        for (const objs of onScreen(ov).values()) {
+          for (const o of objs) {
+            const g = (o as THREE.Mesh).geometry;
+            g?.addEventListener("dispose", () => disposed.add(g));
+          }
+        }
+      };
+      watch();
+      if (kind === "point") m.down(10, 10); // B's free end
+      else m.down(10, 5); // B's body
+      m.move(14, 13);
+      await m.frame();
+      const first = onScreen(ov);
+      watch();
+      for (const [x, y] of [[16, 15], [18, 16], [21, 18]] as const) {
+        m.move(x, y);
+        await settle();
+        m.move(x + 1, y + 1);
+        await m.frame();
+      }
+      expect(line(m.s, "B").x2, "the drag moved B").toBeGreaterThan(19);
+      const now = onScreen(ov);
+      // RED on bca8e61: every entity got new meshes on every frame
+      for (const id of ["G1", "G2", "G3", "G4", "C"]) {
+        expect(now.get(id)!.length).toBeGreaterThan(0);
+        now.get(id)!.forEach((o, k) => expect(o, `${id} drawn by the same mesh`).toBe(first.get(id)![k]));
+      }
+      // B moved: redrawn, and what it was drawn with is gone and freed
+      for (const o of first.get("B")!) {
+        expect(now.get("B")!.includes(o)).toBe(false);
+        expect(o.parent).toBeNull();
+        expect(disposed.has((o as THREE.Mesh).geometry)).toBe(true);
+      }
+      for (const objs of now.values()) for (const o of objs) expect(disposed.has((o as THREE.Mesh).geometry), "nothing on screen is freed").toBe(false);
+      drawnMatchesSolved(m, ov);
+
+      m.up();
+      await settle();
+      while (m.s.solveBusy) await settle();
+      drawnMatchesSolved(m, ov);
+      expect(m.s.undoEdit()).toBe(true);
+      while (m.s.solveBusy) await settle();
+      expect(line(m.s, "B")).toEqual(before.find((e) => e.id === "B"));
+      drawnMatchesSolved(m, ov);
+    });
+  }
+
+  it("writes a badge's style only when its place changed", async () => {
+    const body = (globalThis as unknown as { document: { body: FakeEl } }).document.body;
+    body.innerHTML = "";
+    const m = mount({ badges: true, moreEnts: structuredClone(still), more: structuredClone(stillCons) });
+    m.s.refreshActive();
+    const dims = m.s.dims as unknown as { loop: () => void };
+    const glyphs = m.s.glyphs as unknown as { loop: () => void };
+    const paint = () => { dims.loop(); glyphs.loop(); };
+    paint();
+    m.down(10, 10);
+    m.move(14, 13);
+    await m.frame();
+    paint();
+    const badges = [...drawn(body, "sketch-dim"), ...drawn(body, "sketch-glyph")];
+    expect(badges.length).toBeGreaterThan(8); // the square alone has 4 lengths and 4 H/V glyphs
+    const writes: { el: FakeEl; key: string; same: boolean }[] = [];
+    for (const el of badges) {
+      const style = el.style;
+      Object.defineProperty(el, "style", {
+        value: new Proxy(style, {
+          set(t, key: string, v: string) {
+            writes.push({ el, key, same: t[key] === v });
+            t[key] = v;
+            return true;
+          },
+        }),
+      });
+    }
+    const placeOf = () => badges.map((el) => `${el.style.visibility}|${el.style.transform}`);
+    const was = placeOf();
+    m.move(19, 17);
+    await m.frame();
+    paint();
+    const moved = placeOf().filter((p, k) => p !== was[k]).length;
+    expect(moved, "the drag moved some badges").toBeGreaterThan(0);
+    expect(moved, "and not the square's").toBeLessThan(badges.length - 8);
+    // RED on bca8e61: every badge's transform rewritten, unchanged, every frame
+    expect(writes.filter((w) => w.same), "no write repeats what a badge already shows").toEqual([]);
+    expect(new Set(writes.map((w) => w.el)).size).toBe(moved);
   });
 });
