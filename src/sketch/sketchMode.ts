@@ -255,6 +255,17 @@ const PROJECT_POINT_PX = 8;
 // arrowhead is then never more than ~0.6 px off its size.
 const ZOOM_REDRAW = 0.1;
 
+/** Longest a drag frame's solve may take before the gesture stops solving that
+ *  part live (SketchMode.liveSolveOff) and leaves it to the release. Measured
+ *  on one connected staircase of dimensioned lines (each H or V, each with a
+ *  length): 100 lines solve in 11 ms, 200 in 42-47, 280 in 108-113, 500 in
+ *  0.6 s and 1,500 in 19 s, which the growable heap now lets happen. A frame
+ *  is 16 ms at 60 Hz, so 50 ms is three frames: everything up to about 200
+ *  joined lines still follows the cursor, and nothing larger freezes it. A
+ *  split sketch's parts are each far under it (the GH #17 probe's 350 shapes
+ *  solve whole in 11-13 ms). */
+const DRAG_SOLVE_BUDGET_MS = 50;
+
 /** The selector a Project pick sends for a body edge: by:"nearest" at the
  *  middle of its middle drawn segment. NOT the picker's own selector: its
  *  nearest point is the line's mid VERTEX, which for a 2-point straight edge is
@@ -494,12 +505,17 @@ export class SketchMode {
   private solverDead = false;
   private solverDeadToast = false;
   private solverTooLargeToast = false; // said once: a solve ran out of the solver's heap
-  /** The entities (ids, joined) whose drag solve ran out of the solver's heap
-   *  in THIS gesture. Its later frames skip that solve: each failure costs the
+  /** The entities (ids, joined) THIS gesture stopped solving live: their drag
+   *  solve ran out of the solver's heap, or took longer than
+   *  DRAG_SOLVE_BUDGET_MS. Later frames skip that solve. A failure costs the
    *  solve plus a fresh wasm module, measured 28-68 ms a frame, twice a frame
-   *  for a body drag, for an answer that cannot come. The release solves again,
-   *  as does every edit after it; a new gesture clears it. */
-  private tooLargeDrag: string | null = null;
+   *  for a body drag, for an answer that cannot come; a slow part would hold
+   *  every frame for as long as it takes. The release solves again, as does
+   *  every edit after it; a new gesture clears it. */
+  private liveSolveOff: string | null = null;
+  /** The newest point-drag target a skipped frame (liveSolveOff) did not
+   *  solve, so the release solves to where the button came up. */
+  private skippedDrag: { fromX: number; fromY: number; toX: number; toY: number } | null = null;
   private directDimToast = false; // said once: dims are being written straight to geometry
   private solveDirty = false; // a constraint/dimension solve is pending
   /** Projection refresh entries waiting to be walked in (see
@@ -2810,7 +2826,8 @@ export class SketchMode {
       if (gp) {
         const at = this.planePoint(e) ?? p;
         this.dragFrom = gp.p.clone();
-        this.tooLargeDrag = null;
+        this.liveSolveOff = null;
+        this.skippedDrag = null;
         // GH #17 drag speed: everything outside this cluster has no path to
         // the grabbed point, so a drag frame's solve can skip it (see pump()).
         this.dragClusterIds = dragCluster(this.entities, this.constraints, gp.p.x, gp.p.y);
@@ -4597,7 +4614,7 @@ export class SketchMode {
             return;
           }
           md.started = true;
-          this.tooLargeDrag = null;
+          this.liveSolveOff = null;
           // nothing has moved yet — snapshot the pristine positions for Esc-revert
           this.dragSnapshot = JSON.parse(JSON.stringify(this.entities));
           // ...and where each Fix holds its point. The guard above refuses a drag
@@ -7328,7 +7345,7 @@ export class SketchMode {
   private async pump() {
     if (this.solveBusy || this.solverDead) return;
     this.solveBusy = true;
-    let dragPart: string | null = null; // the drag solve in flight, for tooLargeDrag
+    let dragPart: string | null = null; // the drag solve in flight, for liveSolveOff
     try {
       while (this.active && (this.pendingDrag || this.pendingPinIdxs !== null || this.pendingRefresh || this.solveDirty)) {
         if (this.pendingDrag || this.pendingPinIdxs !== null) {
@@ -7359,13 +7376,16 @@ export class SketchMode {
             ? this.entities.filter((e) => cluster.has(e.id))
             : this.entities;
           const part = solveEntities.map((e) => e.id).join();
-          if (!this.dragRelease && part === this.tooLargeDrag) {
+          if (!this.dragRelease && part === this.liveSolveOff) {
             if (forBody) this.refreshDragGeometry(); // the body moved, unsolved
+            else if (d) this.skippedDrag = d;
             continue;
           }
           dragPart = this.dragRelease ? null : part;
+          const started = performance.now();
           const r = await compileAndSolve(solveEntities, this.constraints, d ?? undefined, undefined, pins, this.boundShapeFields(),
             forBody ? this.fixHold ?? undefined : undefined);
+          if (dragPart !== null && performance.now() - started > DRAG_SOLVE_BUDGET_MS) this.liveSolveOff = dragPart;
           dragPart = null;
           // The gesture this result belongs to ended, was cancelled, or was
           // replaced mid-solve: drop the result (and its toast) rather than
@@ -7527,7 +7547,7 @@ export class SketchMode {
       // here, as it once was, stopped every drag for the rest of the session.
       const tooLarge = err instanceof SolverOutOfMemory;
       if (tooLarge) {
-        if (dragPart !== null) this.tooLargeDrag = dragPart;
+        if (dragPart !== null) this.liveSolveOff = dragPart;
         this.solveDirty = false;
         this.pendingDrag = null;
         this.pendingPinIdxs = null;
@@ -7837,6 +7857,9 @@ export class SketchMode {
     // recursive endDrag call pump() makes below does not force it again.
     const forcedSettle = this.dragClusterIds !== null && this.dragMoved;
     if (forcedSettle) this.dragClusterIds = null;
+    // the newest move a slow or too-big part did not solve live (liveSolveOff)
+    if (!this.pendingDrag && this.skippedDrag) this.pendingDrag = this.skippedDrag;
+    this.skippedDrag = null;
     // The gesture's last move can still be waiting for its frame (queueDrag).
     // Releasing on top of it would drop it, and the point would stop one frame
     // short of where the button came up. Solve it now; pump() finishes the
