@@ -1,5 +1,5 @@
-planegcs glue and wasm, built with -s DYNAMIC_EXECUTION=0
-=========================================================
+planegcs glue and wasm, built with -s DYNAMIC_EXECUTION=0 -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=256MB
+===========================================================================================================
 
 WHY THIS IS VENDORED
 
@@ -16,6 +16,17 @@ without the CSP, which is why it never reproduced in development: three Windows
 reporters and one Linux reporter were told to update a runtime that was never
 the problem, and one reinstalled WebView2 for nothing.
 
+WHY THE HEAP GROWS (added 2026-10-17)
+
+The published build has a FIXED 16 MB heap (wasm memory min = max = 256 pages,
+5 MB of it stack), and planegcs diagnoses every system it solves with dense
+constraints x parameters matrices. SindriCAD solves each independent part of a
+sketch as its own system (src/sketch/solver.ts, SYSTEM_BUDGET), but one connected
+part of roughly 280 or more dimensioned lines still ran the heap out and aborted
+with "Aborted(OOM)". With ALLOW_MEMORY_GROWTH the heap grows on demand, up to
+MAXIMUM_MEMORY = 256 MB (4096 pages), so a runaway part fails at a bound instead
+of taking the webview's memory with it.
+
 Upstream PR Salusoft89/planegcs#12 proposes the same one-line flag. It is still
 open, and its branch is based on 1.2.0 - taking it would silently upgrade the
 solver alongside the CSP fix. So the flag is applied to the exact commit that
@@ -28,10 +39,13 @@ PROVENANCE
                packument records this as gitHead for 1.1.7)
     toolchain: emscripten/emsdk:3.1.45, upstream's own builder base, plus the
                eigen3/boost layer and the /inc/boost symlink from its Dockerfile
-    patch:     ` -s DYNAMIC_EXECUTION=0` appended to LINK_FLAGS in
+    patch:     ` -s DYNAMIC_EXECUTION=0 -s ALLOW_MEMORY_GROWTH=1
+               -s MAXIMUM_MEMORY=256MB` appended to LINK_FLAGS in
                planegcs/CMakeLists.txt. Nothing else is changed.
     built by:  .github/workflows/planegcs-glue.yml (manual trigger)
-    build log: https://github.com/MakerViking/sindricad/actions/runs/32002153102
+    build log: https://github.com/MakerViking/sindricad/actions/runs/39053175504
+               (history: the DYNAMIC_EXECUTION=0-only pair this replaced came
+               from https://github.com/MakerViking/sindricad/actions/runs/32002153102)
 
     Rebuild it: run that workflow. It is not a local build by design - a binary
     in a public AGPL repo needs provenance a workstation cannot give.
@@ -39,7 +53,8 @@ PROVENANCE
 WHAT IS ESTABLISHED, AND WHAT IS NOT
 
 ESTABLISHED. The same job first builds the source UNMODIFIED and requires the
-result to be byte-identical to the published npm artifact. It is. That is what
+result to be byte-identical to the published npm artifact. It is (in both runs
+above). That is what
 proves this toolchain is the maintainer's toolchain, and therefore that the flag
 is the only variable between the published build and this one.
 
@@ -55,6 +70,19 @@ ESTABLISHED, in a real browser under the real policy. Served under
                       'unsafe-eval' is not an allowed source of script
     this glue      -> initialises
 
+Re-run for the growable pair (2026-10-17), through scripts/check-csp-serve.py
+with the published 1.1.7 glue as the control, in Chromium AND in WebKitGTK
+(scripts/check-csp-webkit.py): the published glue throws EvalError in both, this
+glue initialises in both. In Chromium the page then pushed 3,000,000 parameters
+into one GcsSystem (24 MB of doubles, past the old 16 MB heap) and read the count
+back, so the heap grows under that policy too.
+
+ESTABLISHED. The heap grows, and stops at the cap. In vitest (Node), a 500-line
+connected staircase that aborted the 16 MB heap solves; with WebAssembly memory
+growth refused past 300 pages, the same solve aborts with "Aborted()" (not
+"Aborted(OOM)": a refused growth makes malloc fail, and the C++ allocation aborts
+without emscripten's OOM label). src/sketch/solverHeap.test.ts pins both.
+
 That is the field bug and its removal, reproduced directly. Note that the
 frontend test suites CANNOT show this: vitest runs in Node, which has no CSP, so
 those suites prove compatibility and not the fix.
@@ -66,16 +94,24 @@ binary, once not, once neither. The JS glue reproduced byte for byte every time.
 So a byte comparison of the wasm means nothing in either direction, and the
 workflow records its hashes rather than gating on them.
 
-WHY BOTH FILES ARE VENDORED, not just the glue. The flag does change the wasm,
-by 5 bytes at one offset - a struct's field offsets shifting by 4 (0x2c->0x28,
+WHY BOTH FILES ARE VENDORED, not just the glue. Two reasons.
+
+First, the heap's ceiling lives in the WASM, not the glue: its memory section
+declares the maximum (256 pages before, 4096 now), and that one byte is the only
+difference between the previous vendored wasm and this one. The growth code
+(emscripten_resize_heap) is in the glue. Either half alone would be a different
+heap from the one that was tested.
+
+Second, DYNAMIC_EXECUTION=0 also changes the wasm, by 5 bytes at one offset - a struct's field offsets shifting by 4 (0x2c->0x28,
 0x24->0x20, 0x1c->0x18), i.e. something got 4 bytes smaller. Both files are the
 same size and the solver's arithmetic is untouched, but glue and wasm are built
 as a pair and are shipped as one. Mixing this glue with the published wasm was
 measured to pass the solver suites, and is still not worth doing: pairing costs
 508 KB and removes the question.
 
-    69 solver tests pass against this pair (sketchSolve, constraintSequences,
-    solver), matching the published pair.
+    69 solver tests passed against the first pair (sketchSolve,
+    constraintSequences, solver), matching the published pair. Against the
+    growable pair the same three suites, grown since, pass 92 of 92.
 
 KEEPING IT HONEST
 
