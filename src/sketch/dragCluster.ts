@@ -1,7 +1,7 @@
-// The constraint-connected cluster a point drag can possibly move — "solve
-// only what the drag can reach" (GH #17 drag speed). Everything outside the
-// cluster has no path to the dragged point, through a shared position or a
-// constraint, so a full-sketch solve would leave it exactly where it was
+// The constraint-connected cluster a drag can possibly move — "solve only
+// what the drag can reach" (GH #17 drag speed). Everything outside the
+// cluster has no path to the dragged point or body, through a shared position
+// or a constraint, so a full-sketch solve would leave it exactly where it was
 // anyway; restricting the solve's entity list to the cluster gets the same
 // result for a fraction of the solver's work on a large sketch.
 //
@@ -51,6 +51,26 @@ export function dragCluster(
   x: number,
   y: number,
 ): Set<string> {
+  const { byPos, neighbors } = clusterGraph(entities, constraints);
+  return reach(neighbors, byPos.get(coincKey(x, y)) ?? []);
+}
+
+/** The connected component a BODY drag of `ids` can move: the dragged
+ *  entities themselves, everything touching any of their attachment points
+ *  (bodyDragFrame carries those ends along), and everything a constraint ties
+ *  to either, transitively. */
+export function bodyDragCluster(
+  entities: readonly ResolvedEntity[],
+  constraints: readonly SketchConstraint[],
+  ids: readonly string[],
+): Set<string> {
+  return reach(clusterGraph(entities, constraints).neighbors, ids);
+}
+
+function clusterGraph(
+  entities: readonly ResolvedEntity[],
+  constraints: readonly SketchConstraint[],
+): { byPos: Map<string, string[]>; neighbors: Map<string, Set<string>> } {
   // position bucket -> entity ids with an attachment point there
   const byPos = new Map<string, string[]>();
   for (const e of entities) {
@@ -77,8 +97,10 @@ export function dragCluster(
     const refs = constraintEntityRefs(c);
     for (let i = 0; i < refs.length; i++) for (let j = i + 1; j < refs.length; j++) link(refs[i]!, refs[j]!);
   }
+  return { byPos, neighbors };
+}
 
-  const seeds = byPos.get(coincKey(x, y)) ?? [];
+function reach(neighbors: Map<string, Set<string>>, seeds: readonly string[]): Set<string> {
   const seen = new Set<string>(seeds);
   const queue = [...seeds];
   while (queue.length) {

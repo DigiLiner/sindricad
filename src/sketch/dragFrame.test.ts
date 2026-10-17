@@ -23,6 +23,18 @@ vi.mock("./sketchSolve", async (importOriginal) => {
   return { ...real, compileAndSolve: vi.fn(real.compileAndSolve) };
 });
 
+// The real cluster, unless a test asks for the whole sketch instead (an empty
+// cluster is pump()'s "no cluster found": solve everything, as before GH #17).
+const clusterOff = { body: false };
+vi.mock("./dragCluster", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./dragCluster")>();
+  return {
+    ...real,
+    bodyDragCluster: (...a: Parameters<typeof real.bodyDragCluster>) =>
+      clusterOff.body ? new Set<string>() : real.bodyDragCluster(...a),
+  };
+});
+
 import { FakeEl, installFakeDocument } from "../ui/fakeDom.testkit";
 import { SketchMode } from "./sketchMode";
 import { SketchPlane } from "./plane";
@@ -391,5 +403,118 @@ describe("a mid-drag frame solves only the dragged point's cluster (GH #17 drag 
     const bFull = full.entities.find((e) => e.id === "B") as Extract<ResolvedEntity, { type: "line" }>;
     expect(viaCluster.x2).toBeCloseTo(bFull.x2, 6);
     expect(viaCluster.y2).toBeCloseTo(bFull.y2, 6);
+  });
+});
+
+describe("a body drag frame solves only the dragged body's cluster (GH #17 drag speed)", () => {
+  type Line = Extract<ResolvedEntity, { type: "line" }>;
+  // B is held vertical by a parallel to F, a FIXED line far away, and has a
+  // driven length; A (fixed start, horizontal) carries B's start. C and the
+  // G square share nothing with any of them.
+  const far: ResolvedEntity[] = [
+    { type: "line", id: "F", x1: 100, y1: 100, x2: 100, y2: 120 },
+    { type: "circle", id: "C", x: 500, y: 500, radius: 3 },
+    { type: "line", id: "G1", x1: 300, y1: 0, x2: 340, y2: 0 },
+    { type: "line", id: "G2", x1: 340, y1: 0, x2: 340, y2: 40 },
+    { type: "line", id: "G3", x1: 340, y1: 40, x2: 300, y2: 40 },
+    { type: "line", id: "G4", x1: 300, y1: 40, x2: 300, y2: 0 },
+  ];
+  const farCons = [
+    { type: "fix", e: "F", p: 0 },
+    { type: "fix", e: "F", p: 1 },
+    { type: "parallel", l1: "B", l2: "F" },
+    { type: "distance", line: "B", value: 10 },
+    { type: "horizontal", line: "G1" },
+    { type: "vertical", line: "G2" },
+    { type: "horizontal", line: "G3" },
+    { type: "vertical", line: "G4" },
+  ] as SketchConstraint[];
+  const line = (s: Mode, id: string) => s.entities.find((e: ResolvedEntity) => e.id === id) as Line;
+  /** every constraint above, as its own geometric residual */
+  const residuals = (s: Mode) => {
+    const A = line(s, "A"), B = line(s, "B"), F = line(s, "F");
+    const bx = B.x2 - B.x1, by = B.y2 - B.y1, fx = F.x2 - F.x1, fy = F.y2 - F.y1;
+    return Math.max(
+      Math.hypot(B.x1 - A.x2, B.y1 - A.y2), // coincident
+      Math.abs(A.y2 - A.y1), // A horizontal
+      Math.hypot(A.x1, A.y1), // A's start fixed at the origin
+      Math.abs(bx * fy - by * fx) / Math.hypot(fx, fy), // B parallel to F
+      Math.abs(Math.hypot(bx, by) - 10), // B's length
+      Math.hypot(F.x1 - 100, F.y1 - 100, F.x2 - 100, F.y2 - 120), // F fixed
+    );
+  };
+  const gesture = async (m: ReturnType<typeof mount>) => {
+    m.down(10, 5); // B's body, away from both ends
+    for (const [x, y] of [[13, 7], [16, 9], [19, 12], [22, 14]] as const) {
+      m.move(x, y);
+      await settle();
+      m.move(x + 1, y + 1);
+      await m.frame();
+    }
+  };
+  const release = async (m: ReturnType<typeof mount>) => {
+    m.up();
+    await settle();
+    while (m.s.solveBusy) await settle();
+  };
+
+  it("never hands the solver geometry the body cannot reach, and still holds every constraint on it", async () => {
+    const m = mount({ moreEnts: structuredClone(far), more: structuredClone(farCons) });
+    const untouched = JSON.stringify(m.s.entities.filter((e: ResolvedEntity) => e.id === "C" || e.id.startsWith("G")));
+    const sketchDof = (await compileAndSolve(structuredClone(m.s.entities), m.s.constraints)).dof;
+    m.s.lastDof = sketchDof;
+    solves.mockClear();
+    await gesture(m);
+    expect(m.s.moveDrag?.started, "the press armed a body drag").toBe(true);
+    const frameSolves = solves.mock.calls.map((c) => (c[0] as ResolvedEntity[]).map((e) => e.id).sort().join(","));
+    expect(frameSolves.length).toBeGreaterThan(0);
+    // RED on bca8e61: every frame's settle solved all ten entities
+    expect(new Set(frameSolves), "each frame solves exactly A, B and the fixed F").toEqual(new Set(["A,B,F"]));
+    expect(line(m.s, "B").x1, "the body moved").toBeGreaterThan(15);
+    expect(residuals(m.s), "every constraint on the dragged geometry holds mid-drag").toBeLessThan(1e-6);
+    // the circle and the square are free: the sketch is not fully constrained,
+    // whatever the cluster alone would say (its colour is chosen from this)
+    expect(m.s.lastDof, "a cluster solve does not report its own freedom as the sketch's").toBe(sketchDof);
+    // a full-sketch solve of the frame, same pins, has nothing left to move
+    const B = line(m.s, "B");
+    const full = await compileAndSolve(structuredClone(m.s.entities), m.s.constraints, undefined, undefined,
+      [{ x: B.x1, y: B.y1 }, { x: B.x2, y: B.y2 }]);
+    for (const e of full.entities) {
+      const was = m.s.entities.find((x: ResolvedEntity) => x.id === e.id);
+      for (const k of ["x1", "y1", "x2", "y2", "x", "y", "radius"] as const) {
+        if (k in e) expect((e as unknown as Record<string, number>)[k]).toBeCloseTo((was as Record<string, number>)[k]!, 6);
+      }
+    }
+    await release(m);
+    const releaseEnts = solves.mock.calls.at(-1)![0] as ResolvedEntity[];
+    expect(releaseEnts.length, "release solves the whole sketch").toBe(m.s.entities.length);
+    expect(residuals(m.s)).toBeLessThan(1e-6);
+    expect(JSON.stringify(m.s.entities.filter((e: ResolvedEntity) => e.id === "C" || e.id.startsWith("G")))).toBe(untouched);
+  });
+
+  it("ends where a whole-sketch solve of every frame ends, mid-drag and after release", async () => {
+    const run = async (whole: boolean) => {
+      clusterOff.body = whole;
+      try {
+        const m = mount({ moreEnts: structuredClone(far), more: structuredClone(farCons) });
+        await gesture(m);
+        const mid: ResolvedEntity[] = m.s.entities.map((e: ResolvedEntity) => structuredClone(e));
+        await release(m);
+        return { mid, end: m.s.entities as ResolvedEntity[] };
+      } finally {
+        clusterOff.body = false;
+      }
+    };
+    const viaCluster = await run(false);
+    const viaWhole = await run(true);
+    for (const phase of ["mid", "end"] as const) {
+      viaCluster[phase].forEach((e, i) => {
+        const w = viaWhole[phase][i] as Record<string, unknown>;
+        expect(w.id).toBe(e.id);
+        for (const [k, v] of Object.entries(e)) {
+          if (typeof v === "number") expect(v, `${phase} ${e.id}.${k}`).toBeCloseTo(w[k] as number, 6);
+        }
+      });
+    }
   });
 });

@@ -6,7 +6,7 @@
 // compileAndSolve, and that release still sees everything) is covered in
 // dragFrame.test.ts.
 import { describe, it, expect } from "vitest";
-import { dragCluster } from "./dragCluster";
+import { bodyDragCluster, dragCluster } from "./dragCluster";
 import type { ResolvedEntity } from "./snap";
 import type { SketchConstraint } from "../types";
 
@@ -61,5 +61,18 @@ describe("dragCluster", () => {
     const cons: SketchConstraint[] = [{ type: "concentric", c1: "R~2", c2: "S" } as SketchConstraint];
     const cluster = dragCluster(ents, cons, 0, 0);
     expect(cluster).toEqual(new Set(["R", "S"]));
+  });
+
+  it("a body drag reaches from every attachment point of every dragged entity", () => {
+    const ents: ResolvedEntity[] = [
+      { type: "line", id: "A", x1: 0, y1: 0, x2: 10, y2: 0 },
+      { type: "line", id: "B", x1: 10, y1: 0, x2: 10, y2: 10 }, // touches A's END
+      { type: "line", id: "S", x1: -10, y1: 0, x2: 0, y2: 0 }, // touches A's START
+      { type: "line", id: "D", x1: 50, y1: 50, x2: 60, y2: 50 }, // dragged too, alone
+      { type: "circle", id: "K", x: 200, y: 200, radius: 5 }, // tied to D by a constraint
+      { type: "line", id: "Z", x1: 100, y1: 100, x2: 110, y2: 100 }, // unrelated
+    ];
+    const cons: SketchConstraint[] = [{ type: "tangent", line: "D", circle: "K" } as SketchConstraint];
+    expect(bodyDragCluster(ents, cons, ["A", "D"])).toEqual(new Set(["A", "B", "S", "D", "K"]));
   });
 });

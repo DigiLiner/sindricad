@@ -38,7 +38,7 @@ import { composePointCarry, polygonSidesCarry, type PointCarry } from "../docume
 import { advanceCenterArcSweep, centerArcEntity, circumcenter } from "./arc";
 import { coincKey, compileAndSolve, constraintIndexOf, soleDimEntity, MAX_BIAS_ANCHORS, type FixPositions, type MoverBias } from "./sketchSolve";
 import { SolverOutOfMemory, SolverUnavailable } from "./solver";
-import { dragCluster } from "./dragCluster";
+import { bodyDragCluster, dragCluster } from "./dragCluster";
 import { p2lSideFlipped, refreshStep, refreshSteps } from "../document/projectionWalk";
 import { resolveRealEntities, toSketchEntity } from "./resolve";
 import { applyDrivingDimsDirect, dimBindingFor, governingDimAt, lockDimFor, measuredLocks, planDimEdit } from "./directDims";
@@ -4584,6 +4584,10 @@ export class SketchMode {
           // carries the arc's end (report 57bf3762) — and the positionless
           // solve would re-pin it wherever it landed.
           this.fixHold = fixPinnedAt(this.entities, this.constraints);
+          // GH #17: a frame's settle solves only what this body can reach, as
+          // a point drag's does (see pump()); release still solves everything
+          this.dragClusterIds = bodyDragCluster(this.entities, this.constraints,
+            md.group.flatMap((i) => this.entities[i]?.id ?? []));
         }
         const dx = raw.x - md.last.x, dy = raw.y - md.last.y;
         md.last.copy(raw);
@@ -4593,6 +4597,7 @@ export class SketchMode {
           // tangent-held circle off the span of the edge it touches
           // (report 269f23b6) — same refusal a point-drag gives, same toast.
           this.moveDrag = null;
+          this.dragClusterIds = null;
           if (!this.dragRefusedToast) {
             this.dragRefusedToast = true;
             toast(FIXED_POINT_MSG);
@@ -7295,13 +7300,14 @@ export class SketchMode {
           const pins = pinEnts.length
             ? pinEnts.flatMap((e) => attachmentPoints(e, this.constraints).map((q) => ({ x: q.x, y: q.y })))
             : undefined;
-          // GH #17 drag speed: a mid-gesture point-drag frame only needs to
-          // solve the cluster the grabbed point sits in — everything outside
+          // GH #17 drag speed: a mid-gesture drag frame only needs to solve
+          // the cluster the grabbed point or body sits in — everything outside
           // it has no path to move, so a full-sketch solve would leave it
-          // exactly where it already is. Release (dragRelease set, by
-          // endDrag) and a body drag always solve the whole sketch, same as
-          // a grab with no cluster found (dragClusterIds null).
-          const cluster = !forBody && !this.dragRelease ? this.dragClusterIds : null;
+          // exactly where it already is. Release (dragRelease set by endDrag
+          // for a point drag; a body drag's is requestSolve's plain solve)
+          // always solves the whole sketch, same as a grab with no cluster
+          // found (dragClusterIds null).
+          const cluster = !this.dragRelease ? this.dragClusterIds : null;
           const solveEntities = cluster && cluster.size > 0
             ? this.entities.filter((e) => cluster.has(e.id))
             : this.entities;
@@ -7342,7 +7348,9 @@ export class SketchMode {
               this.entities = this.entities.map((e) => byId.get(e.id) ?? e);
             }
           }
-          this.lastDof = r.dof;
+          // a cluster's freedom is not the sketch's: the colour that says
+          // "fully constrained" waits for a solve that saw everything
+          if (solveEntities === this.entities) this.lastDof = r.dof;
           if (r.dragRefused) {
             // Nothing moved: keep the anchor where the grabbed point still is.
             // Advancing dragFrom to the cursor would re-run the nearest-point
@@ -7753,6 +7761,7 @@ export class SketchMode {
       const md = this.moveDrag;
       this.moveDrag = null;
       this.pendingPinIdxs = null; // the release solve below supersedes any queued frame
+      this.dragClusterIds = null;
       if (pointerId != null) {
         try { this.viewport.domElement.releasePointerCapture(pointerId); } catch { /* not captured */ }
       }
