@@ -269,6 +269,18 @@ A `.sindri` file is JSON: a parameter table and an ordered list of features.
 
 Any numeric field is either a literal (`5`) or the name of a parameter (`"width"`).
 
+### Why opening a file rebuilds it
+
+A `.sindri` file stores the recipe, not the result: the sketches, the feature list
+and the parameters. Opening it replays that recipe in the geometry engine, which is
+what keeps every step editable afterwards and keeps the files small. A file that
+stored the finished shapes would open instantly, but you could not go back and change
+the third feature of twenty.
+
+On the same machine and the same version, a re-open is quick: the engine caches the
+finished steps and only replays what changed. Every update of the app clears that
+cache, so the slow open is mostly the first one after an update.
+
 <p align="center">
   <img src="assets/readme/parametric-morph.gif" alt="Changing width and boss radius parameters while the part rebuilds live" width="640"><br>
   <em>Change a parameter, the whole part follows, and the corner fillets stay on their edges.</em>
