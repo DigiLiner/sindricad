@@ -51,7 +51,7 @@ vi.mock("../ui/prompt", () => ({ setPrompt: () => {} }));
 import { compileAndSolve } from "./sketchSolve";
 import { solveSketch, SolverOutOfMemory, type SolveInput, type SConstraint } from "./solver";
 import { GcsWrapper } from "@salusoft89/planegcs";
-import { liveSketch } from "./liveSketch.testkit";
+import { liveSketch, solveClock } from "./liveSketch.testkit";
 import type { ResolvedEntity } from "./snap";
 import type { SketchConstraint } from "../types";
 import { t } from "../i18n";
@@ -332,23 +332,24 @@ describe("SketchMode after a solve runs out of heap", () => {
     expect(live.s.solverDead).toBe(false);
   }, 120_000);
 
-  it("stops solving a slow part live for the rest of a drag, and solves it on release", async () => {
-    // A 300-line staircase fits the heap but takes over 100 ms a solve (the
-    // budget is 50): live, every frame would hold the screen that long.
-    // Measured, not injected: the real solve is what has to be slow.
-    const big = staircase(300, 100);
+  /** a rectangle 6 high and, apart from it, a 20-line staircase */
+  function rectAndStairs() {
+    const big = staircase(20, 100);
     const rect = [line("r0", 0, 0, 10, 0), line("r1", 10, 0, 10, 6), line("r2", 10, 6, 0, 6), line("r3", 0, 6, 0, 0)];
-    const live = liveSketch([...rect, ...big.entities], [
+    return liveSketch([...rect, ...big.entities], [
       ...[0, 1, 2, 3].map((s): SketchConstraint => ({ type: "coincident", e1: `r${s}`, p1: 1, e2: `r${(s + 1) % 4}`, p2: 0 })),
       { type: "horizontal", line: "r0" }, { type: "vertical", line: "r1" },
+      { type: "horizontal", line: "r2" }, { type: "vertical", line: "r3" },
+      { type: "distance", id: "rh", line: "r1", value: 6 },
       ...big.constraints,
     ]);
-    live.s.requestSolve();
-    await live.settle();
+  }
+
+  /** Walk a drag from `from` to `to` in `n` settled frames; how many solved */
+  async function solvedFrames(live: ReturnType<typeof liveSketch>, from: [number, number], to: [number, number], n: number) {
     const solves = vi.spyOn(GcsWrapper.prototype, "solve");
-    /** how many of `n` frames walking `from` to `to` ran a solve */
-    const solvedFrames = async (from: [number, number], to: [number, number], n: number) => {
-      let frames = 0;
+    let frames = 0;
+    try {
       live.press(from[0], from[1]);
       for (let i = 1; i <= n; i++) {
         const before = solves.mock.calls.length;
@@ -356,37 +357,114 @@ describe("SketchMode after a solve runs out of heap", () => {
         await live.settle();
         if (solves.mock.calls.length > before) frames++;
       }
-      return frames;
-    };
-    try {
-      // the rectangle's corner: a small part, solved on every frame
-      expect(await solvedFrames([10, 6], [14, 10], 8), "rectangle frames solved").toBe(8);
-      live.release();
-      await live.settle();
-      expect((live.ent("r1") as Line).x2).toBeCloseTo(14, 6);
-
-      // the staircase's first corner: the frame the drag starts on solves and
-      // takes too long, so no later frame does, and the release solves to
-      // where the button came up
-      // (the first solve gave the steps their 1.5 mm and put the free
-      // staircase wherever planegcs left it: drag from where it is)
-      const start = live.ent("s0") as Line, end = live.ent("s299") as Line;
-      const [x, y, endY] = [start.x1, start.y1, end.y2];
-      expect(await solvedFrames([x, y], [x, y - 4], 8), "staircase frames solved").toBe(1);
-      const before = solves.mock.calls.length;
-      live.release();
-      await live.settle();
-      expect(solves.mock.calls.length, "the release solves").toBeGreaterThan(before);
-      // all lengths fixed and every step H or V: the whole staircase moved down 4
-      const s0 = live.ent("s0") as Line, last = live.ent("s299") as Line;
-      expect(s0.x1).toBeCloseTo(x, 6);
-      expect(s0.y1).toBeCloseTo(y - 4, 6);
-      expect(last.y2 - last.y1).toBeCloseTo(1.5, 6);
-      expect(last.y2).toBeCloseTo(endY - 4, 6);
     } finally {
       solves.mockRestore();
     }
+    return frames;
+  }
+
+  // Every solve made to LOOK slow (solveClock), so none of this depends on the
+  // machine: the budget is what is under test, not planegcs's speed.
+  it("stops solving a slow part live for the rest of a point drag, and solves it on release", async () => {
+    const live = rectAndStairs();
+    live.s.requestSolve();
+    await live.settle();
+    // (the first solve gave the steps their 1.5 mm and put the free
+    // staircase wherever planegcs left it: drag from where it is)
+    const start = live.ent("s0") as Line, end = live.ent("s19") as Line;
+    const [x, y, endY] = [start.x1, start.y1, end.y2];
+    const cost = { ms: 1000 };
+    const restore = solveClock(cost);
+    try {
+      // the first solved frame pays the warm-up and is not held to the
+      // budget; the second is, takes too long, and no later frame solves
+      expect(await solvedFrames(live, [x, y], [x, y - 4], 8), "frames solved").toBe(2);
+      live.release();
+      await live.settle();
+    } finally {
+      restore();
+    }
+    // the release solved to where the button came up: every step is H or V
+    // with a fixed length, so the whole staircase moved down 4
+    const s0 = live.ent("s0") as Line, last = live.ent("s19") as Line;
+    expect(s0.x1).toBeCloseTo(x, 6);
+    expect(s0.y1).toBeCloseTo(y - 4, 6);
+    expect(last.y2 - last.y1).toBeCloseTo(1.5, 6);
+    expect(last.y2).toBeCloseTo(endY - 4, 6);
     expect(toasts, "slowness says nothing").toEqual([]);
+  }, 120_000);
+
+  it("releases a body drag whose frames stopped solving where the button came up, solved", async () => {
+    const live = rectAndStairs();
+    live.s.requestSolve();
+    await live.settle();
+    const restore = solveClock({ ms: 1000 });
+    try {
+      // the rectangle's bottom side, dragged down 4: its frames stop solving
+      // after the second, so the sides it carries are left behind live...
+      expect(await solvedFrames(live, [5, 0], [5, -4], 8), "frames solved").toBe(2);
+      expect(live.s.moveDrag, "a body drag").not.toBeNull();
+      live.release();
+      await live.settle();
+    } finally {
+      restore();
+    }
+    // ...and the release solves with the side held where the cursor left it,
+    // so the 6 mm height brings the top down after it. Solved without the
+    // hold, the release split the difference: each side about 2 mm off.
+    const r0 = live.ent("r0") as Line, r1 = live.ent("r1") as Line, r2 = live.ent("r2") as Line;
+    expect(r0.y1).toBeCloseTo(-4, 6);
+    expect(r0.y2).toBeCloseTo(-4, 6);
+    expect(r2.y1).toBeCloseTo(2, 6);
+    expect(r2.y2).toBeCloseTo(2, 6);
+    expect(r1.x1).toBeCloseTo(r1.x2, 9); // still square
+  }, 120_000);
+
+  it("lands a slow point drag on its own shapes, even when the whole sketch is too big to settle", async () => {
+    // The rectangle beside the 500-line staircase, every solve made to look a
+    // second long: its corner drag stops solving live after the second frame.
+    // The release lands the newest move on the rectangle first, as a frame
+    // would have; the whole-sketch settle after it runs out of heap, and used
+    // to be the only solve the release had, so the corner stayed behind.
+    const live = besideTooBig();
+    live.s.requestSolve();
+    await live.settle();
+    const restore = solveClock({ ms: 1000 });
+    try {
+      await live.drag([10, 6], [14, 9]);
+    } finally {
+      restore();
+    }
+    const r1 = live.ent("r1") as Line, r2 = live.ent("r2") as Line;
+    expect(r1.x2).toBeCloseTo(14, 6);
+    expect(r1.y2).toBeCloseTo(9, 6);
+    expect(r1.x1).toBeCloseTo(r1.x2, 9);
+    expect(r2.y1).toBeCloseTo(r2.y2, 9);
+    expect(live.s.solverDead).toBe(false);
+  }, 120_000);
+
+  it("keeps solving live when only the first frame is slow (a cold start)", async () => {
+    const live = rectAndStairs();
+    live.s.requestSolve();
+    await live.settle();
+    // the drag's first solve looks a second long, every one after it instant:
+    // a cold JIT or a module start on a slow machine, not a slow part
+    const cost = { ms: 1000 };
+    const restore = solveClock(cost);
+    const timed = GcsWrapper.prototype.solve;
+    GcsWrapper.prototype.solve = function (this: GcsWrapper, ...a: Parameters<typeof timed>) {
+      const r = timed.apply(this, a);
+      cost.ms = 0;
+      return r;
+    };
+    try {
+      expect(await solvedFrames(live, [10, 6], [14, 10], 8), "rectangle frames solved").toBe(8);
+      live.release();
+      await live.settle();
+    } finally {
+      restore();
+    }
+    expect((live.ent("r1") as Line).x2).toBeCloseTo(14, 6);
   }, 120_000);
 });
 

@@ -24,6 +24,7 @@ import { originGeometry } from "./origin";
 import { SketchPlane } from "./plane";
 import type { ResolvedEntity } from "./snap";
 import type { SketchConstraint } from "../types";
+import { GcsWrapper } from "@salusoft89/planegcs";
 
 export const PX = 10;
 
@@ -214,5 +215,25 @@ export function liveSketch(ents: ResolvedEntity[], cons: SketchConstraint[] = []
     ent: (id: string) => s.entities.find((e) => e.id === id),
     /** what the constraint flow is holding after the last click */
     held: () => held,
+  };
+}
+
+/** Make every planegcs solve look `cost.ms` long to SketchMode's drag-solve
+ *  budget, without waiting: `performance.now()` reads a clock that only moves
+ *  when GcsWrapper.solve runs, by `cost.ms` each time. Deterministic where a
+ *  real slow part would depend on the machine. Call the returned function to
+ *  restore both. */
+export function solveClock(cost: { ms: number }): () => void {
+  let now = 0;
+  const solve = GcsWrapper.prototype.solve;
+  GcsWrapper.prototype.solve = function (this: GcsWrapper, ...a: Parameters<typeof solve>) {
+    now += cost.ms;
+    return solve.apply(this, a);
+  };
+  const clock = performance.now;
+  performance.now = () => now;
+  return () => {
+    GcsWrapper.prototype.solve = solve;
+    performance.now = clock;
   };
 }

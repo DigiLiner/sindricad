@@ -31,7 +31,7 @@ import { DimInput } from "./dimInput";
 import { DocumentStore } from "../document/store";
 import { solveSketchFeature } from "./headlessSolve";
 import type { GeometryBackend } from "../geometry/client";
-import { liveSketch, PX } from "./liveSketch.testkit";
+import { liveSketch, PX, solveClock } from "./liveSketch.testkit";
 import { compileAndSolve } from "./sketchSolve";
 import { polygonPoints } from "./region";
 import { contextMenu, type CtxItem } from "../ui/menu";
@@ -147,6 +147,28 @@ describe("a polygon's offset stays tied to the polygon", () => {
     expect(c2!.radius - s2!.radius).toBeCloseTo(grown(10, 5) - 10, 6);
   });
 
+  it("dragging the copy away takes the source with it, when the drag is too slow to solve live", async () => {
+    // Every solve made to look a second long (solveClock): after its second
+    // frame the drag stops solving live, and the release has to land the copy
+    // where the button came up, the source with it. Without holding the copy
+    // there, the release split the difference between them: 56.7 here, 53.3
+    // on CI where it was slow for real.
+    const live = sketch([HEX()]);
+    await live.offset(sideMid(HEX(), 0), "5");
+    const cpy = live.shapes("polygon")[1]!;
+    const at = sideMid(cpy, 0);
+    const restore = solveClock({ ms: 1000 });
+    try {
+      await live.drag([at.x, at.y], [at.x + 20, at.y]);
+    } finally {
+      restore();
+    }
+    const [s2, c2] = live.shapes("polygon");
+    expect(c2!.x).toBeCloseTo(70, 6);
+    expect(s2!.x, "the source came along").toBeCloseTo(70, 6);
+    expect(s2!.y).toBeCloseTo(50, 6);
+  });
+
   it("dragging the source takes the copy with it", async () => {
     const live = sketch([HEX()]);
     await live.offset(sideMid(HEX(), 0), "5");
@@ -256,6 +278,30 @@ describe("a polygon's offset stays tied to the polygon", () => {
     expect(ring, "the source's corner circle is still radius 10").toBeDefined();
     expect(ring!.type === "circle" && ring!.x).toBeCloseTo(70, 6);
     expect(live.shapes("polygon")[0]!.x).toBeCloseTo(70, 6);
+  });
+
+  it("still holds after the source is exploded, when the drag is too slow to solve live", async () => {
+    // As above with every solve made to look a second long: the release has to
+    // walk the frames that went unsolved, because the whole 13 mm they covered
+    // does not solve as one jump (it conflicts, and the source stays behind)
+    const live = sketch([HEX()]);
+    await live.offset(sideMid(HEX(), 0), "5");
+    const at = sideMid(HEX(), 3);
+    live.s.selected = new Set(["P"]);
+    rightClick(live, at.x, at.y).find((i) => i.label === t("sketch.menu.explode"))!.onClick!();
+    await live.settle();
+    const c = sideMid(live.shapes("polygon")[0]!, 0);
+    const restore = solveClock({ ms: 1000 });
+    try {
+      await live.drag([c.x, c.y], [c.x + 20, c.y]);
+    } finally {
+      restore();
+    }
+    const ring = live.s.entities.find((e) => e.type === "circle" && e.construction && Math.abs(e.radius - 10) < 1e-6);
+    expect(ring, "the source's corner circle is still radius 10").toBeDefined();
+    expect(ring!.type === "circle" && ring!.x).toBeCloseTo(70, 6);
+    expect(live.shapes("polygon")[0]!.x).toBeCloseTo(70, 6);
+    expect(live.internals.conflict).toBe(false);
   });
 
   it("a parameter that grows the source past its copy takes the copy out with it", async () => {

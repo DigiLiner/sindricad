@@ -36,7 +36,7 @@ import { RIGID_ENTITY_NUM_FIELDS, coerceForField, dimValueFromParam, paramValueO
 import type { RegionCarry, SketchBinding } from "../document/store";
 import { composePointCarry, polygonSidesCarry, type PointCarry } from "../document/pointCarry";
 import { advanceCenterArcSweep, centerArcEntity, circumcenter } from "./arc";
-import { coincKey, compileAndSolve, constraintIndexOf, soleDimEntity, MAX_BIAS_ANCHORS, type FixPositions, type MoverBias } from "./sketchSolve";
+import { coincKey, compileAndSolve, constraintIndexOf, soleDimEntity, MAX_BIAS_ANCHORS, type FixPositions, type MoverBias, type SolvePass } from "./sketchSolve";
 import { SolverOutOfMemory, SolverUnavailable } from "./solver";
 import { bodyDragCluster, dragCluster } from "./dragCluster";
 import { p2lSideFlipped, refreshStep, refreshSteps } from "../document/projectionWalk";
@@ -265,6 +265,9 @@ const ZOOM_REDRAW = 0.1;
  *  split sketch's parts are each far under it (the GH #17 probe's 350 shapes
  *  solve whole in 11-13 ms). */
 const DRAG_SOLVE_BUDGET_MS = 50;
+
+/** SketchMode.skippedBody */
+interface SkippedBody { group: number[]; from: { x: number; y: number } | null; path: { x: number; y: number }[] }
 
 /** The selector a Project pick sends for a body edge: by:"nearest" at the
  *  middle of its middle drawn segment. NOT the picker's own selector: its
@@ -512,10 +515,30 @@ export class SketchMode {
    *  for a body drag, for an answer that cannot come; a slow part would hold
    *  every frame for as long as it takes. The release solves again, as does
    *  every edit after it; a new gesture clears it. */
-  private liveSolveOff: string | null = null;
+  private liveSolveOff: { part: string; slow: boolean } | null = null;
   /** The newest point-drag target a skipped frame (liveSolveOff) did not
    *  solve, so the release solves to where the button came up. */
   private skippedDrag: { fromX: number; fromY: number; toX: number; toY: number } | null = null;
+  /** A slow part's point drag (liveSolveOff.slow), released: its newest move
+   *  lands on the drag's own cluster, as its frame would have, before the
+   *  whole sketch settles. Straight to the whole-sketch settle, the move was
+   *  lost whenever the rest of the sketch was too big to solve. */
+  private landSkipped = false;
+  /** A body drag once a frame of it was skipped (liveSolveOff): what it drags
+   *  (indices), where it last solved, and where each skipped frame left it (a
+   *  pin point of the body each). The release holds the body where the cursor
+   *  left it while it solves, as a frame would have; without that hold the
+   *  plain solve is free to settle a dragged copy back toward the source it is
+   *  tied to (CI: 53.3 where the button came up at 70). */
+  private skippedBody: SkippedBody | null = null;
+  /** where the current body drag's body last solved (a pin point of it) */
+  private bodySolvedAt: { x: number; y: number } | null = null;
+  /** consumed by the next plain solve: skippedBody, handed over at release */
+  private releaseBody: SkippedBody | null = null;
+  /** Drag frames this gesture has solved. The first is never held to
+   *  DRAG_SOLVE_BUDGET_MS: it pays the warm-up (a cold JIT, a module start)
+   *  and on a slow machine overran it for a 4-entity sketch. */
+  private gestureSolves = 0;
   private directDimToast = false; // said once: dims are being written straight to geometry
   private solveDirty = false; // a constraint/dimension solve is pending
   /** Projection refresh entries waiting to be walked in (see
@@ -2828,6 +2851,7 @@ export class SketchMode {
         this.dragFrom = gp.p.clone();
         this.liveSolveOff = null;
         this.skippedDrag = null;
+        this.gestureSolves = 0;
         // GH #17 drag speed: everything outside this cluster has no path to
         // the grabbed point, so a drag frame's solve can skip it (see pump()).
         this.dragClusterIds = dragCluster(this.entities, this.constraints, gp.p.x, gp.p.y);
@@ -4615,6 +4639,9 @@ export class SketchMode {
           }
           md.started = true;
           this.liveSolveOff = null;
+          this.skippedBody = null;
+          this.bodySolvedAt = this.bodyPins(md.group)[0] ?? null;
+          this.gestureSolves = 0;
           // nothing has moved yet — snapshot the pristine positions for Esc-revert
           this.dragSnapshot = JSON.parse(JSON.stringify(this.entities));
           // ...and where each Fix holds its point. The guard above refuses a drag
@@ -7358,34 +7385,43 @@ export class SketchMode {
           // are read HERE so they are the entities' current corners — more
           // pointermove frames may have landed while the previous solve ran.
           const forBody = this.pendingPinIdxs !== null;
-          const pinEnts = (this.pendingPinIdxs ?? []).flatMap((i) => this.entities[i] ?? []);
+          const pinIdxs = this.pendingPinIdxs;
           this.pendingDrag = null;
           this.pendingPinIdxs = null;
-          const pins = pinEnts.length
-            ? pinEnts.flatMap((e) => attachmentPoints(e, this.constraints).map((q) => ({ x: q.x, y: q.y })))
-            : undefined;
+          const pinned = pinIdxs ? this.bodyPins(pinIdxs) : [];
+          const pins = pinned.length ? pinned : undefined;
           // GH #17 drag speed: a mid-gesture drag frame only needs to solve
           // the cluster the grabbed point or body sits in — everything outside
           // it has no path to move, so a full-sketch solve would leave it
           // exactly where it already is. Release (dragRelease set by endDrag
           // for a point drag; a body drag's is requestSolve's plain solve)
           // always solves the whole sketch, same as a grab with no cluster
-          // found (dragClusterIds null).
-          const cluster = !this.dragRelease ? this.dragClusterIds : null;
+          // found (dragClusterIds null), after landing a slow part's last
+          // move on its cluster (landSkipped).
+          const landing = this.landSkipped;
+          this.landSkipped = false;
+          const cluster = !this.dragRelease || landing ? this.dragClusterIds : null;
           const solveEntities = cluster && cluster.size > 0
             ? this.entities.filter((e) => cluster.has(e.id))
             : this.entities;
           const part = solveEntities.map((e) => e.id).join();
-          if (!this.dragRelease && part === this.liveSolveOff) {
-            if (forBody) this.refreshDragGeometry(); // the body moved, unsolved
-            else if (d) this.skippedDrag = d;
+          if (!this.dragRelease && part === this.liveSolveOff?.part) {
+            if (pinIdxs) {
+              this.skippedBody ??= { group: pinIdxs, from: this.bodySolvedAt, path: [] };
+              if (pins) this.skippedBody.path.push(pins[0]!);
+              this.refreshDragGeometry(); // the body moved, unsolved
+            } else if (d) {
+              this.skippedDrag = d;
+            }
             continue;
           }
           dragPart = this.dragRelease ? null : part;
           const started = performance.now();
           const r = await compileAndSolve(solveEntities, this.constraints, d ?? undefined, undefined, pins, this.boundShapeFields(),
             forBody ? this.fixHold ?? undefined : undefined);
-          if (dragPart !== null && performance.now() - started > DRAG_SOLVE_BUDGET_MS) this.liveSolveOff = dragPart;
+          if (dragPart !== null && this.gestureSolves++ > 0 && performance.now() - started > DRAG_SOLVE_BUDGET_MS) {
+            this.liveSolveOff = { part: dragPart, slow: true };
+          }
           dragPart = null;
           // The gesture this result belongs to ended, was cancelled, or was
           // replaced mid-solve: drop the result (and its toast) rather than
@@ -7414,6 +7450,7 @@ export class SketchMode {
               const byId = new Map(r.entities.map((e) => [e.id, e] as const));
               this.entities = this.entities.map((e) => byId.get(e.id) ?? e);
             }
+            if (forBody) this.bodySolvedAt = pins?.[0] ?? null;
           }
           // a cluster's freedom is not the sketch's: the colour that says
           // "fully constrained" waits for a solve that saw everything
@@ -7469,14 +7506,21 @@ export class SketchMode {
           // With every chain corner joined, each segment of a chain starts a
           // solve, so two quick clicks meet one. The version check below then
           // discards this result and solves again, as it always meant to.
-          const r = await compileAndSolve([...this.entities], solved, undefined, bias ?? undefined, undefined, this.boundShapeFields(), fixAt ?? undefined);
+          // a body drag's release whose frames were skipped holds the body
+          // where the cursor left it (skippedBody), then solves plain on top
+          const releaseBody = this.releaseBody;
+          this.releaseBody = null;
+          const pins = releaseBody ? this.bodyPins(releaseBody.group) : undefined;
+          let r = await compileAndSolve([...this.entities], solved, undefined, bias ?? undefined, pins, this.boundShapeFields(), fixAt ?? undefined);
+          if (releaseBody && !(r.ok && r.conflicts.length === 0)) r = (await this.replayBody(releaseBody, solved, fixAt)) ?? r;
           if (!this.active) break;
+          if (releaseBody) this.solveDirty = true;
           // geometry changed mid-solve (a draw committed): discard, re-solve.
           // Re-arm the bias with it — this result never reached the document, so
           // the gesture that armed it has still not had its one biased solve.
           // `??=`, not `=`: a newer gesture may have armed its own while we were
           // awaiting, and that one is the more recent intent.
-          if (this.entityVersion !== ver) { this.pendingBias ??= bias; this.fixHold ??= fixAt; this.solveDirty = true; continue; }
+          if (this.entityVersion !== ver) { this.pendingBias ??= bias; this.fixHold ??= fixAt; this.releaseBody ??= releaseBody; this.solveDirty = true; continue; }
           this.conflict = r.conflicts.length > 0;
           // A constraint that cannot be satisfied must not stay in the sketch.
           // Keeping it leaves the whole system unsolvable, so every LATER
@@ -7547,7 +7591,7 @@ export class SketchMode {
       // here, as it once was, stopped every drag for the rest of the session.
       const tooLarge = err instanceof SolverOutOfMemory;
       if (tooLarge) {
-        if (dragPart !== null) this.liveSolveOff = dragPart;
+        if (dragPart !== null) this.liveSolveOff = { part: dragPart, slow: false };
         this.solveDirty = false;
         this.pendingDrag = null;
         this.pendingPinIdxs = null;
@@ -7668,6 +7712,37 @@ export class SketchMode {
     // the cluster from here, not the stale pre-detach one
     this.dragClusterIds = dragCluster(this.entities, this.constraints, w.x, w.y);
     return true;
+  }
+
+  /** The points a body drag holds still: every attachment point of what it drags. */
+  private bodyPins(group: readonly number[], ents: readonly ResolvedEntity[] = this.entities) {
+    return group
+      .flatMap((i) => ents[i] ?? [])
+      .flatMap((e) => attachmentPoints(e, this.constraints).map((q) => ({ x: q.x, y: q.y })));
+  }
+
+  /** A skipped body drag's release that would not solve in one jump, walked
+   *  instead: the body back to where it last solved, then over the path its
+   *  skipped frames took, one pinned solve each, as live solving would have
+   *  gone. A big jump can fail where the steps do not: the offset copy of an
+   *  exploded hexagon, dragged 20 mm, solves in six frames and conflicts in
+   *  one (it does even with live solving, for a hand that fast). Null when
+   *  the walk cannot be made or a step fails. */
+  private async replayBody(b: SkippedBody, constraints: SketchConstraint[], fixAt: FixPositions | null): Promise<SolvePass | null> {
+    const last = b.path[b.path.length - 1];
+    if (!b.from || !last || b.path.length < 2) return null;
+    let ents = bodyDragFrame(this.entities, b.group, b.from.x - last.x, b.from.y - last.y, constraints);
+    let prev = b.from;
+    let r: SolvePass | null = null;
+    for (const p of b.path) {
+      ents = ents && bodyDragFrame(ents, b.group, p.x - prev.x, p.y - prev.y, constraints);
+      if (!ents) return null;
+      prev = p;
+      r = await compileAndSolve(ents, constraints, undefined, undefined, this.bodyPins(b.group, ents), this.boundShapeFields(), fixAt ?? undefined);
+      if (!(r.ok && r.conflicts.length === 0)) return null;
+      ents = r.entities;
+    }
+    return r;
   }
 
   /** Queue the BODY drag's settle for this frame: re-satisfy the constraints
@@ -7844,11 +7919,26 @@ export class SketchMode {
       }
       this.bankDrag(); // the whole move is ONE undo step, not one per frame
       this.refreshActive();
+      this.releaseBody = this.skippedBody;
+      this.skippedBody = null;
       this.requestSolve(); // re-satisfy constraints at the new position
       this.onState?.(); // undo checkpoint
       return;
     }
     if (!this.dragFrom) return;
+    // the newest move a slow or too-big part did not solve live (liveSolveOff)
+    const skipped = this.skippedDrag;
+    this.skippedDrag = null;
+    if (skipped && this.liveSolveOff?.slow && !this.solverDead) {
+      // a slow part lands it on its own cluster first (landSkipped); pump()
+      // finishes the release, and this call's second pass settles the rest
+      this.pendingDrag ??= skipped;
+      this.landSkipped = true;
+      this.dragRelease = { pointerId };
+      void this.pump();
+      return;
+    }
+    if (!this.pendingDrag && skipped) this.pendingDrag = skipped;
     // GH #17 drag speed: a drag whose frames were cluster-scoped has never had
     // the WHOLE sketch solved together. Force exactly one more solve, of
     // everything, before this gesture's result is final — the full solve on
@@ -7857,9 +7947,6 @@ export class SketchMode {
     // recursive endDrag call pump() makes below does not force it again.
     const forcedSettle = this.dragClusterIds !== null && this.dragMoved;
     if (forcedSettle) this.dragClusterIds = null;
-    // the newest move a slow or too-big part did not solve live (liveSolveOff)
-    if (!this.pendingDrag && this.skippedDrag) this.pendingDrag = this.skippedDrag;
-    this.skippedDrag = null;
     // The gesture's last move can still be waiting for its frame (queueDrag).
     // Releasing on top of it would drop it, and the point would stop one frame
     // short of where the button came up. Solve it now; pump() finishes the
