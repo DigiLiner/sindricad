@@ -1,14 +1,19 @@
-// planegcs runs in a fixed 16 MB wasm heap (5 MB of it stack) and diagnoses a
-// system with DENSE matrices, constraints by free parameters, several copies at
-// once. Handed a whole sketch as one system, memory grew with the SQUARE of the
-// sketch and a 350-entity sketch of rectangles, circles and arcs (the GH #17
-// scaling probe's "mix" family) aborted it on its first solve: Aborted(OOM).
-// SketchMode then marked the solver dead for the rest of the session, so drags
-// stopped solving until the app was restarted.
+// planegcs diagnoses a system with DENSE matrices, constraints by free
+// parameters, several copies at once. In the published build's fixed 16 MB wasm
+// heap (5 MB of it stack), a whole sketch handed over as one system grew with
+// the SQUARE of the sketch, and a 350-entity sketch of rectangles, circles and
+// arcs (the GH #17 scaling probe's "mix" family) aborted it on its first solve:
+// Aborted(OOM). SketchMode then marked the solver dead for the rest of the
+// session, so drags stopped solving until the app was restarted.
 //
-// Two things are pinned here: a sketch made of independent parts is solved part
-// by part, so it fits, with the same answer as one system; and a part that
-// really is too big costs that one solve, not the solver.
+// Pinned here: a sketch made of independent parts is solved part by part, so it
+// fits, with the same answer as one system; a part that really is too big costs
+// that one solve, not the solver; and the vendored build's heap GROWS, so the
+// staircase that is too big for a capped heap solves without the cap.
+//
+// The vendored heap grows to 256 MB, which no test here can afford to reach, so
+// every test runs with growth refused past CAPPED_PAGES (the cap below): the
+// REAL abort planegcs makes when a growth is refused, at a known limit.
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 declare const process: { cwd(): string };
@@ -16,6 +21,19 @@ vi.mock("@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm?url", () => ({
   default: process.cwd() + "/node_modules/@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm",
 }));
 const { toasts } = vi.hoisted(() => ({ toasts: [] as string[] }));
+// Refuse wasm heap growth past `cap.pages` (64 KiB each), as the engine does at
+// MAXIMUM_MEMORY: emscripten's growth then fails and the solve aborts.
+const { cap } = vi.hoisted(() => {
+  const cap = { pages: 300 };
+  const grow = WebAssembly.Memory.prototype.grow;
+  WebAssembly.Memory.prototype.grow = function (this: WebAssembly.Memory, delta: number) {
+    if (this.buffer.byteLength / 65536 + delta > cap.pages) throw new RangeError("test heap cap");
+    return grow.call(this, delta);
+  };
+  return { cap };
+});
+/** about 19 MB: the published 16 MB heap plus a little, so what was too big stays too big */
+const CAPPED_PAGES = 300;
 // how many times the solver's wasm module is started: once at first use, and
 // once more after every solve that aborted it (solver.ts drops that module)
 const { wasm } = vi.hoisted(() => {
@@ -74,7 +92,7 @@ function mixSketch(n: number) {
 }
 
 /** One connected staircase of `n` lines, H and V alternating, each with a
- *  length: a single part far past what one planegcs heap can diagnose. */
+ *  length: at 500 a single part far past what a capped heap can diagnose. */
 function staircase(n: number, x0 = 0) {
   const entities: ResolvedEntity[] = [];
   const constraints: SketchConstraint[] = [];
@@ -96,6 +114,8 @@ const len = (e: ResolvedEntity | undefined) => {
 };
 
 describe("a sketch too big for one planegcs heap", () => {
+  beforeEach(() => { cap.pages = CAPPED_PAGES; });
+
   it("solves the GH #17 probe's 350-entity mixed sketch that aborted the solver on its first solve", async () => {
     const { entities, constraints } = mixSketch(400);
     const r = await compileAndSolve(entities, constraints);
@@ -183,18 +203,23 @@ describe("a sketch too big for one planegcs heap", () => {
     const big = staircase(500);
     await expect(compileAndSolve(big.entities, big.constraints)).rejects.toBeInstanceOf(SolverOutOfMemory);
     // planegcs carries on past an abort, on a heap the unwound C++ never gave
-    // back: on the module that aborted, this 200-step staircase (4 MB of a
-    // fresh heap) runs out too. Measured, and the reason the module is dropped.
-    const next = staircase(200);
+    // back. Measured under this cap: a fresh module solves up to a 340-step
+    // staircase (360 runs out), and the module that just aborted runs out on
+    // 200. 320 is what only a fresh module can do: the reason it is dropped.
+    const next = staircase(320);
     const r = await compileAndSolve(next.entities, next.constraints);
     expect(r.ok).toBe(true);
     expect(r.conflicts).toEqual([]);
-    expect(len(r.entities.find((e) => e.id === "s199"))).toBeCloseTo(1.5, 9);
+    expect(len(r.entities.find((e) => e.id === `s${next.entities.length - 1}`))).toBeCloseTo(1.5, 9);
   }, 60_000);
+
 });
 
 describe("SketchMode after a solve runs out of heap", () => {
-  beforeEach(() => { toasts.length = 0; });
+  beforeEach(() => {
+    toasts.length = 0;
+    cap.pages = CAPPED_PAGES;
+  });
 
   /** a small square-cornered rectangle next to a staircase too big for any heap */
   function besideTooBig() {
@@ -305,4 +330,17 @@ describe("SketchMode after a solve runs out of heap", () => {
     expect(toasts).toEqual([t("sketch.solver.tooLarge")]);
     expect(live.s.solverDead).toBe(false);
   }, 120_000);
+});
+
+// LAST in the file on purpose: a wasm heap never shrinks, so after this the
+// module holds enough memory that no capped test after it could run out.
+describe("the vendored heap grows", () => {
+  it("solves the staircase that is too big for a capped heap", async () => {
+    cap.pages = 4096; // the vendored MAXIMUM_MEMORY, 256 MB
+    const big = staircase(500);
+    const r = await compileAndSolve(big.entities, big.constraints);
+    expect(r.ok).toBe(true);
+    expect(r.conflicts).toEqual([]);
+    expect(len(r.entities.find((e) => e.id === "s499"))).toBeCloseTo(1.5, 9);
+  }, 60_000);
 });
