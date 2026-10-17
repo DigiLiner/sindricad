@@ -16,6 +16,17 @@ vi.mock("@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm?url", () => ({
   default: process.cwd() + "/node_modules/@salusoft89/planegcs/dist/planegcs_dist/planegcs.wasm",
 }));
 const { toasts } = vi.hoisted(() => ({ toasts: [] as string[] }));
+// how many times the solver's wasm module is started: once at first use, and
+// once more after every solve that aborted it (solver.ts drops that module)
+const { wasm } = vi.hoisted(() => {
+  const wasm = { starts: 0 };
+  const instantiate = WebAssembly.instantiate;
+  (WebAssembly as { instantiate: unknown }).instantiate = (...a: Parameters<typeof instantiate>) => {
+    wasm.starts++;
+    return instantiate(...a);
+  };
+  return { wasm };
+});
 vi.mock("../ui/toast", () => ({ toast: (m: string) => void toasts.push(m) }));
 vi.mock("../ui/prompt", () => ({ setPrompt: () => {} }));
 
@@ -185,8 +196,8 @@ describe("a sketch too big for one planegcs heap", () => {
 describe("SketchMode after a solve runs out of heap", () => {
   beforeEach(() => { toasts.length = 0; });
 
-  it("says so once and keeps solving what fits, instead of turning the solver off", async () => {
-    // a small dimensioned rectangle next to a staircase too big for any heap
+  /** a small square-cornered rectangle next to a staircase too big for any heap */
+  function besideTooBig() {
     const big = staircase(500, 100);
     const rect = [line("r0", 0, 0, 10, 0), line("r1", 10, 0, 10, 6), line("r2", 10, 6, 0, 6), line("r3", 0, 6, 0, 0)];
     const cons: SketchConstraint[] = [
@@ -195,7 +206,11 @@ describe("SketchMode after a solve runs out of heap", () => {
       { type: "vertical", line: "r1" }, { type: "vertical", line: "r3" },
       ...big.constraints,
     ];
-    const live = liveSketch([...rect, ...big.entities], cons);
+    return liveSketch([...rect, ...big.entities], cons);
+  }
+
+  it("says so once and keeps solving what fits, instead of turning the solver off", async () => {
+    const live = besideTooBig();
     live.s.requestSolve();
     await live.settle();
     expect(live.s.solverDead, "the solver was turned off").toBe(false);
@@ -210,6 +225,52 @@ describe("SketchMode after a solve runs out of heap", () => {
     expect(r1.x1).toBeCloseTo(r1.x2, 9); // still vertical
     expect(r2.y1).toBeCloseTo(r2.y2, 9); // still horizontal
     // the release solved the whole sketch again and ran out again: still one message
+    expect(toasts).toEqual([t("sketch.solver.tooLarge")]);
+    expect(live.s.solverDead).toBe(false);
+  }, 120_000);
+
+  it("tries a part too big to solve once per drag, not on every frame", async () => {
+    // Each failed try costs the solve plus a fresh wasm module: measured 28 to
+    // 68 ms a frame on this fixture, a module start every frame (two for a
+    // body drag), for an answer that cannot come until the gesture ends.
+    const live = besideTooBig();
+    live.s.requestSolve();
+    await live.settle();
+    const frames = async (from: [number, number], to: [number, number], n: number) => {
+      const after: number[] = [];
+      live.press(from[0], from[1]);
+      for (let i = 1; i <= n; i++) {
+        live.move(from[0] + ((to[0] - from[0]) * i) / n, from[1] + ((to[1] - from[1]) * i) / n);
+        await live.settle();
+        after.push(wasm.starts);
+      }
+      return after;
+    };
+
+    // a point drag on the staircase: its cluster IS the part too big
+    let before = wasm.starts;
+    let after = await frames([101, 0], [101, -3], 12);
+    expect(after[11]! - before, "module starts over 12 point-drag frames").toBeLessThanOrEqual(1);
+    live.release();
+    await live.settle();
+    expect(wasm.starts - after[11]!, "the release tries again").toBe(1);
+
+    // a body drag of the rectangle's bottom side solves the whole sketch,
+    // which holds the staircase: the frame the drag starts on tries (the
+    // pinned pass, then the free retry beneath it), and no later frame does
+    before = wasm.starts;
+    after = await frames([5, 0], [5, -3], 12);
+    const trying = after.filter((n, i) => n > (i ? after[i - 1]! : before)).length;
+    expect(trying, `frames that started a module: ${JSON.stringify([before, ...after])}`).toBe(1);
+    expect(after[11]! - before).toBeLessThanOrEqual(2);
+    // the side still follows the cursor, unsolved
+    const r0 = live.ent("r0") as Line;
+    expect(r0.y1).toBeCloseTo(-3, 6);
+    expect(r0.y2).toBeCloseTo(-3, 6);
+    live.release();
+    await live.settle();
+    expect(wasm.starts, "the release tries again").toBeGreaterThan(after[11]!);
+
     expect(toasts).toEqual([t("sketch.solver.tooLarge")]);
     expect(live.s.solverDead).toBe(false);
   }, 120_000);

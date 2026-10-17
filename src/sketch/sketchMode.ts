@@ -491,6 +491,12 @@ export class SketchMode {
   private solverDead = false;
   private solverDeadToast = false;
   private solverTooLargeToast = false; // said once: a solve ran out of the solver's heap
+  /** The entities (ids, joined) whose drag solve ran out of the solver's heap
+   *  in THIS gesture. Its later frames skip that solve: each failure costs the
+   *  solve plus a fresh wasm module, measured 28-68 ms a frame, twice a frame
+   *  for a body drag, for an answer that cannot come. The release solves again,
+   *  as does every edit after it; a new gesture clears it. */
+  private tooLargeDrag: string | null = null;
   private directDimToast = false; // said once: dims are being written straight to geometry
   private solveDirty = false; // a constraint/dimension solve is pending
   /** Projection refresh entries waiting to be walked in (see
@@ -2782,6 +2788,7 @@ export class SketchMode {
       if (gp) {
         const at = this.planePoint(e) ?? p;
         this.dragFrom = gp.p.clone();
+        this.tooLargeDrag = null;
         // GH #17 drag speed: everything outside this cluster has no path to
         // the grabbed point, so a drag frame's solve can skip it (see pump()).
         this.dragClusterIds = dragCluster(this.entities, this.constraints, gp.p.x, gp.p.y);
@@ -4568,6 +4575,7 @@ export class SketchMode {
             return;
           }
           md.started = true;
+          this.tooLargeDrag = null;
           // nothing has moved yet — snapshot the pristine positions for Esc-revert
           this.dragSnapshot = JSON.parse(JSON.stringify(this.entities));
           // ...and where each Fix holds its point. The guard above refuses a drag
@@ -7268,6 +7276,7 @@ export class SketchMode {
   private async pump() {
     if (this.solveBusy || this.solverDead) return;
     this.solveBusy = true;
+    let dragPart: string | null = null; // the drag solve in flight, for tooLargeDrag
     try {
       while (this.active && (this.pendingDrag || this.pendingPinIdxs !== null || this.pendingRefresh || this.solveDirty)) {
         if (this.pendingDrag || this.pendingPinIdxs !== null) {
@@ -7296,8 +7305,15 @@ export class SketchMode {
           const solveEntities = cluster && cluster.size > 0
             ? this.entities.filter((e) => cluster.has(e.id))
             : this.entities;
+          const part = solveEntities.map((e) => e.id).join();
+          if (!this.dragRelease && part === this.tooLargeDrag) {
+            if (forBody) this.refreshDragGeometry(); // the body moved, unsolved
+            continue;
+          }
+          dragPart = this.dragRelease ? null : part;
           const r = await compileAndSolve(solveEntities, this.constraints, d ?? undefined, undefined, pins, this.boundShapeFields(),
             forBody ? this.fixHold ?? undefined : undefined);
+          dragPart = null;
           // The gesture this result belongs to ended, was cancelled, or was
           // replaced mid-solve: drop the result (and its toast) rather than
           // apply it to a gesture that never asked for it. Asked per KIND —
@@ -7456,6 +7472,7 @@ export class SketchMode {
       // here, as it once was, stopped every drag for the rest of the session.
       const tooLarge = err instanceof SolverOutOfMemory;
       if (tooLarge) {
+        if (dragPart !== null) this.tooLargeDrag = dragPart;
         this.solveDirty = false;
         this.pendingDrag = null;
         this.pendingPinIdxs = null;
