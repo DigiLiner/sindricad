@@ -2345,6 +2345,6 @@
     "recent": "Recent",
     "showOnStartup": "Show this screen on startup",
     "signIn": "Sign in with TinkerAtlas",
-    "unreachable": "TinkerAtlas is unreachable — you're offline or the service is down."
+    "unreachable": "I can't reach TinkerAtlas. You may be offline, or the service is down."
   }
 }

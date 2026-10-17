@@ -3285,6 +3285,12 @@ button.finish:hover {
   color: var(--text-dim);
   font-size: 13px;
 }
+/* .choice-btn is flex:1 for button rows; in this column that grew Retry to the
+   full height of the pane. Here it sizes to its label. */
+.welcome-offline .choice-btn {
+  flex: none;
+  padding: 8px 18px;
+}
 .welcome-foot {
   display: flex;
   padding: 10px 16px;

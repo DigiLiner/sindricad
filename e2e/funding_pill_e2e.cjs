@@ -131,6 +131,19 @@ const titlebarLayout = (page) => page.evaluate(() => {
     return l && { overflow: l.scrollHeight - l.clientHeight };
   });
   check(welcomeLeft && welcomeLeft.overflow <= 1, "the welcome column still fits", JSON.stringify(welcomeLeft));
+  // ta_ping answers false, so the remote pane is the offline box. Its Retry used
+  // to grow to the pane's full height (.choice-btn is flex:1 for button rows).
+  await page.waitForSelector(".welcome-offline .choice-btn");
+  const retry = await page.evaluate(() => {
+    const b = document.querySelector(".welcome-offline .choice-btn").getBoundingClientRect();
+    const box = document.querySelector(".welcome-offline").getBoundingClientRect();
+    const msg = document.querySelector(".welcome-offline p");
+    return { h: b.height, w: b.width, offCentre: Math.abs((b.left + b.right) / 2 - (box.left + box.right) / 2),
+      below: b.top > msg.getBoundingClientRect().bottom, text: msg.innerText };
+  });
+  check(retry.h < 48 && retry.w < 200 && retry.offCentre < 1.5 && retry.below,
+    "the offline box's Retry sizes to its label, centred under the message", JSON.stringify(retry));
+  check(!/[—–]/.test(retry.text), "the offline message has no dash", JSON.stringify(retry.text));
   await shot(page, "welcome-card.png");
 
   await page.keyboard.press("Escape"); // close the welcome
