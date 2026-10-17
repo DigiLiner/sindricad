@@ -18,6 +18,13 @@ This file starts on 2026-08-03. For anything before that, see the
 
 ## Unreleased
 
+### Support
+
+- **The title bar shows how this month's running costs are funded.** A small heart pill
+  ("Funding 44%") opens a panel with the progress, PayPal, Ko-fi and TinkerAtlas, and the
+  welcome screen shows the same card. Nothing pops up by itself; the panel can hide the
+  pill for good, and Help > Support SindriCAD still opens it after that.
+
 ### Files
 
 - **Closing the window asks before it throws your work away.** The X, Alt+F4 and the

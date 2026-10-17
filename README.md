@@ -566,5 +566,12 @@ components and their licenses are listed in [NOTICE.md](NOTICE.md).
 ## Support
 
 SindriCAD is free and open source. If it earns a place in your workflow, you can back
-development on [Patreon (MuninWorks)](https://www.patreon.com/MuninWorks). Patronage
-covers the servers, domains, and tooling behind this and my other projects.
+its development. The money covers the servers, domains, and tooling behind this and my
+other projects, and the app shows how this month is going (the heart in the title bar,
+or Help > Support SindriCAD).
+
+- [PayPal](https://paypal.me/makerviking), what most people pick
+- [Ko-fi](https://ko-fi.com/tinkeratlas)
+- [TinkerAtlas+](https://tinkeratlas.com/pricing), a monthly plan on the site
+
+You can also back it on [Patreon (MuninWorks)](https://www.patreon.com/MuninWorks).
