@@ -320,6 +320,7 @@ function drawing(tool: "line" | "arc", ents: ResolvedEntity[], typed: Record<str
   Object.assign(s.viewport as object, {
     screenToPlane: (x: number, y: number) => new THREE.Vector3(x / PX, y / PX, 0),
     projectToScreen: (w: THREE.Vector3) => ({ x: w.x * PX, y: w.y * PX }),
+    screenProjector() { return this.projectToScreen; }, // one projection per snap pass, as the real one
   });
   const h = live.s;
   return {

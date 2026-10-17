@@ -2840,9 +2840,19 @@ export class Viewport {
 
   /** project a world point to screen pixels (client coords) */
   projectToScreen(world: THREE.Vector3): { x: number; y: number } {
+    return this.screenProjector()(world);
+  }
+
+  /** projectToScreen for many points: the canvas rect is read once, not once
+   *  per point. A sketch snap pass projects every snap candidate, 1,600 of
+   *  them on a 400-line sketch, and the read per point was most of a hover
+   *  (GH #17). Only for the event at hand: the canvas can move between two. */
+  screenProjector(): (world: THREE.Vector3) => { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
-    const p = this.projectInRect(world, rect);
-    return { x: p.x + rect.left, y: p.y + rect.top };
+    return (world) => {
+      const p = this.projectInRect(world, rect);
+      return { x: p.x + rect.left, y: p.y + rect.top };
+    };
   }
 
   /** project a world point for an overlay mounted in #viewport-overlay: pixels

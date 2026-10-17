@@ -45,7 +45,7 @@ import { applyDrivingDimsDirect, dimBindingFor, governingDimAt, lockDimFor, meas
 import { constraintDimKey, rowConstraintAt, sketchDimRows, type SketchDimRow } from "./dimRows";
 import { dimConflictMsg, withdrawTrial, type SketchTrial } from "./dimConflict";
 import { expandPattern, translated, rotated, scaled } from "./pattern";
-import { candidatesFromEntities, curveRefOf, snap, snapCoincidences, snapPointOns, type SnapKind, type SnapCandidate, type PointRef, type CurveRef } from "./snap";
+import { candidatesFromEntities, curveRefOf, snap, snapCoincidences, snapPointOns, SNAP_PX, type SnapKind, type SnapCandidate, type PointRef, type CurveRef } from "./snap";
 import type { ResolvedEntity } from "./snap";
 import {
   curvesEndingAt, inferArcTangents, inferLineRelations, isGeometrySnap, relationConstraints,
@@ -5056,10 +5056,14 @@ export class SketchMode {
     const p2d = this.plane.to2D(world);
     // Hold Ctrl to suppress snapping for fine placement (raw cursor position).
     if (noSnap) return { p: p2d, kind: "free" as SnapKind, world, ref: undefined as PointRef | undefined, curve: undefined as string | undefined };
+    // One layout read for the pass, and only the candidates within reach
+    // projected at all: every candidate of a 400-line sketch, through a
+    // layout read each, was most of a hover (GH #17).
+    const project = this.viewport.screenProjector();
     const res = snap(
       p2d,
-      this.splineSnapCandidates(), // the cached candidates, plus a spline being drawn's own start
-      (q) => this.viewport.projectToScreen(this.plane.to3D(q.x, q.y)),
+      this.inSnapReach(clientX, clientY, this.splineSnapCandidates()), // the cached candidates, plus a spline being drawn's own start
+      (q) => project(this.plane.to3D(q.x, q.y)),
       this.gridSnap ? this.gridCell : 0,
     );
     // An imported scan ranks above the grid and below the sketch's own
@@ -5073,6 +5077,27 @@ export class SketchMode {
       }
     }
     return { p: res.point, kind: res.kind, ref: res.ref, curve: res.curve, world: this.plane.to3D(res.point.x, res.point.y) };
+  }
+
+  /** The candidates a snap at this pointer could take, or more: those inside
+   *  the box, on the plane, of the screen square around the pointer that
+   *  holds the snap's reach. The square laid back onto the plane is a convex
+   *  quad, so its box holds every point that projects into the square. A
+   *  corner that misses the plane (a view close to edge-on) bounds nothing,
+   *  and then every candidate is a candidate. */
+  private inSnapReach(clientX: number, clientY: number, cands: SnapCandidate[]): SnapCandidate[] {
+    const r = SNAP_PX + 1; // a pixel more, so one exactly at the reach is never cut by rounding
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const [sx, sy] of [[-r, -r], [r, -r], [r, r], [-r, r]] as const) {
+      const w = this.viewport.screenToPlane(clientX + sx, clientY + sy, this.plane.plane);
+      if (!w) return cands;
+      const q = this.plane.to2D(w);
+      x0 = Math.min(x0, q.x);
+      y0 = Math.min(y0, q.y);
+      x1 = Math.max(x1, q.x);
+      y1 = Math.max(y1, q.y);
+    }
+    return cands.filter((c) => c.p.x >= x0 && c.p.x <= x1 && c.p.y >= y0 && c.p.y <= y1);
   }
 
   private showSnap(hit: { kind: SnapKind; world: THREE.Vector3 } | null) {

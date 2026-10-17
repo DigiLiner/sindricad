@@ -69,6 +69,7 @@ const PX = 10;
 const viewport = {
   screenToPlane: (cx: number, cy: number) => new THREE.Vector3(cx / PX, -cy / PX, 0),
   projectToScreen: (w: THREE.Vector3) => ({ x: w.x * PX, y: -w.y * PX }),
+  screenProjector() { return this.projectToScreen; }, // one projection per snap pass, as the real one
   // mm per pixel, for the size of a hovered point's marker
   pixelWorldSize: () => 1 / PX,
   domElement: { setPointerCapture() {}, releasePointerCapture() {} },

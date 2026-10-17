@@ -260,12 +260,15 @@ export function snapPointOns(
  *  existing "higher priority wins when about equally close" case below). */
 const PRIORITY_TIE_PX = 2;
 
+/** How far, in screen pixels, a snap reaches. */
+export const SNAP_PX = 10;
+
 export function snap(
   raw: THREE.Vector2,
   candidates: SnapCandidate[],
   toScreen: (p: THREE.Vector2) => { x: number; y: number },
   gridStep: number,
-  pixelTol = 10,
+  pixelTol = SNAP_PX,
 ): SnapResult {
   const rawScreen = toScreen(raw);
   const inRange: { c: SnapCandidate; d: number }[] = [];

@@ -43,6 +43,7 @@ import { SketchDimensions } from "./sketchDimensions";
 import { SketchGlyphs } from "./sketchGlyphs";
 import { SketchOverlay } from "./overlay";
 import { compileAndSolve } from "./sketchSolve";
+import { snap } from "./snap";
 import { initSolver } from "./solver";
 import type { ResolvedEntity } from "./snap";
 import type { SketchConstraint } from "../types";
@@ -659,5 +660,96 @@ describe("a drag frame redraws only what moved (GH #17)", () => {
     // RED on bca8e61: every badge's transform rewritten, unchanged, every frame
     expect(writes.filter((w) => w.same), "no write repeats what a badge already shows").toEqual([]);
     expect(new Set(writes.map((w) => w.el)).size).toBe(moved);
+  });
+});
+
+describe("a snap pass reads the layout once and projects only what is in reach (GH #17 hover speed)", () => {
+  // lines, a rectangle's sides, crossings, a circle, an arc and a point
+  const mixed: ResolvedEntity[] = [
+    { type: "line", id: "R1", x1: 20, y1: 20, x2: 50, y2: 20 },
+    { type: "line", id: "R2", x1: 50, y1: 20, x2: 50, y2: 40 },
+    { type: "line", id: "R3", x1: 50, y1: 40, x2: 20, y2: 40 },
+    { type: "line", id: "R4", x1: 20, y1: 40, x2: 20, y2: 20 },
+    { type: "line", id: "X1", x1: 15, y1: 15, x2: 55, y2: 45 }, // crosses the rectangle
+    { type: "circle", id: "K", x: 70, y: 30, radius: 8 },
+    { type: "arc", id: "Q", x1: 0, y1: 30, x2: 10, y2: 40, mx: 2.9, my: 37.1 },
+    { type: "point", id: "P", x: 35, y: 5 },
+  ];
+
+  /** The real Viewport's projections, on a perspective camera looking at the
+   *  sketch at a slant, from a canvas that is not at the window's corner. */
+  function realProjections(reads: { n: number }) {
+    const vp = Object.create(Viewport.prototype) as Record<string, any>;
+    const cam = new THREE.PerspectiveCamera(40, 900 / 700, 0.1, 5000);
+    cam.position.set(10, -90, 120);
+    cam.up.set(0, 0, 1);
+    cam.lookAt(35, 25, 0);
+    cam.updateMatrixWorld();
+    Object.assign(vp, {
+      sharedRaycaster: new THREE.Raycaster(),
+      ndc: new THREE.Vector2(),
+      projScratch: new THREE.Vector3(),
+      rig: { active: cam },
+      canvas: {
+        getBoundingClientRect: () => { reads.n++; return { left: 37, top: 52, width: 900, height: 700 }; },
+        setPointerCapture() {},
+        releasePointerCapture() {},
+      },
+      scanVertexAt: () => null,
+      pixelWorldSize: () => 0.05,
+      beforeNextDraw() {},
+      requestRender() {},
+    });
+    return vp;
+  }
+
+  it("takes the same snap at every pointer position, with a handful of layout reads instead of one per candidate", () => {
+    const reads = { n: 0 };
+    const ov = new SketchOverlay();
+    const m = mount({ overlay: ov, moreEnts: structuredClone(mixed) });
+    const vp = realProjections(reads);
+    Object.assign(m.s, { viewport: vp, tool: "line", base: null, gridSnap: true, gridCell: 5, splinePts: [], clickPts: [], lastCursor: new THREE.Vector2() });
+    delete m.s.snapAt; // mount's stand-ins: this test is about the real ones
+    delete m.s.planePoint;
+    m.s.refreshActive(); // builds the snap candidates
+    const cands = m.s.candidates as { p: THREE.Vector2 }[];
+    expect(cands.length).toBeGreaterThan(30);
+    const plane = m.s.plane as SketchPlane;
+
+    // a grid over the sketch, and every candidate approached from 8 directions
+    // at, just inside and just past the 10 px reach
+    const at: { x: number; y: number }[] = [];
+    const scr = (x: number, y: number) => vp.projectToScreen(plane.to3D(x, y));
+    for (let x = -5; x <= 85; x += 1.7) for (let y = -5; y <= 50; y += 1.3) at.push(scr(x, y));
+    for (const c of cands) {
+      const s = scr(c.p.x, c.p.y);
+      for (let k = 0; k < 8; k++) {
+        for (const r of [0, 3, 9.9, 10, 10.1]) {
+          at.push({ x: s.x + r * Math.cos((k * Math.PI) / 4), y: s.y + r * Math.sin((k * Math.PI) / 4) });
+        }
+      }
+    }
+    const marker = ov as unknown as { snapMarker: THREE.Mesh; snapMarkerMidpoint: THREE.Mesh };
+    let snapped = 0, worst = 0;
+    for (const p of at) {
+      // what a snap was before: every candidate, each through projectToScreen
+      const w = vp.screenToPlane(p.x, p.y, plane.plane) as THREE.Vector3;
+      const want = snap(plane.to2D(w), cands as never, (q) => vp.projectToScreen(plane.to3D(q.x, q.y)), 5);
+      reads.n = 0;
+      m.s.onPointerMove({ clientX: p.x, clientY: p.y, buttons: 0, button: -1, pointerId: 1, ctrlKey: false, shiftKey: false, preventDefault() {} });
+      worst = Math.max(worst, reads.n);
+      expect(m.s.lastSnapKind, `kind at ${p.x},${p.y}`).toBe(want.kind);
+      expect(m.s.lastCursor.x).toBe(want.point.x);
+      expect(m.s.lastCursor.y).toBe(want.point.y);
+      expect(m.s.lastSnapRef).toEqual(want.ref ?? null);
+      // ...and the marker the user sees sits on it
+      const shown = marker.snapMarker.visible ? marker.snapMarker : marker.snapMarkerMidpoint.visible ? marker.snapMarkerMidpoint : null;
+      if (want.kind === "free") expect(shown).toBeNull();
+      else expect(shown!.position.distanceTo(plane.to3D(want.point.x, want.point.y))).toBeLessThan(1e-9);
+      if (want.kind !== "free" && want.kind !== "grid") snapped++;
+    }
+    expect(snapped, "the table really exercises point snaps").toBeGreaterThan(cands.length * 8);
+    // RED on bca8e61: one read per candidate per move, 40+ here and 1,600 on a 400-line sketch
+    expect(worst, "layout reads per move").toBeLessThanOrEqual(8);
   });
 });

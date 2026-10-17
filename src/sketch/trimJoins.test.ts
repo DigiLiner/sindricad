@@ -318,6 +318,7 @@ describe("the tangency point shows while trimming, and snaps", () => {
         pixelWorldSize: () => 1, requestRender() {},
         screenToPlane: (x: number, y: number) => new THREE.Vector3(x, y, 0),
         projectToScreen: (w: THREE.Vector3) => ({ x: w.x, y: w.y }),
+        screenProjector() { return this.projectToScreen; }, // one projection per snap pass, as the real one
       },
       overlay: { setActiveSketch() {}, setActiveRegions() {} },
       dims: { hide() {} },

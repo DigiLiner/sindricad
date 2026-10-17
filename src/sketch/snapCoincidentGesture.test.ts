@@ -113,6 +113,7 @@ function drawing(
     viewport: {
       screenToPlane: (x: number, y: number) => new THREE.Vector3(x / PX, y / PX, 0),
       projectToScreen: (w: THREE.Vector3) => ({ x: w.x * PX, y: w.y * PX }),
+      screenProjector() { return this.projectToScreen; }, // one projection per snap pass, as the real one
       pixelWorldSize: () => 1 / PX,
       beforeNextDraw: (fn: () => void) => { frames.push(fn); },
       // no imported scan in a sketch-gesture fixture: nothing to snap onto
