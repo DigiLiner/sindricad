@@ -76,6 +76,12 @@ This file starts on 2026-08-03. For anything before that, see the
 - **Clicking a body after a fillet lights the right body.** After a fillet or chamfer
   added faces to one body, clicking or hovering that body could light up the next body
   instead.
+- **A fillet that runs into a corner an earlier fillet already rounded says which one.**
+  On the tip of a pointed part, filleting the top edges first and the tip edge afterwards
+  failed with "try a smaller value or use max_fillet()", though only about a tenth of the
+  size fits there. The message now names the earlier fillet by its step in the timeline
+  and gives the two ways that build at full size: add the edge to that fillet, or move
+  this one in front of it.
 - **Fillet and Chamfer wait for a running rebuild.** Started or reopened while the model
   was still rebuilding, they offered the old model's edges, or the blend's own edges.
   They now wait for the new model and say so.
