@@ -20,6 +20,7 @@ import {
   taPing,
 } from "../tinkeratlas/client";
 import { isImeComposing } from "./focus";
+import { mountFundingCard } from "./funding";
 
 const SHOW_KEY = "sindri.welcomeOnStartup";
 export function welcomeOnStartup(): boolean {
@@ -49,6 +50,7 @@ export interface WelcomeCallbacks {
 export class WelcomeScreen {
   private overlay: HTMLDivElement | null = null;
   private unsubAccount: (() => void) | null = null;
+  private unsubFunding: (() => void) | null = null;
   private onMessage = this.handleMessage.bind(this);
   // A recent file is being opened, which may be asking "save your changes
   // first?" on top of this screen.
@@ -82,6 +84,8 @@ export class WelcomeScreen {
     window.removeEventListener("keydown", this.onKey, true);
     this.unsubAccount?.();
     this.unsubAccount = null;
+    this.unsubFunding?.();
+    this.unsubFunding = null;
     this.overlay.remove();
     this.overlay = null;
     popModal();
@@ -215,6 +219,12 @@ export class WelcomeScreen {
       }
       left.appendChild(list);
     }
+
+    // funding card, above the account row; empty and hidden without data
+    const funding = document.createElement("div");
+    funding.className = "welcome-funding";
+    left.appendChild(funding);
+    this.unsubFunding = mountFundingCard(funding);
 
     // account row — kept live via the client's account cache
     const account = document.createElement("div");

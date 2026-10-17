@@ -30,6 +30,8 @@ export class FakeEl {
   textContent = "";
   draggable = false;
   disabled = false;
+  hidden = false;
+  tabIndex = 0;
   scrollLeft = 0;
   scrollWidth = 0;
   /** Nothing here lays out, so these stay 0 unless a test sets them. A layer
@@ -65,12 +67,22 @@ export class FakeEl {
     this.children.length = 0;
   }
 
+  /** Set by appendChild/append, so remove() can take a mounted layer down. */
+  parentNode: FakeEl | null = null;
+
   appendChild(c: FakeEl): FakeEl {
+    c.parentNode = this;
     this.children.push(c);
     return c;
   }
   append(...cs: FakeEl[]) {
+    for (const c of cs) c.parentNode = this;
     this.children.push(...cs);
+  }
+  remove() {
+    const siblings = this.parentNode?.children;
+    if (siblings?.includes(this)) siblings.splice(siblings.indexOf(this), 1);
+    this.parentNode = null;
   }
   setAttribute(name: string, value: string) {
     this.attrs[name] = value;
@@ -133,6 +145,7 @@ export class FakeEl {
 export function installFakeDocument(ids: Record<string, FakeEl> = {}): void {
   (globalThis as unknown as { document: unknown }).document = {
     createElement: (tag: string) => new FakeEl(tag),
+    createTextNode: (text: string) => Object.assign(new FakeEl("#text"), { textContent: text }),
     body: new FakeEl("body"),
     getElementById: (id: string) => ids[id] ?? null,
   };

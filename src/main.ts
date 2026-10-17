@@ -36,6 +36,8 @@ import { stickyFact, crumb, isBenignBrowserNoise } from "./diagnostics/breadcrum
 import { installAutosave, checkRecovery, clearRecovery } from "./io/recovery";
 import { installWindowCloseGuard } from "./io/windowClose";
 import { WelcomeScreen, welcomeOnStartup, warmAccount } from "./ui/welcome";
+import { FundingSupport } from "./ui/funding";
+import { startFundingUpdates } from "./tinkeratlas/funding";
 import { openSignInDialog, signOutFlow } from "./tinkeratlas/account";
 import { publishToTinkerAtlas } from "./tinkeratlas/publish";
 import { currentAccount } from "./tinkeratlas/client";
@@ -505,6 +507,10 @@ function insertPart() {
   void insertPartFromFile(store, geometry);
 }
 const spaceMouseSettings = new SpaceMouseSettings();
+// Right after the spacer, not at the row's end: the spacer is the only thing
+// that gives up width when the pill appears, so nothing else in the bar moves.
+const funding = new FundingSupport();
+document.querySelector("#titlebar .spacer")?.after(funding.pill);
 const welcome = new WelcomeScreen({
   onNew: () => void newDocument(),
   onOpen: () => void openDoc(),
@@ -606,6 +612,7 @@ const menubar = new Menubar(document.getElementById("menubar")!, [
       // nothing in the app linked to either, so Help offered no help at all.
       { label: t("menu.help.tutorials", { count: 8 }), onClick: () => void openHelp(TUTORIALS_URL) },
       { label: t("menu.help.guide"), onClick: () => void openHelp(GUIDE_URL) },
+      { label: t("menu.help.support"), onClick: () => funding.openPanel() },
       { separator: true, label: "" },
       { label: t("menu.help.checkUpdates"), onClick: () => void checkForUpdates(true) },
       { label: t("menu.help.about"), onClick: () => void showAbout() },
@@ -616,6 +623,8 @@ const menubar = new Menubar(document.getElementById("menubar")!, [
 // warm the TinkerAtlas identity cache from disk (offline-safe), then show the
 // welcome screen unless the user turned it off (its footer checkbox).
 void warmAccount();
+// before the welcome screen, so its card shows the cached goal straight away
+startFundingUpdates();
 if (welcomeOnStartup()) welcome.open();
 scheduleStartupUpdateCheck();
 

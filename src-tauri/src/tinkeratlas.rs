@@ -535,6 +535,80 @@ fn avatar_url_allowed(url: &str) -> bool {
             .unwrap_or(false)
 }
 
+// --- funding goal -------------------------------------------------------------------
+//
+// The shared TinkerAtlas monthly running-costs goal (servers and dev tools for
+// SindriCAD, BrokkrSculpt and TinkerAtlas), shown as a status-bar pill and a
+// welcome-screen card. A public endpoint: the request carries no token, no
+// device id and no User-Agent beyond reqwest's (it sends none by default).
+// Only the four numbers the UI draws come back; the server's English
+// `status_message` is deliberately dropped, the UI words its own line.
+
+/// Anything above this is not a monthly running-costs figure; it is a broken or
+/// hostile response, and drawing it would only look like garbage.
+const MAX_FUNDING_AMOUNT: f64 = 10_000_000.0;
+const MAX_FUNDING_BODY_BYTES: usize = 256 * 1024;
+
+#[derive(Serialize, Clone, Debug, PartialEq)]
+pub struct FundingGoal {
+    pub goal: f64,
+    pub current: f64,
+    pub percentage: f64,
+    pub reset_day: u8,
+}
+
+/// Validate the endpoint's JSON. None for anything the UI should not draw: a
+/// `success` other than true, a missing or non-numeric field, a non-positive
+/// goal, a negative or absurd amount, a reset day outside 1..=31. The server's
+/// percentage is kept when it is a finite number (clamped to 0..=100, so the
+/// pill agrees with the website), else derived; it is held at 99 while the goal
+/// is not met so a 99.6% month never reads as "100%".
+fn parse_funding(body: &serde_json::Value) -> Option<FundingGoal> {
+    if !body.get("success")?.as_bool()? {
+        return None;
+    }
+    let data = body.get("data")?;
+    let amount = |key: &str| {
+        let v = data.get(key)?.as_f64()?;
+        (v.is_finite() && (0.0..=MAX_FUNDING_AMOUNT).contains(&v)).then_some(v)
+    };
+    let goal = amount("goal_amount")?;
+    let current = amount("current_amount")?;
+    if goal <= 0.0 {
+        return None;
+    }
+    let reset_day = data.get("reset_day")?.as_u64()?;
+    if !(1..=31).contains(&reset_day) {
+        return None;
+    }
+    let percentage = match data.get("percentage").and_then(|v| v.as_f64()) {
+        Some(p) if p.is_finite() => p.clamp(0.0, 100.0).round(),
+        _ => (current / goal * 100.0).clamp(0.0, 100.0).round(),
+    };
+    let percentage = if current < goal { percentage.min(99.0) } else { 100.0 };
+    Some(FundingGoal { goal, current, percentage, reset_day: reset_day as u8 })
+}
+
+/// The current monthly goal, or None when it can't be had (offline, a non-2xx,
+/// an oversized or malformed body). Never an error: the UI keeps its cached
+/// value or hides itself, and a toast about a funding bar would be nagging.
+#[tauri::command]
+pub async fn ta_funding_goal() -> Option<FundingGoal> {
+    let client = http(Duration::from_secs(10)).ok()?;
+    let resp = client.get(format!("{BASE}/api/support/current-goal")).send().await.ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    if resp.content_length().is_some_and(|n| n > MAX_FUNDING_BODY_BYTES as u64) {
+        return None;
+    }
+    let bytes = resp.bytes().await.ok()?;
+    if bytes.len() > MAX_FUNDING_BODY_BYTES {
+        return None;
+    }
+    parse_funding(&serde_json::from_slice(&bytes).ok()?)
+}
+
 // --- bug reports ------------------------------------------------------------------
 //
 // In-app bug reporter: assembles a scrubbed diagnostic payload (description,
@@ -1216,6 +1290,86 @@ mod tests {
             "/sindricad/authorize%3Fport%3D1234%26state%3Dab"
         );
         assert_eq!(encode_query_value("plain/path"), "plain/path");
+    }
+
+    fn funding(data: serde_json::Value) -> Option<FundingGoal> {
+        parse_funding(&serde_json::json!({ "success": true, "data": data }))
+    }
+
+    #[test]
+    fn funding_keeps_only_the_numbers() {
+        // the live shape, 2026-10-17, trimmed of milestones
+        let body = serde_json::json!({
+            "success": true,
+            "data": {
+                "goal_amount": 335, "current_amount": 147, "percentage": 44, "reset_day": 20,
+                "month": 10, "year": 2026,
+                "status_message": "$188 still needed to cover this month's running costs.",
+                "urgency_level": "warning", "milestones": []
+            }
+        });
+        assert_eq!(
+            parse_funding(&body),
+            Some(FundingGoal { goal: 335.0, current: 147.0, percentage: 44.0, reset_day: 20 })
+        );
+        // the wire form the webview reads: four numbers, no strings at all
+        let wire = serde_json::to_value(parse_funding(&body).unwrap()).unwrap();
+        let keys: Vec<&str> = wire.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        assert_eq!(keys.len(), 4);
+        assert!(wire.as_object().unwrap().values().all(|v| v.is_number()));
+    }
+
+    #[test]
+    fn funding_refuses_what_it_should_not_draw() {
+        let ok = serde_json::json!({ "goal_amount": 335, "current_amount": 147, "percentage": 44, "reset_day": 20 });
+        let with = |key: &str, v: serde_json::Value| {
+            let mut d = ok.clone();
+            d[key] = v;
+            funding(d)
+        };
+        let without = |key: &str| {
+            let mut d = ok.clone();
+            d.as_object_mut().unwrap().remove(key);
+            funding(d)
+        };
+        assert!(funding(ok.clone()).is_some());
+        assert!(parse_funding(&serde_json::json!({ "success": false, "data": ok.clone() })).is_none());
+        assert!(parse_funding(&serde_json::json!({ "data": ok.clone() })).is_none());
+        assert!(parse_funding(&serde_json::json!({ "success": true })).is_none());
+        assert!(parse_funding(&serde_json::json!([1, 2, 3])).is_none());
+        assert!(without("goal_amount").is_none());
+        assert!(without("current_amount").is_none());
+        assert!(without("reset_day").is_none());
+        assert!(with("goal_amount", serde_json::json!(0)).is_none());
+        assert!(with("goal_amount", serde_json::json!(-5)).is_none());
+        assert!(with("goal_amount", serde_json::json!("335")).is_none());
+        assert!(with("goal_amount", serde_json::json!(1e12)).is_none());
+        assert!(with("current_amount", serde_json::json!(-1)).is_none());
+        assert!(with("current_amount", serde_json::json!(null)).is_none());
+        assert!(with("reset_day", serde_json::json!(0)).is_none());
+        assert!(with("reset_day", serde_json::json!(32)).is_none());
+        assert!(with("reset_day", serde_json::json!(20.5)).is_none());
+        assert!(with("reset_day", serde_json::json!(-20)).is_none());
+        // NaN and Infinity are not JSON; serde_json refuses them before parse_funding
+        assert!(serde_json::from_slice::<serde_json::Value>(b"{\"goal_amount\": NaN}").is_err());
+    }
+
+    #[test]
+    fn funding_percentage_is_clamped_and_honest() {
+        let pct = |current: f64, percentage: serde_json::Value| {
+            funding(serde_json::json!({
+                "goal_amount": 100, "current_amount": current, "percentage": percentage, "reset_day": 1
+            }))
+            .unwrap()
+            .percentage
+        };
+        assert_eq!(pct(50.0, serde_json::json!(250)), 99.0); // over 100 while unfunded
+        assert_eq!(pct(50.0, serde_json::json!(-3)), 0.0);
+        assert_eq!(pct(50.0, serde_json::json!("44")), 50.0); // not a number: derived
+        assert_eq!(pct(50.0, serde_json::json!(null)), 50.0);
+        assert_eq!(pct(99.6, serde_json::json!(99.6)), 99.0); // never "100%" short of the goal
+        assert_eq!(pct(100.0, serde_json::json!(98)), 100.0); // met is met
+        assert_eq!(pct(180.0, serde_json::json!(180)), 100.0);
     }
 
     #[test]

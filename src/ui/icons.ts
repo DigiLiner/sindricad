@@ -203,6 +203,8 @@ const PATHS = {
   warning: `<path d="M12 3.8L21.2 20H2.8z"/><line x1="12" y1="10" x2="12" y2="14.4"/><circle cx="12" cy="17.3" r="1.1" fill="currentColor"/>`,
   bug: `<path d="M7 11a5 5 0 0 1 10 0v3a5 5 0 0 1-10 0z" fill="none"/><path d="M9 6.8a3 3 0 0 1 6 0"/><path d="M2.5 12H7M17 12h4.5M3.5 7l3 2M20.5 7l-3 2M3.5 18l3-2M20.5 18l-3-2"/>`,
   randomize: `<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="8.4" cy="8.4" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="15.6" cy="15.6" r="1.5" fill="currentColor"/>`,
+  // the funding pill: two semicircle lobes over a point
+  heart: `<path d="M12 20.2l-7.1-7.3a4.6 4.6 0 0 1 6.5-6.5l.6.6.6-.6a4.6 4.6 0 0 1 6.5 6.5z"/>`,
 };
 
 /**

@@ -1057,6 +1057,124 @@ body {
   box-shadow: 0 0 8px rgba(255, 92, 92, 0.55);
 }
 
+/* ---- funding pill (ui/funding.ts) ----
+   The same pill family as .status, quieter: a heart and "Funding 44%". It sits
+   right after the spacer, so appearing only shrinks the spacer. Display is set
+   on the visible state only: a bare `display` here would beat the [hidden]
+   attribute and the pill would show with no data. */
+.funding-pill:not([hidden]) {
+  display: inline-flex;
+}
+.funding-pill {
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--text-dim);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  padding: 3px 11px 3px 8px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.funding-pill:hover,
+.funding-pill[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--line-hover);
+}
+.funding-pill svg {
+  color: var(--accent);
+}
+
+/* the panel the pill (and Help > Support SindriCAD) opens: anchored, not modal */
+.funding-panel {
+  position: fixed;
+  top: 42px;
+  right: var(--s-4);
+  z-index: 2000; /* the menus' band: over the viewport overlays, under modals */
+  width: 300px;
+  max-width: calc(100vw - 24px);
+  padding: var(--s-5);
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-3);
+}
+.funding-panel:focus {
+  outline: none;
+}
+.funding-title {
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.funding-bar {
+  height: 8px;
+  border-radius: var(--r-pill);
+  background: var(--raised);
+  overflow: hidden;
+}
+.funding-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+.funding-bar.funded .funding-bar-fill {
+  background: var(--ok);
+}
+.funding-amounts {
+  margin: 8px 0 2px;
+  font-size: 12px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.funding-status {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.funding-status.funded {
+  color: var(--ok-text);
+}
+.funding-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--warn);
+}
+.funding-links {
+  display: flex;
+  gap: var(--s-2);
+  margin-top: 12px;
+}
+.funding-links .choice-btn {
+  padding: 7px 6px;
+  min-width: 0;
+}
+.funding-hide {
+  display: block;
+  margin: 10px 0 0 auto;
+  padding: 0;
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--text-mute);
+  cursor: pointer;
+}
+.funding-hide:hover {
+  color: var(--text-dim);
+  text-decoration: underline;
+}
+
 /* ============================================================================
    MAIN — browser | viewport | inspector
    ============================================================================ */
@@ -3108,6 +3226,15 @@ button.finish:hover {
   padding-top: 10px;
   border-top: 1px solid var(--line);
 }
+/* the funding card takes over the push to the bottom, so the two stay together */
+.welcome-funding {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.welcome-funding:not([hidden]) + .welcome-account {
+  margin-top: 10px;
+}
 .welcome-account .choice-btn {
   width: 100%;
 }
@@ -3302,6 +3429,10 @@ button.finish:hover {
 .tl-btn svg { width: 15px; height: 15px; display: block; flex: none; }
 .timeline-errbadge { display: inline-flex; align-items: center; gap: 4px; }
 .timeline-errbadge svg { width: 13px; height: 13px; display: block; flex: none; }
+
+/* funding pill and its warning line */
+.funding-pill svg { width: 13px; height: 13px; display: block; flex: none; }
+.funding-warning svg { width: 14px; height: 14px; display: block; flex: none; margin-top: 1px; }
 
 /* window chrome */
 .tb-btn { display: inline-flex; align-items: center; justify-content: center; }

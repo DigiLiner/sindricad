@@ -318,6 +318,7 @@ pub fn run() {
         tinkeratlas::ta_publish,
         tinkeratlas::ta_avatar,
         tinkeratlas::ta_bug_report,
+        tinkeratlas::ta_funding_goal,
         spacemouse::spacemouse_inventory
     ]);
     #[cfg(not(feature = "rust-geom"))]
@@ -360,6 +361,7 @@ pub fn run() {
         tinkeratlas::ta_publish,
         tinkeratlas::ta_avatar,
         tinkeratlas::ta_bug_report,
+        tinkeratlas::ta_funding_goal,
         spacemouse::spacemouse_inventory
     ]);
 

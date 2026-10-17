@@ -1016,6 +1016,18 @@
     },
     "workaroundNote": "The first draws in software on the CPU. It is slower on large models, but it works where the driver does not. The second turns off the webview's shared-buffer path, which some drivers do not implement correctly."
   },
+  "funding": {
+    "title": "Keep SindriCAD in development",
+    "barLabel": "Funding this month",
+    "amounts": "{current} of {goal} this month",
+    "needed": "{amount} still needed this month.",
+    "funded": "This month is covered. Thank you!",
+    "pauseWarning": "If this month isn't covered, SindriCAD development pauses next month.",
+    "pill": "Funding {percent}",
+    "pillFunded": "Funded",
+    "hidePill": "Hide from the status bar",
+    "showPill": "Show in the status bar"
+  },
   "help": {
     "openFailed": "Couldn't open a browser. The page is {url}"
   },
@@ -1197,6 +1209,7 @@
       "checkUpdates": "Check for Updates…",
       "customizeShortcuts": "Customize Shortcuts…",
       "guide": "Guide on GitHub",
+      "support": "Support SindriCAD",
       "shortcuts": "Keyboard Shortcuts",
       "title": "Help",
       "tutorials": "Tutorial Videos ({count})"

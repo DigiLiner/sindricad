@@ -1083,6 +1083,16 @@ jobs:
           SC_CHROME: /usr/bin/google-chrome
         run: node e2e/unsaved_changes_guard_e2e.cjs
 
+      # The funding pill only exists under Tauri, so the same kind of fake IPC
+      # floor answers the goal; what it checks is layout and focus a unit test
+      # cannot: the pill appearing moves nothing else in the title bar, the panel
+      # hangs under it, Escape hands focus back, every button reaches the opener.
+      - name: Funding pill end-to-end
+        env:
+          SC_TOKEN: citoken
+          SC_CHROME: /usr/bin/google-chrome
+        run: node e2e/funding_pill_e2e.cjs
+
       - name: Sidecar log on failure
         if: failure()
         run: tail -50 /tmp/ci_sidecar.log /tmp/ci_vite.log || true

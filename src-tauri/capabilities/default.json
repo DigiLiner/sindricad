@@ -21,7 +21,9 @@
         { "url": "http://localhost:3000/*" },
         { "url": "https://github.com/MakerViking/sindricad/releases/*" },
         { "url": "https://github.com/MakerViking/sindricad#readme" },
-        { "url": "https://www.youtube.com/playlist*list=PLS7xEtXRFd1A" }
+        { "url": "https://www.youtube.com/playlist*list=PLS7xEtXRFd1A" },
+        { "url": "https://paypal.me/makerviking" },
+        { "url": "https://ko-fi.com/tinkeratlas" }
       ]
     },
     "fs:allow-read-text-file",
