@@ -124,16 +124,19 @@ jobs:
           # Function-constructor sink. Appended to the existing LINK_FLAGS so the
           # Release flags upstream sets are untouched.
           #
-          # -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=256MB (2026-10-17): the
+          # -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=128MB (2026-10-17): the
           # published build has a FIXED 16 MB heap (min = max = 256 pages), and
           # planegcs's diagnosis builds dense constraints x params matrices, so
           # one connected sketch part of roughly 280+ dimensioned lines aborted
-          # with "Aborted(OOM)". 256 MB caps a runaway part instead of letting
-          # it take the webview down. Evidence: .fable/planegcs-oom in the
-          # maintainer's notes, and src/sketch/solverHeap.test.ts.
-          sed -i 's/-s STACK_SIZE=5MB"/-s STACK_SIZE=5MB -s DYNAMIC_EXECUTION=0 -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=256MB"/' CMakeLists.txt
+          # with "Aborted(OOM)". The heap now grows, and the 128 MB cap stops a
+          # runaway part instead of letting it take the webview down. Not 256
+          # MB (the first build that day): a connected part of ~1000 lines
+          # already takes ~5 s on the main thread, and the extra 128 MB only
+          # admitted parts that took 5-19 s. Evidence: .fable/planegcs-oom in
+          # the maintainer's notes, and src/sketch/solverHeap.test.ts.
+          sed -i 's/-s STACK_SIZE=5MB"/-s STACK_SIZE=5MB -s DYNAMIC_EXECUTION=0 -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=128MB"/' CMakeLists.txt
           grep -n "DYNAMIC_EXECUTION" CMakeLists.txt
-          grep -q "ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=256MB" CMakeLists.txt
+          grep -q "ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=128MB" CMakeLists.txt
           rm -rf CMakeCache.txt CMakeFiles bin
           emcmake cmake . -DCMAKE_BUILD_TYPE=Release
           emmake make -j 1   # -j1: see the determinism note above
@@ -188,12 +191,12 @@ jobs:
           ls -l control.planegcs.js patched.planegcs.js
           sha256sum control.planegcs.js patched.planegcs.js control.planegcs.wasm > /out/SHA256SUMS.txt
           {
-            echo "planegcs glue built with -s DYNAMIC_EXECUTION=0 -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=256MB"
+            echo "planegcs glue built with -s DYNAMIC_EXECUTION=0 -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=128MB"
             echo
             echo "source:    https://github.com/Salusoft89/planegcs"
             echo "commit:    ${{ github.event.inputs.ref || env.DEFAULT_REF }}"
             echo "toolchain: emscripten/emsdk:3.1.45 (upstream's own builder base)"
-            echo "patch:     -s DYNAMIC_EXECUTION=0 -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=256MB appended to LINK_FLAGS in planegcs/CMakeLists.txt"
+            echo "patch:     -s DYNAMIC_EXECUTION=0 -s ALLOW_MEMORY_GROWTH=1 -s MAXIMUM_MEMORY=128MB appended to LINK_FLAGS in planegcs/CMakeLists.txt"
             echo "run:       ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             echo
             echo "The unpatched control build reproduced the published 1.1.7 planegcs.js"
