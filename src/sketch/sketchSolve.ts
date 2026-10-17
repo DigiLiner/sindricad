@@ -121,7 +121,7 @@ const SEED_TRIES = 24;
 /** Most anchors a mover bias may allocate before it gives up and solves free.
  *  Each anchor is a fixed helper point plus a temporary coincidence in the
  *  planegcs wasm heap, and an exhausted heap answers with `Aborted(OOM)` — a
- *  throw that cannot be recovered from once made (see the cap's own note). The
+ *  throw that loses the whole solve (see the cap's own note). The
  *  measured cliff is ~400 in a fresh worker and ~300 once a session has been
  *  running; this leaves room for the pressure to move. The body drag's pins
  *  are anchors too, and a dragged selection holds its pin count to this same
@@ -1272,8 +1272,7 @@ async function compileAndSolveOnce(
     // WHICH points this solve could move at all. Everything else is anchored for
     // nothing, and "for nothing" is not free: each anchor is a fixed helper point
     // plus a temporary coincidence, and planegcs's wasm heap ABORTS (OOM, a throw
-    // that escapes to sketchMode's pump() and kills constraint solving for the
-    // rest of the session) somewhere past a few hundred of them. Measured before
+    // that loses the solve) somewhere past a few hundred of them. Measured before
     // this scoping: 300 lines + a rectangle + a circle — 605 points — solved free
     // in 35 ms and threw Aborted(OOM) the moment a dimension was placed on it.
     // The cliff is memory PRESSURE, not a bound, so it moves with how long the
@@ -1448,14 +1447,14 @@ async function compileAndSolveOnce(
   // O(connected component). Measured on that shape, anchoring aborts the wasm
   // heap somewhere past a few hundred anchors.
   //
-  // The abort CANNOT be recovered from downstream, which is what makes a cap the
-  // fix rather than a nicety: the failed biased pass has already taken the heap,
-  // so the free retry beneath it aborts too and the throw reaches pump(), which
-  // reads it as a dead solver and turns constraint solving off for the rest of
-  // the sketch session. The retry's own comment reasoned that at that size "the
-  // free solve has no heap either" — but the free solve of the same model run
-  // FIRST succeeds, so the model is fine and it is the abandoned attempt that
-  // poisons it. Do not allocate what cannot be paid for.
+  // The abort used to be unrecoverable downstream, which made a cap the fix
+  // rather than a nicety: an abort unwinds the C++ without freeing anything, so
+  // the failed biased pass kept its heap, the free retry beneath it aborted too
+  // and pump() turned constraint solving off for the rest of the sketch session.
+  // The free solve of the same model run FIRST succeeds, so the model is fine
+  // and it is the abandoned attempt that poisons it. solver.ts now drops an
+  // aborted module, so the retry gets a fresh heap, but an abort still costs a
+  // whole solve plus a module start. Do not allocate what cannot be paid for.
   //
   // Dropping the bias is the honest degradation: it restores exactly today's
   // free solve, which is the "never worse than before" bar this whole change is
@@ -2316,11 +2315,11 @@ async function compileAndSolveOnce(
   // solve_system. Scoping the anchors to what the solve can reach is what keeps
   // that off the routine path, but the cliff is memory PRESSURE and moves with
   // how long the session has run, so it cannot be ruled out by counting. A throw
-  // here escapes to sketchMode's pump(), which reads it as a dead solver and
-  // turns constraint solving off for the whole sketch session — so the bias must
-  // swallow its own: an abort is one more reason to fall back to today's free
-  // solve, not a reason to lose the solver. A throw from the FREE solve is left
-  // alone; that one IS a dead solver, and the retry below rethrows it.
+  // here would lose the whole pass, so the bias must swallow its own: an abort
+  // is one more reason to fall back to today's free solve (on a fresh module,
+  // solver.ts drops the one that aborted). A throw from the FREE solve is left
+  // alone; that one means the sketch itself is too big or the solver is gone,
+  // and the retry below rethrows it.
   //
   // Measured, on a fan of N lines all `parallel` to the one a circle is
   // dimensioned from (2N+1 reachable points over N constraints — the shape where

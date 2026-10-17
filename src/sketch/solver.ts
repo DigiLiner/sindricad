@@ -156,7 +156,7 @@ export interface SolveResult {
 type PlanegcsModule = Awaited<ReturnType<typeof init_planegcs_module>>;
 
 // The WASM module is instantiated once per app lifetime (that is the expensive
-// part). The GcsSystem inside it is NOT shared: every solve gets a fresh one
+// part), and again only after a solve aborted it (solveSystem). The GcsSystem inside it is NOT shared: every solve gets a fresh one
 // and deletes it afterwards. A shared system inherited state between solves
 // even across clear_data() — src/sketch/solveReproducibility.test.ts, now
 // deleted, pinned that an identical sketch solved twice in a row came back
@@ -239,13 +239,191 @@ export async function initSolver(): Promise<boolean> {
   }
 }
 
-export async function solveSketch(input: SolveInput): Promise<SolveResult> {
+/** planegcs ran out of heap on one solve: a connected part of the sketch is too
+ *  big for it to diagnose (see SYSTEM_BUDGET). Not a dead solver. The module
+ *  that aborted is dropped, and the next solve starts on a fresh one. */
+export class SolverOutOfMemory extends Error {
+  constructor(readonly cause: unknown) {
+    super(t("sketch.solver.tooLarge"));
+    this.name = "SolverOutOfMemory";
+  }
+}
+
+/** Most dense-Jacobian entries (constraint rows by free parameters) one planegcs
+ *  system is handed.
+ *
+ *  The wasm heap is FIXED at 16 MB, 5 MB of it stack (the published build sets
+ *  no ALLOW_MEMORY_GROWTH), and every solve first diagnoses the WHOLE system it
+ *  was given with dense matrices of that size, several copies at once. So its
+ *  memory grows with the square of the system: measured at about 20 bytes per
+ *  entry, it aborts with Aborted(OOM) somewhere past half a million entries.
+ *  Between 110 and 120 dimensioned rectangles reach that, and the GH #17
+ *  probe's 350 rectangles, circles and arcs did. That is the system planegcs is
+ *  handed, though, not the problem: parts of a sketch that share no free
+ *  parameter are independent, and planegcs's own solve already treats them one
+ *  by one. Grouped into systems of at most this many entries they cost a few
+ *  MB however large the sketch, and only one connected part too big on its own
+ *  can still run out.
+ *
+ *  A sketch under the budget is one system, exactly as before. */
+const SYSTEM_BUDGET = 100_000;
+
+/** `budget` is for tests: Infinity hands planegcs the whole sketch as one
+ *  system, the answer the split must reproduce. */
+export async function solveSketch(input: SolveInput, budget = SYSTEM_BUDGET): Promise<SolveResult> {
+  const systems = splitSystems(input, budget);
+  if (systems.length === 1) return solveSystem(input);
+  const out: SolveResult = {
+    points: {}, circles: {}, arcs: {}, dof: 0, ok: true, conflicts: [], redundant: [], partiallyRedundant: [],
+  };
+  const dofs: number[] = [];
+  for (const system of systems) {
+    const r = await solveSystem(system);
+    Object.assign(out.points, r.points);
+    Object.assign(out.circles, r.circles);
+    Object.assign(out.arcs, r.arcs);
+    dofs.push(r.dof);
+    out.ok &&= r.ok;
+    out.conflicts.push(...r.conflicts);
+    out.redundant.push(...r.redundant);
+    out.partiallyRedundant.push(...r.partiallyRedundant);
+  }
+  // planegcs reports an over-constrained system's dof as NEGATIVE (parameters
+  // minus independent constraints), but only when the system it was handed is
+  // fully constrained as a whole; otherwise it is parameters minus rank, where
+  // that system counts 0. Summed as is, a sketch with one conflicting part read
+  // dof 3 where the same sketch solved as one system reads 4.
+  const free = dofs.some((d) => d > 0);
+  out.dof = dofs.reduce((sum, d) => sum + (free ? Math.max(d, 0) : d), 0);
+  return out;
+}
+
+async function solveSystem(input: SolveInput): Promise<SolveResult> {
   const w = await freshWrapper();
+  let aborted = false;
   try {
     return solveWith(w, input);
+  } catch (err) {
+    // An emscripten abort unwinds the C++ without running a destructor, so the
+    // heap keeps everything that solve had allocated: measured, a 200-line
+    // staircase that a fresh module solves in 4 MB runs out on the module a
+    // bigger one aborted. Never solve on that module again.
+    if (err instanceof WebAssembly.RuntimeError) {
+      aborted = true;
+      modulePromise = null;
+      if (err.message.includes("OOM")) throw new SolverOutOfMemory(err);
+    }
+    throw err;
   } finally {
-    w.destroy_gcs_module();
+    if (!aborted) w.destroy_gcs_module();
   }
+}
+
+/** The primitive ids a constraint names: every string field but its own id and type. */
+const operands = (c: SConstraint): string[] =>
+  Object.entries(c).flatMap(([k, v]) => (k !== "id" && k !== "type" && typeof v === "string" ? [v] : []));
+
+/** `input` cut into systems that share no free parameter, each under `budget`
+ *  (see SYSTEM_BUDGET), in input order within each. A single system is
+ *  returned as `[input]` itself.
+ *
+ *  A fixed point, or a line between two, has no parameter, so it couples
+ *  nothing: it is copied into every system that names it, which keeps a sketch
+ *  pinned to the origin in many places from being one part. What names only
+ *  such things (a fixed point nothing uses, a constraint between two of them)
+ *  goes with the first system, where planegcs sees it as it always has. */
+function splitSystems(input: SolveInput, budget: number): SolveInput[] {
+  const fixed = new Set(input.points.filter((p) => p.fixed).map((p) => p.id));
+  const shared = new Set(fixed);
+  for (const l of input.lines) if (fixed.has(l.p1) && fixed.has(l.p2)) shared.add(l.id);
+
+  const parent = new Map<string, string>();
+  const find = (id: string): string => {
+    let root = id;
+    while (parent.has(root)) root = parent.get(root)!;
+    for (let x = id; x !== root;) {
+      const next = parent.get(x)!;
+      parent.set(x, root);
+      x = next;
+    }
+    return root;
+  };
+  /** Joins the free ids among `ids`; one of them, or null if all are shared. */
+  const join = (ids: string[]): string | null => {
+    const free = ids.filter((id) => !shared.has(id));
+    for (const id of free.slice(1)) {
+      const a = find(free[0]!), b = find(id);
+      if (a !== b) parent.set(b, a);
+    }
+    return free[0] ?? null;
+  };
+  for (const l of input.lines) join([l.id, l.p1, l.p2]);
+  for (const c of input.circles) join([c.id, c.center]);
+  const arcs = input.arcs ?? [];
+  for (const a of arcs) join([a.id, a.center, a.start, a.end]);
+  const consAt = input.constraints.map((c) => join(operands(c)));
+
+  // each part's size: free parameters, and rows (arc_rules is two per arc)
+  const size = new Map<string, { rows: number; cols: number }>();
+  const grow = (member: string | null, rows: number, cols: number) => {
+    if (member === null || shared.has(member)) return;
+    const root = find(member);
+    const s = size.get(root) ?? { rows: 0, cols: 0 };
+    s.rows += rows;
+    s.cols += cols;
+    size.set(root, s);
+  };
+  for (const p of input.points) grow(p.id, 0, 2);
+  for (const c of input.circles) grow(c.id, 0, 1);
+  for (const a of arcs) grow(a.id, 2, 3);
+  consAt.forEach((m) => grow(m, 1, 0));
+
+  // parts in first-appearance order, packed greedily
+  const systemOf = new Map<string, number>();
+  let n = 0, rows = 0, cols = 0;
+  for (const [root, s] of size) {
+    if (rows + cols > 0 && (rows + s.rows) * (cols + s.cols) > budget) {
+      n++;
+      rows = cols = 0;
+    }
+    systemOf.set(root, n);
+    rows += s.rows;
+    cols += s.cols;
+  }
+  if (n === 0) return [input];
+
+  const systems = Array.from({ length: n + 1 }, () => new Set<string>());
+  const at = (member: string | null) => (member === null || shared.has(member) ? 0 : systemOf.get(find(member)) ?? 0);
+  /** `member`'s system, which also takes the shared ids among `named` */
+  const place = (member: string | null, named: string[]) => {
+    const i = at(member);
+    for (const id of named) if (shared.has(id)) systems[i]!.add(id);
+    return i;
+  };
+  for (const l of input.lines) place(l.id, [l.id, l.p1, l.p2]);
+  for (const c of input.circles) place(c.id, [c.center]);
+  for (const a of arcs) place(a.id, [a.center, a.start, a.end]);
+  const consIn = input.constraints.map((c, k) => place(consAt[k] ?? null, operands(c)));
+  const dragIn = input.drag ? place(join([input.drag.point]), [input.drag.point]) : -1;
+  const anchorsIn = (input.anchors ?? []).map((a) => place(join([a.point]), [a.point]));
+  // a shared line's own points, and whatever shared thing nothing named
+  for (const set of systems) for (const l of input.lines) if (set.has(l.id)) set.add(l.p1).add(l.p2);
+  for (const id of shared) if (!systems.some((set) => set.has(id))) systems[0]!.add(id);
+
+  const inSystem = (i: number) => (id: string) => (shared.has(id) ? systems[i]!.has(id) : at(id) === i);
+  return systems.map((_, i) => {
+    const has = inSystem(i);
+    return {
+      points: input.points.filter((p) => has(p.id)),
+      lines: input.lines.filter((l) => has(l.id)),
+      circles: input.circles.filter((c) => has(c.id)),
+      arcs: arcs.filter((a) => has(a.id)),
+      constraints: input.constraints.filter((_, k) => consIn[k] === i),
+      ...(dragIn === i ? { drag: input.drag } : {}),
+      anchors: (input.anchors ?? []).filter((_, k) => anchorsIn[k] === i),
+      radiusAnchors: (input.radiusAnchors ?? []).filter((a) => has(a.id)),
+    };
+  });
 }
 
 function solveWith(w: GcsWrapper, input: SolveInput): SolveResult {

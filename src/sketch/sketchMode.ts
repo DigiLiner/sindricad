@@ -37,7 +37,7 @@ import type { RegionCarry, SketchBinding } from "../document/store";
 import { composePointCarry, polygonSidesCarry, type PointCarry } from "../document/pointCarry";
 import { advanceCenterArcSweep, centerArcEntity, circumcenter } from "./arc";
 import { coincKey, compileAndSolve, constraintIndexOf, soleDimEntity, MAX_BIAS_ANCHORS, type FixPositions, type MoverBias } from "./sketchSolve";
-import { SolverUnavailable } from "./solver";
+import { SolverOutOfMemory, SolverUnavailable } from "./solver";
 import { dragCluster } from "./dragCluster";
 import { p2lSideFlipped, refreshStep, refreshSteps } from "../document/projectionWalk";
 import { resolveRealEntities, toSketchEntity } from "./resolve";
@@ -490,6 +490,7 @@ export class SketchMode {
   // than letting every stroke raise the same unhandled rejection
   private solverDead = false;
   private solverDeadToast = false;
+  private solverTooLargeToast = false; // said once: a solve ran out of the solver's heap
   private directDimToast = false; // said once: dims are being written straight to geometry
   private solveDirty = false; // a constraint/dimension solve is pending
   /** Projection refresh entries waiting to be walked in (see
@@ -7448,7 +7449,19 @@ export class SketchMode {
       // wrong" on EVERY stroke. Say what is actually unavailable, once, and
       // stop asking — the geometry is still perfectly usable unconstrained.
       console.error("sketch solve failed:", err);
-      this.solverDead = true;
+      // A part of the sketch too big for one solve is NOT a dead solver:
+      // solver.ts dropped the module that ran out of heap, so the next solve
+      // starts on a fresh one, and a point drag, which solves only its own
+      // cluster, still fits. Only this pass is lost. Turning the solver off
+      // here, as it once was, stopped every drag for the rest of the session.
+      const tooLarge = err instanceof SolverOutOfMemory;
+      if (tooLarge) {
+        this.solveDirty = false;
+        this.pendingDrag = null;
+        this.pendingPinIdxs = null;
+      } else {
+        this.solverDead = true;
+      }
       this.lastDof = -1;
       this.conflict = false;
       // a projection refresh still lands, unsolved, the way it lands in a
@@ -7459,10 +7472,11 @@ export class SketchMode {
         this.entities = this.entities.map((e) =>
           e.type === "projected" && refresh.has(e.id) ? applyProjectionUpdate(e, refresh.get(e.id)!) : e);
       }
-      if (!this.solverDeadToast) {
-        this.solverDeadToast = true;
+      if (tooLarge ? !this.solverTooLargeToast : !this.solverDeadToast) {
+        if (tooLarge) this.solverTooLargeToast = true;
+        else this.solverDeadToast = true;
         toast(
-          err instanceof SolverUnavailable
+          err instanceof SolverUnavailable || tooLarge
             ? err.message
             : t("sketch.solver.stopped"),
           { kind: "error", timeout: 12000 },
@@ -7470,7 +7484,10 @@ export class SketchMode {
       }
       // The dimension that was in flight when the solver died still has to
       // land, or the very first one a user types is the one that vanishes.
-      this.applyDrivingDimsDirectly();
+      // Not for a part too big to solve: its dimensions stay constraints that
+      // the next solve can still meet, and written one entity at a time into a
+      // connected part they would pull it apart.
+      if (!tooLarge) this.applyDrivingDimsDirectly();
       this.refreshActive();
     } finally {
       this.solveBusy = false;

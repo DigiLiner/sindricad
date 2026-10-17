@@ -1993,7 +1993,8 @@
     "solver": {
       "cspBlocked": "The 2D constraint solver could not start: this build's security policy blocks the code it needs to initialise. That is a bug in SindriCAD, not a problem with your system, so updating your webview or graphics drivers will not help. Sketching still works, but without constraints, dimensions or point dragging.",
       "failed": "The 2D constraint solver could not start: {detail}",
-      "stopped": "The 2D constraint solver stopped responding — sketching continues without constraints"
+      "stopped": "The 2D constraint solver stopped responding — sketching continues without constraints",
+      "tooLarge": "This sketch has a connected part too big for the constraint solver to solve in one go, so its constraints were not applied this time. Your drawing is kept and you can keep editing: I try again after every change, and dragging a point still solves the shapes around it. Moving part of that drawing into a second sketch keeps every solve within reach."
     },
     "text": {
       "align": {
