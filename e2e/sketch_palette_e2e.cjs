@@ -350,7 +350,12 @@ const S2 = Math.SQRT1_2;
   const oldPx = Math.hypot(old.x - 100, old.y) * pxPerMm;
   check("precondition: the old spot is well clear of the joint at this zoom", oldPx > 60, `${oldPx.toFixed(0)} px`);
   const dT = T ? Math.hypot(T.x - joint.x, T.y - joint.y) : Infinity;
-  check("the T badge is at the joint (beside the ⊙ that is on it)", dT <= 24, `${dT.toFixed(1)} px from the joint`);
+  // In the row of badges beside the joint: the first slot (12 px out and 12
+  // up, 17 px), or the second (20 px further out, 34 px) when the joint is
+  // near enough the view's right edge that the ⊙ flips to the left of it and
+  // takes the first (sketchGlyphs: a badge flips only when it would leave the
+  // view). This document framed in a 1400 x 900 window puts it there.
+  check("the T badge is at the joint (beside the ⊙ that is on it)", dT <= 36, `${dT.toFixed(1)} px from the joint`);
   check("...and not on top of the ⊙", !!(T && C) && (T.l >= C.r || C.l >= T.r || T.top >= C.bot || C.top >= T.bot),
     JSON.stringify({ T, C }));
 
