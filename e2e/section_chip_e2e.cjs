@@ -305,6 +305,36 @@ const HINT = "The section stays on";
   check((await cut()) === null && (await chip()) === null, "Section again removes a kept cut, chip and all");
   check(await idle(), "nothing is left busy");
 
+  // --- Section and Fillet never run at once ---------------------------------------
+  // With Fillet up, Section used to open its chooser and then its arrow on top
+  // of the fillet's pickable edges: two tools on the canvas, and the edges
+  // drawn through the removed half. Now it refuses and says why.
+  const status = () => page.evaluate(() => document.getElementById("status").textContent);
+  await page.evaluate(() => window.__sindri.handleAction("fillet"));
+  await page.waitForTimeout(300);
+  check((await page.evaluate(() => window.__sindri.busyWhy().edgeFeature)), "precondition: Fillet is up");
+  await page.evaluate(() => window.__sindri.handleAction("section"));
+  await page.waitForTimeout(300);
+  const both = await page.evaluate(() => window.__sindri.busyWhy());
+  check(!both.choice && !both.section && both.edgeFeature, "Section under a live Fillet opens no chooser and no arrow", both);
+  check(/Fillet or Chamfer/.test(await status()), "and says why", await status());
+  await esc();
+  check(await idle(), "precondition: Esc closed Fillet");
+  // The other order is fine: a section is a view, so Fillet takes the arrow
+  // down and works inside the kept cut.
+  await openSection("Z");
+  await page.evaluate(() => window.__sindri.handleAction("fillet"));
+  await page.waitForTimeout(300);
+  const after = await page.evaluate(() => window.__sindri.busyWhy());
+  check(after.edgeFeature && !after.section && (await chip()) !== null, "Fillet started over a live section keeps the cut and takes the arrow down", after);
+  // and Section with a kept cut still removes it, as the chip's cross does
+  await page.evaluate(() => window.__sindri.handleAction("section"));
+  await page.waitForTimeout(300);
+  const cleared = await page.evaluate(() => window.__sindri.busyWhy());
+  check((await chip()) === null && !cleared.choice && cleared.edgeFeature, "Section under Fillet removes a kept cut and opens nothing", cleared);
+  await esc();
+  check(await idle(), "nothing is left busy");
+
   await browser.close();
   console.log(fails ? `\n${fails} check(s) FAILED` : "\nall checks passed");
   process.exit(fails ? 1 : 0);

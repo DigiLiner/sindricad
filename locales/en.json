@@ -582,6 +582,7 @@
     "section": {
       "axisTitle": "Section — cut along which axis?",
       "chip": "Section {axis} {at}",
+      "edgeFeatureBusy": "I can't open a section while Fillet or Chamfer is open. Finish or cancel it first (Esc).",
       "horizontalHint": "horizontal cut",
       "keptHint": "The section stays on so you can work inside it. To remove it, click the cross on the Section chip at the top left of the view, or press Esc when nothing is selected or open.",
       "prompt": "Section: drag the arrow, or type where the cut goes along {axis}, measured from the origin · F flips the kept side · Enter or the check keeps the cut · Esc removes it",

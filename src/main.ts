@@ -1988,6 +1988,14 @@ function handleAction(action: string) {
         section.clear();
         break;
       }
+      // The reverse of the line at the top of handleAction: Fillet or Chamfer
+      // owns the canvas and its pickable edges are not clipped, so a section
+      // arrow on top of them would be two tools at once. Fillet started over a
+      // section is fine, because that takes the arrow down first.
+      if (edgeFeature.active) {
+        setStatus(t("feature.section.edgeFeatureBusy"), "");
+        break;
+      }
       if (!hasBody()) {
         setStatus(t("status.needBody.section"), "");
         break;
