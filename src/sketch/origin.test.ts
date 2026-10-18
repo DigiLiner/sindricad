@@ -70,15 +70,17 @@ describe("the origin is PINNED, which is the whole point", () => {
   // is being pinned here is one line in the compile step. These pin the
   // EXPRESSION, and the ablation for them is that removing the pin fails them.
   it("is added to fixedPts when the solver compiles it", () => {
-    expect(pointBranch()).toMatch(/if\s*\(isOriginId\(e\.id\)\)\s*fixedPts\.add\(/);
+    expect(pointBranch()).toMatch(/const origin = isOriginId\(e\.id\);/);
+    expect(pointBranch()).toMatch(/if\s*\(origin\)\s*fixedPts\.add\(/);
   });
 
-  it("stays MERGEABLE as well as fixed", () => {
-    // getPoint(..., true) is the mergeable flag. Fixed alone would be a point
-    // nothing can attach to; mergeable alone is what it was before and is
-    // exactly the bug. It has to be both: a user endpoint made coincident with
-    // the origin FUSES onto a fixed point and is anchored by it.
-    expect(pointBranch()).toMatch(/getPoint\(e\.x,\s*e\.y,\s*true\)/);
+  it("is MERGEABLE only when a Coincident or Fix holds a point there", () => {
+    // getPoint(..., mergeable). Mergeable AND fixed is what anchors: a user
+    // endpoint made coincident with the origin FUSES onto a fixed point. But
+    // mergeable always fused every end that merely lay at (0, 0) as well, and
+    // pinned it with nothing on screen saying so (Thomas, 2026-10-19). The
+    // behaviour both ways is in originExplicitPin.test.ts.
+    expect(pointBranch()).toMatch(/getPoint\(e\.x,\s*e\.y,\s*!origin \|\| originHolds\)/);
   });
 
   it("is not reported as projected geometry when it refuses a drag", () => {

@@ -105,9 +105,10 @@ describe("migrateDocument", () => {
     // through migrateDocument untouched: `brep` is still READ, so nothing here
     // rewrites it. v6 (shape operands) and v7 (a primitive's centre) are
     // stamps too, each only on a document that uses it. v8 (two-point
-    // alignments) rewrites only zero X/Y distances, which this document has
-    // none of.
-    expect(FORMAT_VERSION).toBe(8);
+    // alignments) rewrites only zero X/Y distances, and v9 (points on the
+    // origin) only adds a join for a point lying on the origin, which this
+    // document has none of.
+    expect(FORMAT_VERSION).toBe(9);
     const doc = v1({
       version: 3,
       features: [{ id: "f1", type: "sketch", plane: "XY", entities: [
@@ -260,5 +261,63 @@ describe("savedVersion: v7 only for a primitive placed off the origin", () => {
     const doc = (): CadDocument => ({ version: 7, parameters: {}, features: [{ ...box, z: 10 } as unknown as Feature] });
     expect(migrateDocument(doc())).toEqual([]);
     expect(migrateDocument(doc(), 6)).toEqual([t("file.warning.newerVersion")]);
+  });
+});
+
+// v8 -> v9: only an explicit Coincident (or Fix) holds a point on the origin
+// now. A sketch saved before was drawn under the old rule, where whatever lay
+// at (0, 0) was merged into the origin's fixed point, so it gets that join.
+describe("v8 -> v9: a point lying on the origin in an older file stays held there", () => {
+  const sketch = (entities: SketchEntity[], constraints: SketchConstraint[] = []): Feature[] =>
+    [{ id: "f1", type: "sketch", plane: "XY", entities, constraints }];
+  const doc = (version: number, f: Feature[]): CadDocument => ({ version, parameters: {}, features: f });
+  const consOf = (d: CadDocument) => (d.features[0] as Extract<Feature, { type: "sketch" }>).constraints;
+  const line: SketchEntity = { type: "line", id: "l", x1: 0, y1: 0, x2: 40, y2: 0 };
+  const rect: SketchEntity = { type: "rectangle", id: "R", x: 10, y: 5, width: 20, height: 10 }; // corner 0 at (0, 0)
+
+  it("an older file's line drawn from the origin is joined to it, once, however often it is opened", () => {
+    const d = doc(7, sketch([line]));
+    expect(migrateDocument(d)).toEqual([]);
+    migrateDocument(d);
+    expect(consOf(d)).toEqual([{ type: "coincident", e1: "__origin__", p1: 0, e2: "l", p2: 0 }]);
+    // nothing in that an older build cannot read
+    expect(savedVersion(d.features)).toBe(5);
+  });
+
+  it("one join for everything lying there: it is one merged point", () => {
+    const d = doc(6, sketch([line, rect]));
+    migrateDocument(d);
+    expect(consOf(d)).toEqual([{ type: "coincident", e1: "__origin__", p1: 0, e2: "l", p2: 0 }]);
+  });
+
+  it("nothing is added where a Coincident or a Fix already holds one of them", () => {
+    const held = doc(7, sketch([line, rect], [{ type: "coincident", e1: "R", p1: 0, e2: "__origin__", p2: 0 }]));
+    migrateDocument(held);
+    expect(consOf(held)).toHaveLength(1);
+    const fixed = doc(7, sketch([line], [{ type: "fix", e: "l", p: 0 }]));
+    migrateDocument(fixed);
+    expect(consOf(fixed)).toEqual([{ type: "fix", e: "l", p: 0 }]);
+  });
+
+  it("a point that is only NEAR the origin is left alone", () => {
+    const d = doc(7, sketch([{ ...line, x1: 0.01 } as SketchEntity]));
+    migrateDocument(d);
+    expect(consOf(d)).toEqual([]);
+  });
+
+  it("v7 and v8 files (a primitive's placement, two-point alignments) get the join too: drawn under the old rule", () => {
+    for (const version of [7, 8]) {
+      const d = doc(version, sketch([line]));
+      migrateDocument(d);
+      expect(consOf(d), `v${version}`).toEqual([{ type: "coincident", e1: "__origin__", p1: 0, e2: "l", p2: 0 }]);
+    }
+  });
+
+  it("a v9 file's free point on the origin stays free, is saved as v9, and an older build warns", () => {
+    const d = doc(9, sketch([line]));
+    expect(migrateDocument(d)).toEqual([]);
+    expect(consOf(d)).toEqual([]);
+    expect(savedVersion(d.features)).toBe(9);
+    expect(migrateDocument(doc(9, sketch([line])), 8)).toEqual([t("file.warning.newerVersion")]);
   });
 });

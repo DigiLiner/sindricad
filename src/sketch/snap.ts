@@ -105,10 +105,13 @@ export const JOIN_TOL = 1e-6;
  *     the snapped point, never an assumed 0: the two corner orders in this
  *     codebase agree on corner 0 and nowhere else.
  *   - a POINT's one point (idx 0), from `startRef`: the Point tool's click.
+ *  - a SPLINE's ends (0 and 1; a closed spline only 0), and only onto the
+ *    origin: `finishSpline` keeps no snap refs, so it names the origin for an
+ *    end that lies on it, the one join the solver used to make by position
+ *    alone (sketchSolve's origin point). Revisit if a user reports a spline
+ *    micro-gap anywhere else.
  *  A CIRCLE is not emitted for: its second click lands on the rim, which is no
- *  solver point. SPLINES are excluded for a duller reason — their ends carry
- *  refs (see candidatesFromEntities) but `finishSpline` commits them by a path
- *  that never reaches here. Revisit if a user reports a spline micro-gap.
+ *  solver point.
  *
  *  Refuses the three ways a coincident can be nonsense, matching what the manual
  *  Coincident tool already refuses: the same entity on both sides (it would
@@ -141,6 +144,7 @@ export function snapCoincidences(
     : entity.type === "arc" ? [[startRef, [0]], [endRef, [1]], [centerRef, [2]]]
     : entity.type === "rectangle" ? [[startRef, corners], [endRef, corners], [centerRef, [RECT_CENTRE]]]
     : entity.type === "point" ? [[startRef, [0]]]
+    : entity.type === "spline" ? (entity.closed ? [[startRef, [0]]] : [[startRef, [0]], [endRef, [1]]])
     : [];
   const out: SketchConstraint[] = [];
   for (const [ref, candidates] of placed) {

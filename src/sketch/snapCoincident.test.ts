@@ -252,11 +252,13 @@ describe("which drawn entities owe a coincident", () => {
     expect(emit(c, null, { id: "t", idx: 1 })).toEqual([]);
   });
 
-  it("a spline gets nothing, and that is a known deferral not an oversight", () => {
-    // finishSpline never reaches here. Pinned so that wiring it up later has to
-    // change this expectation deliberately rather than silently.
+  it("a spline's ends join what their refs name (finishSpline names only the origin)", () => {
+    // finishSpline keeps no snap refs; it hands this the origin for an end
+    // drawn onto it, the join the solver used to make by position alone
     const sp: ResolvedEntity = { type: "spline", id: "s1", points: [{ x: 10, y: 0 }, { x: 20, y: 5 }] };
-    expect(emit(sp, { id: "t", idx: 1 }, null)).toEqual([]);
+    expect(emit(sp, { id: "t", idx: 1 }, null)).toEqual([{ type: "coincident", e1: "t", p1: 1, e2: "s1", p2: 0 }]);
+    const closed: ResolvedEntity = { type: "spline", id: "s2", closed: true, points: [{ x: 10, y: 0 }, { x: 20, y: 5 }, { x: 15, y: 9 }] };
+    expect(emit(closed, { id: "t", idx: 1 }, { id: "t", idx: 1 })).toEqual([{ type: "coincident", e1: "t", p1: 1, e2: "s2", p2: 0 }]);
   });
 });
 

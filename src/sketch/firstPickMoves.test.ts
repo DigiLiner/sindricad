@@ -5,11 +5,11 @@
 //    dimensioned rectangle's corner), picked first, onto a free line picked
 //    second was reported to move the LINE 22 mm. It does not, for a shape that
 //    is free to move: both of the finding's shapes are put on the line here and
-//    the line stays. The finding's shapes had a corner at (0, 0), and the
-//    solver merges a corner lying exactly on the sketch origin into the
-//    origin's own fixed point (sketchSolve's mergeable points), so there the
-//    rectangle could not move at all and the line was the only answer. These
-//    stay as the guard for the rule.
+//    the line stays. The finding's shapes had a corner at (0, 0), which the
+//    solver merged into the origin's own fixed point, so there the rectangle
+//    could not move at all and the line was the only answer. Since 2026-10-19
+//    only an explicit Coincident does that (originExplicitPin.test.ts runs the
+//    finding's own repro). These stay as the guard for the rule.
 //  * explore-sketcher-1016-2: a number typed into the row of a Horizontal made
 //    between a free point (picked first) and a rectangle's corner shrank the
 //    rectangle and moved the point only part of the way: a two-entity X/Y

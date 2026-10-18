@@ -327,7 +327,9 @@ describe("Copy sketch to plane", () => {
     for (const [name, expr] of Object.entries(set)) d.paramDefs![name]!.expr = expr;
     params.recompute(d);
     const s = d.features.find((f) => f.id === id) as Sketch;
-    return s.constraints!.map((c) => (c as { value: number }).value);
+    // the dimensions only: opening the document joined the line's start, which
+    // lies on the origin, to it (migrate.ts v8 -> v9)
+    return s.constraints!.filter((c) => "value" in c).map((c) => (c as { value: number }).value);
   }
   const copyIdOf = (doc: CadDocument) => doc.features.at(-1)!.id;
   const boundTo = (doc: CadDocument, sketch: string, c: SketchConstraint) =>

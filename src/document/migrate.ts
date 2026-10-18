@@ -28,6 +28,8 @@ import { isDriven } from "../types";
 import { FEATURE_NUM_FIELDS, RIGID_ENTITY_NUM_FIELDS, kindUnit } from "./numFields";
 import { isDimConstraint, newConstraintId, noteConstraintId } from "../sketch/id";
 import { RECT_CENTRE, constraintEntityIds } from "../sketch/entityDims";
+import { ORIGIN_ID } from "../sketch/origin";
+import { rectCorners } from "../sketch/region";
 import { nextDName } from "../params/engine";
 import { t } from "../i18n";
 
@@ -106,17 +108,35 @@ import { t } from "../i18n";
 // Dimension tool made in this build: saved as v7, the next open here would
 // take it for an older file's and mark it.
 
+// v8 → v9: a point that merely LIES on the sketch origin is free (2026-10).
+// Every older build merged a line's or arc's end, a rectangle's corner, a
+// sketch point or a spline's end lying at (0, 0) into the origin's fixed point
+// in every solve, so it was pinned there with no constraint saying so; now only
+// an explicit Coincident with the origin (or a Fix) holds one there.
+//
+// Sketches saved before were drawn under the old rule, and from 2026-08-24 (the
+// origin) to 2026-10-02 (snapping onto a point records the Coincident) drawing
+// from the origin recorded nothing: those would come loose. So an older file
+// gets the Coincident its points were held by: one, as everything lying there
+// is one merged point. A file saved here holding a point there that nothing
+// holds is saved as v9, so that this does not happen to it on the next open and
+// an older build, which would pin it, warns. Every file older than v9 gets the
+// join, the v7 files a primitive's placement stamped and the v8 ones the
+// two-point alignments did included: all of them were drawn under the old rule.
+
 /** .sindri file-format version: the newest this build reads (bump when the
  *  on-disk shape changes incompatibly). A document is SAVED as the oldest
  *  version that holds what it uses: savedVersion. */
-export const FORMAT_VERSION = 8;
+export const FORMAT_VERSION = 9;
 
-/** The version a document is saved as: v8 when a sketch holds a two-point
- *  alignment or a zero X/Y distance that is not one (v7 → v8 above), v7 when
- *  a primitive is placed off the origin (v6 → v7 above), v6 when a sketch
- *  names a shape's corner, centre or side or holds a projected point (v5 → v6
- *  above), else v5. */
+/** The version a document is saved as: v9 when a sketch has a point lying on
+ *  the origin that nothing holds there (v8 → v9 above), v8 when a sketch holds
+ *  a two-point alignment or a zero X/Y distance that is not one (v7 → v8
+ *  above), v7 when a primitive is placed off the origin (v6 → v7 above), v6
+ *  when a sketch names a shape's corner, centre or side or holds a projected
+ *  point (v5 → v6 above), else v5. */
 export function savedVersion(features: readonly Feature[]): number {
+  if (features.some((f) => looseOnOrigin(f) !== null)) return 9;
   if (features.some(usesPointAlignments)) return 8;
   if (features.some(usesPrimitiveCentre)) return 7;
   return features.some((f) => usesShapeOperands(f) || usesProjectedPoints(f)) ? 6 : 5;
@@ -126,6 +146,37 @@ export function savedVersion(features: readonly Feature[]): number {
 function usesPrimitiveCentre(f: Feature): boolean {
   if (f.type !== "box" && f.type !== "cylinder" && f.type !== "sphere") return false;
   return [f.x, f.y, f.z].some((v) => v !== undefined && v !== 0);
+}
+
+/** The first of a sketch's points lying on the origin when nothing holds any
+ *  of them there, or null (v8 → v9 above). The points are the ones a solve
+ *  merged into the origin before v9 (sketchSolve's mergeable points); "on it"
+ *  is the solver's own 1e-3 mm bucket (coincKey). A Coincident with the origin
+ *  or a Fix on any of them holds them all: they are one merged point. */
+function looseOnOrigin(f: Feature): { e: string; p: number } | null {
+  if (f.type !== "sketch") return null;
+  const on: { e: string; p: number }[] = [];
+  for (const e of f.entities) {
+    const num = (...v: unknown[]) => v.every((x) => typeof x === "number");
+    // fields a parameter sets are strings here: such a shape is no case of this
+    const pts: [number, number, number][] =
+      e.type === "line" || e.type === "arc" ? (num(e.x1, e.y1, e.x2, e.y2) ? [[0, e.x1 as number, e.y1 as number], [1, e.x2 as number, e.y2 as number]] : [])
+      : e.type === "point" ? (num(e.x, e.y) ? [[0, e.x as number, e.y as number]] : [])
+      : e.type === "rectangle" ? (num(e.x, e.y, e.width, e.height)
+        ? rectCorners(e.x as number, e.y as number, e.width as number, e.height as number).map((q, k): [number, number, number] => [k, q.x, q.y]) : [])
+      : e.type === "spline" ? (e.closed ? [0] : [0, 1]).flatMap((k): [number, number, number][] => {
+        const q = e.points[k === 0 ? 0 : e.points.length - 1];
+        return q && num(q.x, q.y) ? [[k, q.x as number, q.y as number]] : [];
+      })
+      : [];
+    for (const [p, x, y] of pts) if (Math.round(x * 1000) === 0 && Math.round(y * 1000) === 0 && e.id) on.push({ e: e.id, p });
+  }
+  if (!on.length) return null;
+  const isOn = (id: string, p: number) => on.some((q) => q.e === id && q.p === p);
+  const held = (f.constraints ?? []).some((c) =>
+    (c.type === "coincident" && ((c.e1 === ORIGIN_ID && isOn(c.e2, c.p2)) || (c.e2 === ORIGIN_ID && isOn(c.e1, c.p1))))
+    || (c.type === "fix" && isOn(c.e, c.p)));
+  return held ? null : on[0]!;
 }
 
 /** True if a sketch holds a two-point Horizontal/Vertical, or a zero X/Y
@@ -213,6 +264,15 @@ export function migrateDocument(parsed: CadDocument, readsUpTo = FORMAT_VERSION)
         }
         return { ...c, alignment: true };
       });
+    }
+  }
+
+  // --- v8 → v9: what lay on the origin stays held there (see above) ---
+  if (version < 9) {
+    for (const f of features) {
+      const loose = looseOnOrigin(f);
+      if (f.type !== "sketch" || !loose) continue;
+      f.constraints = [...(f.constraints ?? []), { type: "coincident", e1: ORIGIN_ID, p1: 0, e2: loose.e, p2: loose.p }];
     }
   }
 

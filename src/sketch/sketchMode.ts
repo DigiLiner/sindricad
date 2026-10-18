@@ -46,7 +46,7 @@ import { applyDrivingDimsDirect, dimBindingFor, governingDimAt, lockDimFor, meas
 import { constraintDimKey, rowConstraintAt, sketchDimRows, type SketchDimRow } from "./dimRows";
 import { dimConflictMsg, withdrawTrial, type SketchTrial } from "./dimConflict";
 import { expandPattern, translated, rotated, scaled } from "./pattern";
-import { candidatesFromEntities, curveRefOf, snap, snapCoincidences, snapPointOns, SNAP_PX, type SnapKind, type SnapCandidate, type PointRef, type CurveRef } from "./snap";
+import { candidatesFromEntities, curveRefOf, snap, snapCoincidences, snapPointOns, JOIN_TOL, SNAP_PX, type SnapKind, type SnapCandidate, type PointRef, type CurveRef } from "./snap";
 import type { ResolvedEntity } from "./snap";
 import {
   curvesEndingAt, inferArcTangents, inferLineRelations, isGeometrySnap, relationConstraints,
@@ -64,7 +64,7 @@ import { t } from "../i18n";
 import { toast } from "../ui/toast";
 import { contextMenu, dismissContextMenu, type CtxItem } from "../ui/menu";
 import { niceStep } from "../ui/units";
-import { isOriginGeometry, originGeometry } from "./origin";
+import { ORIGIN_ID, isOriginGeometry, originGeometry } from "./origin";
 import { boxFromDrag, entitiesInBox } from "./boxSelect";
 import { applicableConstraints, constraintLabel, menuOperands, operandUnder, symmetricOperands, type MenuOperand } from "./constraintMenu";
 import { addKey, additiveClick, clickKey, dropOwner, pointKey, selOwner, selOwners, selPart } from "./selection";
@@ -3306,6 +3306,10 @@ export class SketchMode {
       };
       if (this.constructionMode) ent.construction = true;
       this.entities.push(ent);
+      // an end drawn onto the origin is joined to it, as a line's end is
+      const onOrigin = (q: THREE.Vector2 | undefined): PointRef | null =>
+        q && q.length() <= JOIN_TOL ? { id: ORIGIN_ID, idx: 0 } : null;
+      this.emitSnapCoincidences(ent, onOrigin(this.splinePts[0]), onOrigin(this.splinePts.at(-1)));
       this.refreshActive();
       this.requestSolve();
     }

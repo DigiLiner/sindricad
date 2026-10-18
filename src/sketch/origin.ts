@@ -19,7 +19,9 @@
 // sketchSolve's `fixedPts`), which means a user endpoint made COINCIDENT with it
 // fuses onto a fixed point and is thereby anchored. That is the whole point: the
 // origin is not decoration, it is the thing you attach to so the rest stops
-// drifting.
+// drifting. Attaching is explicit: a point that merely LIES at 0,0, with no
+// Coincident (or Fix) there, is free (2026-10-19; drawing onto the origin with
+// the snap records the Coincident).
 
 import type { ResolvedEntity } from "./snap";
 

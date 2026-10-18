@@ -199,7 +199,9 @@ describe("the selection's right-click menu", () => {
     expect(live.s.constraints).toEqual([on("p", "l")]);
     const p = live.ent("p") as Extract<ResolvedEntity, { type: "point" }>;
     expect(Math.abs(p.y)).toBeLessThan(1e-9);
-    expect((live.ent("l") as Extract<ResolvedEntity, { type: "line" }>).y1, "the point moved, not the line").toBe(0);
+    // the line's start lies on the origin but is not held there (only an
+    // explicit Coincident is): the bias alone keeps it still, to solver noise
+    expect(Math.abs((live.ent("l") as Extract<ResolvedEntity, { type: "line" }>).y1), "the point moved, not the line").toBeLessThan(1e-12);
   });
 });
 

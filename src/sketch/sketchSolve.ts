@@ -362,6 +362,21 @@ async function compileAndSolveOnce(
     return { ourS, ourE, center };
   };
 
+  // Whether the origin takes the points lying on it (see the point branch): only
+  // when one of them is TOLD to be there, by a Coincident with the origin (or
+  // a Fix on it). Everything lying there merges into one point anyway, so one
+  // explicit join anchors them all, as it always did; with none, they are free.
+  const atOrigin = (q: { x: number; y: number } | null | undefined) => !!q && key(q.x, q.y) === key(0, 0);
+  const byIdForOrigin = new Map(entities.map((e) => [e.id, e]));
+  const pointOf = (id: string, p: number) => {
+    const e = byIdForOrigin.get(id);
+    return e ? refPoint(e, p) : null;
+  };
+  const originHolds = constraints.some((c) =>
+    !isDriven(c) && (
+      (c.type === "coincident" && ((isOriginId(c.e1) && atOrigin(pointOf(c.e2, c.p2))) || (isOriginId(c.e2) && atOrigin(pointOf(c.e1, c.p1)))))
+      || (c.type === "fix" && !isOriginId(c.e) && atOrigin(pointOf(c.e, c.p)))));
+
   for (const e of entities) {
     if (e.type === "line") {
       const p1 = getPoint(e.x1, e.y1);
@@ -411,15 +426,21 @@ async function compileAndSolveOnce(
       splineMap.set(e.id, e.points.map((p, k) => getPoint(p.x, p.y, k === 0 || k === last)));
     } else if (e.type === "point") {
       // a sketch point is mergeable so it can snap onto / coincide with geometry
-      const pid = getPoint(e.x, e.y, true);
+      const origin = isOriginId(e.id);
+      const pid = getPoint(e.x, e.y, !origin || originHolds);
       pointMap.set(e.id, pid);
       // ...and the ORIGIN is additionally PINNED, the same way projected
       // geometry is. Mergeable AND fixed is the combination that matters: a user
       // endpoint made coincident with it fuses onto a fixed point and is
       // anchored by it, which is what stops a dimensioned sketch drifting.
+      // Mergeable only then (`originHolds`): an end that merely LIES at (0, 0)
+      // fused onto it all the same and was pinned with nothing on screen saying
+      // so, and only an explicit Coincident or Fix holds a point there now
+      // (Thomas, 2026-10-19; explore-sketcher-1016-1: a rectangle with a corner
+      // there could not be moved onto a line, while a body drag carried it off).
       // Deliberately NOT via projPts — a drag refused by the origin should not
       // be reported as "that is projected geometry".
-      if (isOriginId(e.id)) fixedPts.add(pid);
+      if (origin) fixedPts.add(pid);
     } else if (e.type === "projected") {
       // Fixed reference geometry (Fusion Project): compiles as pinned planegcs
       // primitives so user constraints/dims can attach to it. Endpoints are
@@ -1190,12 +1211,14 @@ async function compileAndSolveOnce(
   if (drag) {
     // Pin whichever solver point sits nearest the grab position. Coincident
     // endpoints have merged into one point, so a grabbed corner moves as a unit.
+    // A point lying on the origin and not held there is a second point in the
+    // same place as it (see the point branch): of the two, the free one.
     let best: SPoint | null = null;
     let bestD = Infinity;
     for (const p of points) {
       const dx = p.x - drag.fromX, dy = p.y - drag.fromY;
       const d = dx * dx + dy * dy;
-      if (d < bestD) { bestD = d; best = p; }
+      if (d < bestD || (d === bestD && best?.fixed && !p.fixed)) { bestD = d; best = p; }
     }
     // a FIXED nearest point (projected geometry, or a user endpoint merged onto
     // it, or a `fix` constraint) cannot move: refuse the drag outright instead
