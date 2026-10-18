@@ -164,18 +164,28 @@ describe("export runs as a cancellable busy op", () => {
     delete (globalThis as unknown as Record<string, unknown>).window;
   });
 
-  function storeWith(exportImpl: GeometryBackend["export"]) {
+  // One box that built: an export needs a body on screen (see visibleModel).
+  async function storeWith(exportImpl: GeometryBackend["export"]) {
     const backend = {
-      async rebuild() { return { ok: false, error: { message: "stub" } }; },
+      async rebuild(): Promise<RebuildReply> {
+        return { ok: true, result: {
+          mesh: { positions: [0, 0, 0], indices: [0], faceIds: [0] }, edges: [],
+          bbox: { min: [0, 0, 0], max: [1, 1, 1] },
+          bodies: [{ id: "body1", name: "Body1", faceStart: 0, faceCount: 1 }],
+        } };
+      },
       async init() {}, onStatus() { return () => {}; }, connected: true,
       export: exportImpl,
     } as unknown as GeometryBackend;
-    return { backend, store: new DocumentStore(backend, { parameters: {}, features: [] }) };
+    const store = new DocumentStore(backend, { parameters: {}, features: [
+      { id: "f1", type: "box", length: 10, width: 10, height: 10 } as Feature] });
+    await store.rebuildNow();
+    return { backend, store };
   }
 
   it("is busy while exporting, and hands back an id a cancel can target", async () => {
     let busyDuring: { active: boolean; id: string | null } | null = null;
-    const { backend, store } = storeWith(async (_d, _f, _p, _o, onStarted) => {
+    const { backend, store } = await storeWith(async (_d, _f, _p, _o, onStarted) => {
       onStarted?.("req-42");
       busyDuring = { active: store.busyState.active, id: store.busyState.id };
       return { ok: true, path: savePath };
@@ -191,7 +201,7 @@ describe("export runs as a cancellable busy op", () => {
   });
 
   it("says nothing when the user cancels — that is not an error", async () => {
-    const { backend, store } = storeWith(async () => ({
+    const { backend, store } = await storeWith(async () => ({
       ok: false, cancelled: true, message: "export cancelled",
     }));
     const { exportModel } = await import("./files");
@@ -202,7 +212,7 @@ describe("export runs as a cancellable busy op", () => {
   });
 
   it("still reports a genuine failure", async () => {
-    const { backend, store } = storeWith(async () => ({ ok: false, message: "disk full" }));
+    const { backend, store } = await storeWith(async () => ({ ok: false, message: "disk full" }));
     const { exportModel } = await import("./files");
     await exportModel(store, backend);
 
@@ -211,7 +221,7 @@ describe("export runs as a cancellable busy op", () => {
   });
 
   it("clears busy even when the backend throws", async () => {
-    const { backend, store } = storeWith(async () => { throw new Error("socket died"); });
+    const { backend, store } = await storeWith(async () => { throw new Error("socket died"); });
     const { exportModel } = await import("./files");
     await expect(exportModel(store, backend)).rejects.toThrow("socket died");
     expect(store.busyState.active).toBe(false);

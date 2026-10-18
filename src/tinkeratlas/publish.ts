@@ -11,6 +11,7 @@ import { esc } from "../ui/escape";
 import { toast } from "../ui/toast";
 import { t } from "../i18n";
 import { exportReport } from "../io/exportReport";
+import { visibleModel } from "../io/files";
 import { openExternal } from "../ui/welcome";
 import { openSignInDialog } from "./account";
 import { currentAccount, taStagingPath, taPublish, asTaError } from "./client";
@@ -32,9 +33,9 @@ export async function publishToTinkerAtlas(
     toast(t("tinkeratlas.publish.needsNative"), { kind: "error" });
     return;
   }
-  const bodies = store.buildState.result?.bodies ?? [];
-  if (!bodies.length) {
-    toast(t("tinkeratlas.publish.nothing"), { kind: "error" });
+  const visible = visibleModel(store);
+  if (!visible.bodies.length) {
+    toast(t(visible.allHidden ? "tinkeratlas.publish.allHidden" : "tinkeratlas.publish.nothing"), { kind: "error" });
     return;
   }
   // publish requires an account; sign-in stays optional everywhere else.
@@ -53,7 +54,7 @@ export async function publishToTinkerAtlas(
   toast(t("tinkeratlas.publish.inProgress"), { kind: "info" });
   try {
     const path = await taStagingPath(defaultTitle, fmt);
-    const res = await geometry.export(store.document, fmt, path, {});
+    const res = await geometry.export(visible.document, fmt, path, {});
     if (!res.ok) {
       toast(t("file.error.export", { reason: res.message ?? t("common.unknownError") }), { kind: "error" });
       return;

@@ -705,6 +705,20 @@ def _prune_export_cache(live):
         if k not in ids:
             del _EXPORT_MESH_CACHE[k]
 
+
+# Said when every body that built is hidden: the file would hold nothing the
+# user can see, so no file is written.
+_ALL_HIDDEN = "every body is hidden, so there is nothing on screen to export; show a body first"
+
+
+def _visible(document, live):
+    """The bodies the user can SEE: `live` minus the ones the document's
+    `bodyVisibility` hides. Rollback and suppression are already applied by the
+    frontend, which sends the document as it built it; visibility is the one
+    reduction that has to happen here, because the build keeps hidden bodies."""
+    vis = document.get("bodyVisibility") or {}
+    return [b for b in live if vis.get(b["id"]) is not False]
+
 # Wire default (also the literal fallback in the "rebuild"/"computeAll" handlers
 # below) — the reference point our size-adaptive scaling is relative to.
 _DEFAULT_TOLERANCE = 0.1
@@ -1308,7 +1322,6 @@ def _export_job(document, fmt, path, body=None, separate=False,
     # every mesh format. STEP is B-rep only, so they are left out of it — out
     # loud, below — rather than silently.
     live = [b for b in bodies if b.get("shape") is not None or b.get("mesh")]
-    solid_live = [b for b in live if not b.get("mesh")]
     _prune_export_cache(live)
     # Export what BUILT, and warn about what didn't — never silently. Refusing
     # to export ANYTHING because one feature errored blocked the whole
@@ -1318,6 +1331,13 @@ def _export_job(document, fmt, path, body=None, separate=False,
         return _fatal_from(errors)
     if part is None and not live:
         return {"error": {"message": "nothing to export — no bodies built yet"}}
+    # ...and only what the user can see. An explicit `body` (right-click a
+    # Browser row > Export) names its body outright, hidden or not.
+    if body is None:
+        live = _visible(document, live)
+        if not live:
+            return {"error": {"message": _ALL_HIDDEN}}
+    solid_live = [b for b in live if not b.get("mesh")]
     warnings = [_err_entry(e) for e in errors]
     any_textured = any(b.get("_textures") for b in live)
     if fmt == "step" and any_textured:
@@ -1537,6 +1557,9 @@ def _export_project_job(document, path, palette, body_colors, body_names, settin
         if errors:
             return _fatal_from(errors)
         return {"error": {"message": "nothing to export — no bodies built yet"}}
+    live = _visible(document, live)
+    if not live:
+        return {"error": {"message": _ALL_HIDDEN}}
 
     palette, body_colors, body_names = sanitize_inputs(palette, body_colors, body_names)
     meshed = []

@@ -893,6 +893,7 @@
       "unreadableFile": "unreadable file"
     },
     "export": {
+      "allHidden": "Every body is hidden, so there is nothing on screen to export. Show a body first.",
       "allInOne": "All in one file",
       "anyway": "Export anyway",
       "bodiesMerged": {
@@ -2147,6 +2148,7 @@
       "unreachableRetry": "Can't reach TinkerAtlas — check your connection and retry."
     },
     "publish": {
+      "allHidden": "Every body is hidden, so there is nothing on screen to publish. Show a body first.",
       "descriptionPlaceholder": "Description (optional)",
       "failed": "Publish failed: {reason}",
       "featureMissing": "⚠ {feature} failed — its result is NOT in the upload: {reason}",

@@ -315,14 +315,31 @@ async function readDocumentText(path: string): Promise<{ text: string; wasContai
   return { text, wasContainer };
 }
 
+/** What every export writes: the model the way it is on screen. `document` is
+ *  the document as BUILT (store.buildDocument(): nothing past the rollback
+ *  marker, no suppressed feature, and the `bodyVisibility` the sidecar reads to
+ *  leave hidden bodies out of the file), and `bodies` are the built bodies the
+ *  user has not hidden. Exports used to send store.document, the whole saved
+ *  timeline, so a file could hold features and bodies nobody was looking at.
+ *  `allHidden`: bodies built, but the user hid every one of them. */
+export function visibleModel(store: DocumentStore) {
+  const built = store.buildState.result?.bodies ?? [];
+  const bodies = built.filter((b) => store.isBodyVisible(b.id));
+  return { document: store.buildDocument(), bodies, allHidden: built.length > 0 && !bodies.length };
+}
+
 export async function exportModel(store: DocumentStore, geometry: GeometryBackend) {
   if (!isTauri()) {
     console.warn("export needs the native app (a real filesystem path)");
     return;
   }
+  const { bodies, allHidden } = visibleModel(store);
+  if (!bodies.length) {
+    await reportError(t(allHidden ? "file.export.allHidden" : "file.export.nothing"));
+    return;
+  }
   // With several bodies, ask what to export: all merged, each as its own file, or
   // one specific body. A single-body doc skips straight to the save dialog.
-  const bodies = store.buildState.result?.bodies ?? [];
   const opts: { body?: string; separate?: boolean } = {};
   if (bodies.length > 1) {
     const { choose } = await import("../ui/choice");
@@ -407,7 +424,7 @@ async function runExport(
   // the user triggers would otherwise be the "most recent" op.
   const res = await store.runBusy(
     t("file.export.busy", { name: baseName(path) }),
-    (onStarted) => geometry.export(store.document, fmt, path, {
+    (onStarted) => geometry.export(visibleModel(store).document, fmt, path, {
       ...opts,
       palette: store.colorPalette,
       bodyColors: store.bodyColorsMap(),
@@ -477,9 +494,9 @@ export async function exportPrintProject(
     await reportError(t("file.export.needsSidecar"));
     return null;
   }
-  const bodies = store.buildState.result?.bodies ?? [];
+  const { bodies, allHidden } = visibleModel(store);
   if (!bodies.length) {
-    await reportError(t("file.export.nothing"));
+    await reportError(t(allHidden ? "file.export.allHidden" : "file.export.nothing"));
     return null;
   }
 
@@ -502,7 +519,7 @@ export async function exportPrintProject(
   // every bit as long-running as a plain export on a large document.
   const res = await store.runBusy(
     t("file.export.busy", { name: baseName(path) }),
-    (onStarted) => geometry.exportProject!(store.document, path, {
+    (onStarted) => geometry.exportProject!(visibleModel(store).document, path, {
       palette: store.colorPalette,
       bodyColors: store.bodyColorsMap(),
       bodyNames: store.bodyNamesMap(),
