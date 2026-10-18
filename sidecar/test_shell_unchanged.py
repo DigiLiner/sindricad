@@ -94,7 +94,8 @@ def test_a_plain_and_a_closed_shell_still_work():
     errors, bodies = build(BOX, shell(TOP))
     assert errors == [] and abs(body1(bodies).volume - 4564.0) < 1e-3, errors
     errors, bodies = build(BOX, {"id": "sh1", "type": "shell", "thickness": 2})
-    assert errors == [] and abs(body1(bodies).volume - 20736.0) < 1e-3, errors
+    # closed = a hollow, 32000 - 36*36*16 (test_shell_closed.py has the rest)
+    assert errors == [] and abs(body1(bodies).volume - 11264.0) < 1e-3, errors
     print(f"{PASS} open and closed box shells keep their volumes")
 
 

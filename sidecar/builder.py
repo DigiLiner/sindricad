@@ -14096,7 +14096,15 @@ def _shell(shape, thickness, openings):
         if openings:
             out = offset(shape, amount=amt, openings=list(openings), kind=Kind.INTERSECTION)
         else:
-            out = offset(shape, amount=amt, kind=Kind.INTERSECTION)
+            # With no opening the kernel's offset is the inward-offset CORE, a
+            # shrunken copy of the body. The closed hollow is the body minus
+            # that core: one solid per input solid, each with an inner shell
+            # bounding the sealed cavity.
+            core = offset(shape, amount=amt, kind=Kind.INTERSECTION)
+            if core.volume <= 1e-9 * max(1.0, abs(shape.volume)):
+                # walls that meet in the middle leave no cavity at all
+                raise ValueError("no cavity left inside the walls")
+            out = shape - core
     except Exception as ex:
         # A wall thicker than the solid's own narrowest span has nowhere to go;
         # OCCT surfaces that as a bare RuntimeError, which told the user nothing

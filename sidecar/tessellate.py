@@ -423,6 +423,41 @@ def flipped_edge_count(indices):
     return int((c > 1).sum())
 
 
+def _nesting_depth(P, T, comp, closed):
+    """How many of the `closed` shells each closed shell lies inside, by the
+    parity of a ray cast from one of its triangle centroids. Only a shell whose
+    bounding box sits inside another's can be inside it, so most pairs never
+    cast at all."""
+    import numpy as np
+
+    tris = {i: T[comp == i] for i in closed}
+    lo = {i: P[tris[i].reshape(-1)].min(axis=0) for i in closed}
+    hi = {i: P[tris[i].reshape(-1)].max(axis=0) for i in closed}
+    # off-axis, so the ray does not graze the edges of an axis-aligned mesh
+    d = np.array([1.0, 0.000123, 0.000271])
+    depth = {i: 0 for i in closed}
+    for i in closed:
+        origin = P[tris[i][0]].mean(axis=0)
+        for j in closed:
+            if j == i or not (np.all(lo[j] <= lo[i]) and np.all(hi[i] <= hi[j])):
+                continue
+            a, b, c = P[tris[j][:, 0]], P[tris[j][:, 1]], P[tris[j][:, 2]]
+            # Moller-Trumbore against every triangle of shell j at once
+            e1, e2 = b - a, c - a
+            h = np.cross(d, e2)
+            det = np.einsum("ij,ij->i", e1, h)
+            ok = np.abs(det) > 1e-12
+            inv = np.where(ok, 1.0 / np.where(ok, det, 1.0), 0.0)
+            s = origin - a
+            u = np.einsum("ij,ij->i", s, h) * inv
+            q = np.cross(s, e1)
+            v = (q @ d) * inv
+            t = np.einsum("ij,ij->i", e2, q) * inv
+            hits = ok & (u >= 0) & (v >= 0) & (u + v <= 1) & (t > 0)
+            depth[i] += int(hits.sum()) % 2
+    return depth
+
+
 def orient_consistently(positions, indices):
     """Wind every triangle to agree with its neighbours, and every closed shell
     outward. Run on a WELDED mesh — it needs shared indices to have neighbours.
@@ -447,6 +482,11 @@ def orient_consistently(positions, indices):
          negative the whole shell is inside-out, so flip it. Applied only to
          shells that are actually CLOSED: an open shell's signed volume is
          meaningless, and flipping one on that basis would be a coin toss.
+         "Outward" is away from the MATERIAL: a shell nested inside another
+         one bounds a sealed cavity (a closed Shell, the bubble a buried cut
+         leaves) and must face INTO it, or a slicer reads the cavity as a
+         second solid and prints it full. So a shell inside an odd number of
+         others is pointed inward.
     """
     import numpy as np
 
@@ -519,7 +559,9 @@ def orient_consistently(positions, indices):
     a, b, c = P[out[:, 0]], P[out[:, 1]], P[out[:, 2]]
     vol6 = np.einsum("ij,ij->i", a, np.cross(b, c))
     per_comp = np.bincount(comp, weights=vol6, minlength=ncomp)
-    inside_out = [i for i in range(ncomp) if per_comp[i] < 0 and i not in open_comps]
+    closed = [i for i in range(ncomp) if i not in open_comps]
+    depth = _nesting_depth(P, out, comp, closed)
+    inside_out = [i for i in closed if (per_comp[i] < 0) != (depth[i] % 2 == 1)]
     if inside_out:
         sel = np.isin(comp, inside_out)
         out[sel] = out[sel][:, [0, 2, 1]]
