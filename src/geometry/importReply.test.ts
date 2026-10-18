@@ -25,6 +25,12 @@ describe("importGeometry reply", () => {
     expect(r.ok && r.reference?.triangles).toBe(1340732);
   });
 
+  it("keeps keepCavities, which decides how the import splits into bodies", async () => {
+    const r = await withReply({ geom: "abc", name: "hollow", solid: true, faces: 12, keepCavities: true })
+      .importGeometry("/x/hollow.stl", "stl");
+    expect(r.ok && r.keepCavities).toBe(true);
+  });
+
   it("adds no meshOnly key to an ordinary import", async () => {
     const r = await withReply({ geom: "abc", name: "box", solid: true, faces: 6 }).importGeometry("/x/box.stl", "stl");
     expect(r.ok && "meshOnly" in r).toBe(false);

@@ -148,14 +148,18 @@ def test_a_mesh_export_carries_the_cavity():
     print(f"{PASS} STL/3MF export is watertight; the cavity is an inward shell of -25992 mm3")
 
 
-def reimport(doc, fmt, tmp):
-    """Export `doc` as `fmt`, import the file back, and rebuild the import."""
+def reimport(doc, fmt, tmp, old_style=False):
+    """Export `doc` as `fmt`, import the file back, and rebuild the import.
+    `old_style` drops `keepCavities`, as on an import feature saved before it."""
     path = os.path.join(tmp, f"rt.{fmt}")
     res = server._export_job(doc, fmt, path)
     assert "error" not in res, res
     payload = builder.import_geometry(path, fmt)
+    assert payload.get("keepCavities") is True, payload
     feature = {"id": "im", "type": "import", "name": "Hollow"}
     feature.update({k: v for k, v in payload.items() if k != "name"})
+    if old_style:
+        del feature["keepCavities"]
     errors, bodies = build(feature)
     assert errors == [], errors
     return bodies
@@ -176,6 +180,22 @@ def test_the_hollow_imports_back_as_one_body():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"{PASS} a hollow exported as STL or 3MF imports back as one hollow body")
+
+
+def test_an_import_saved_before_keeps_its_old_split():
+    """An import feature without `keepCavities` is one a document saved before
+    the cavity-keeping split. It must rebuild exactly as it did, cavity split
+    off and all, or every body id after it would move and later features could
+    silently bind to other bodies."""
+    doc = {"parameters": {}, "features": [BOX, closed_shell(1)]}
+    tmp = tempfile.mkdtemp()
+    try:
+        bodies = reimport(doc, "stl", tmp, old_style=True)
+        vols = [round(b["shape"].volume, 1) for b in bodies]
+        assert vols == [32000.0, -25992.0], vols
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print(f"{PASS} an import feature without keepCavities still splits as before")
 
 
 def test_a_part_floating_in_the_cavity_stays_its_own_body():
@@ -202,6 +222,7 @@ def main():
     test_walls_that_meet_are_refused()
     test_a_mesh_export_carries_the_cavity()
     test_the_hollow_imports_back_as_one_body()
+    test_an_import_saved_before_keeps_its_old_split()
     test_a_part_floating_in_the_cavity_stays_its_own_body()
     print("all closed-shell tests passed")
 

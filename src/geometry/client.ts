@@ -1120,7 +1120,7 @@ export class Geometry implements GeometryBackend {
       nodes?: { name: string; parent: number | null; color?: string }[];
       parts?: { node: number; faces: number }[];
       fitted?: number; faceted?: number; fitSkipped?: string;
-      meshOnly?: true; triangles?: number;
+      meshOnly?: true; triangles?: number; keepCavities?: true;
       reference?: { why: string; faces?: number; limit?: number; bodies?: number;
                     bodyIndex?: number; bodyCount?: number; directions?: number;
                     triangles?: number };
@@ -1147,6 +1147,9 @@ export class Geometry implements GeometryBackend {
         // is silently dropped before files.ts ever sees it.
         ...(r.meshOnly ? { meshOnly: true as const } : {}),
         ...(r.triangles !== undefined ? { triangles: r.triangles } : {}),
+        // Load-bearing like meshOnly: dropped here, the feature would rebuild
+        // with the old split and a hollow part's cavity would become a body.
+        ...(r.keepCavities ? { keepCavities: true as const } : {}),
       };
     }
     if (!msg.ok && msg.cancelled) return { ok: false, cancelled: true, message: t("engine.error.importCancelled") };

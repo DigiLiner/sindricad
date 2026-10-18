@@ -31,6 +31,7 @@ API notes (verified against build123d 0.11.1, dual-compatible back to 0.10.x):
 """
 
 import base64
+import contextvars
 import hashlib
 import io
 import json
@@ -3788,6 +3789,15 @@ def _solid_of(shells):
     return _wrap_topods(mk)
 
 
+# Whether `_explode_solids` keeps a cavity with the shell around it. Only an
+# import made from now on does: import_geometry sets it for the whole read, and
+# a rebuild keeps cavities only for an import feature carrying `keepCavities`,
+# which import_geometry's payload adds. Everything else (a document saved before
+# this, Clean Up on an existing body) splits exactly as it always did, so no
+# saved document gains or loses a body and no later body id moves.
+_KEEP_CAVITIES = contextvars.ContextVar("sindri_keep_cavities", default=False)
+
+
 def _shell_groups(shells):
     """The shells of one multi-shell solid, grouped into bodies, in order.
 
@@ -3824,13 +3834,16 @@ def _shell_groups(shells):
     return [[shells[k] for k in groups[i]] for i in sorted(groups)]
 
 
-def _explode_solids(shape):
+def _explode_solids(shape, keep_cavities=None):
     """Split an imported shape into individually-controllable bodies. A multi-object
     STL comes back as ONE solid with several disconnected shells (Mesher fuses
     objects); a multi-object 3MF comes back as several solids. So `.solids()` alone
-    isn't enough — for each solid with >1 shell, wrap each object's shell in its
-    own solid, keeping a cavity with the shell around it (see _shell_groups).
+    isn't enough — for each solid with >1 shell, wrap each shell in its own
+    solid; with `keep_cavities` (default: _KEEP_CAVITIES), each object's shell,
+    keeping a cavity with the shell around it (see _shell_groups).
     A non-solid (open shell / surface) is passed through as one body."""
+    if keep_cavities is None:
+        keep_cavities = _KEEP_CAVITIES.get()
     solids = shape.solids()
     if not solids:
         return [shape]
@@ -3840,7 +3853,8 @@ def _explode_solids(shape):
         if len(shells) <= 1:
             out.append(sd)
             continue
-        out.extend(_maybe_unify(_solid_of(group)) for group in _shell_groups(shells))
+        groups = _shell_groups(shells) if keep_cavities else [[sh] for sh in shells]
+        out.extend(_maybe_unify(_solid_of(group)) for group in groups)
     # A compound can MIX a solid with a non-solid, and the `if not solids`
     # fallback above never fires for it. A mesh file holding one watertight and
     # one non-watertight object sews to exactly that: build123d hands back a
@@ -5158,6 +5172,20 @@ def import_as_reference_scan(path, fmt):
 
 
 def import_geometry(path, fmt, canonicalize=True):
+    """`_read_import`, with the cavity-keeping body split (_KEEP_CAVITIES) for
+    the whole read, and `keepCavities` on the payload so the feature it becomes
+    rebuilds with the same split."""
+    token = _KEEP_CAVITIES.set(True)
+    try:
+        out = _read_import(path, fmt, canonicalize)
+    finally:
+        _KEEP_CAVITIES.reset(token)
+    if not out.get("meshOnly"):
+        out["keepCavities"] = True
+    return out
+
+
+def _read_import(path, fmt, canonicalize=True):
     """Read an external geometry file and return the document payload for an
     `import` feature: {brep, solid, faces, name}. STL/3MF/OBJ are read as a
     (watertight) mesh solid; STEP/BREP come in as native B-rep.
@@ -8443,7 +8471,7 @@ def _handle_import(f, ctx):
     # keeps those documents rebuilding exactly as they did.
     if nodes and parts and _bind_assembly(f, ctx, shape, nodes, parts):
         return
-    parts = _explode_solids(shape)
+    parts = _explode_solids(shape, keep_cavities=f.get("keepCavities") is True)
     if len(parts) == 1:
         ctx.new_body(parts[0], base)
     else:

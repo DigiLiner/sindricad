@@ -340,6 +340,49 @@ describe("an import is one cancellable operation, its build included", () => {
   });
 });
 
+// --- a new import keeps a hollow part's cavity --------------------------------
+//
+// The sidecar splits an imported solid's shells into bodies. A new import keeps
+// a cavity with the shell around it only when its feature says `keepCavities`;
+// a feature without it is one saved before, and keeps its old split so no body
+// id moves. So the flag has to survive from the reply onto the saved feature.
+describe("an import feature carries keepCavities from the sidecar", () => {
+  beforeEach(() => {
+    (globalThis as unknown as Record<string, unknown>).window = {
+      __TAURI_INTERNALS__: {}, addEventListener() {}, removeEventListener() {},
+      setTimeout: (fn: () => void, ms: number) => setTimeout(fn, ms),
+    };
+    vi.doMock("@tauri-apps/plugin-dialog", () => ({ open: async () => "/tmp/hollow.stl", message: async () => {} }));
+  });
+  afterEach(() => {
+    vi.doUnmock("@tauri-apps/plugin-dialog");
+    vi.resetModules();
+    delete (globalThis as unknown as Record<string, unknown>).window;
+  });
+
+  async function imported(reply: Record<string, unknown>) {
+    const backend = {
+      async init() {}, onStatus() { return () => {}; }, connected: true,
+      async importGeometry() { return { ok: true, name: "hollow", geom: "blob:h", solid: true, ...reply }; },
+      async rebuild(): Promise<RebuildReply> { return { ok: false, error: { message: "stub" } }; },
+    } as unknown as GeometryBackend;
+    const store = new DocumentStore(backend, { parameters: {}, features: [] });
+    const { importModel } = await import("./files");
+    await importModel(store, backend);
+    return store.document.features[0] as Extract<Feature, { type: "import" }> | undefined;
+  }
+
+  it("is set on a new import", async () => {
+    expect((await imported({ keepCavities: true }))?.keepCavities).toBe(true);
+  });
+
+  it("is left off when the sidecar does not send it", async () => {
+    const f = await imported({});
+    expect(f?.type).toBe("import");
+    expect(f && "keepCavities" in f).toBe(false);
+  });
+});
+
 // --- a failed import says why in the bug report (1c8e8de1) -------------------
 //
 // Field report 1c8e8de1: a STEP import on Windows sat at 44%, then failed, and

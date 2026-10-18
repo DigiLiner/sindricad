@@ -831,6 +831,11 @@ export type Feature =
       // nearest-slot match at import. Kept so the match can be redone if the
       // palette changes. Omitted, never null, when the file carried no colour.
       color?: string;
+      // Set on every import made from now on (the sidecar's payload carries
+      // it): a mesh shell facing INTO another stays that body's cavity instead
+      // of becoming an inside-out body of its own. Absent on imports saved
+      // before, which keep their old split so no later body id moves.
+      keepCavities?: true;
       // explode:false keeps a multi-solid payload as ONE body (large imported
       // assemblies: divides body count by solids-per-import). Absent/true =
       // historical one-body-per-solid behavior.
@@ -1480,6 +1485,8 @@ export type ImportReply =
       // `meshOnly` so the rebuild reads the blob as a mesh, never as BREP.
       meshOnly?: true;
       triangles?: number;
+      // copied onto the import feature; see `keepCavities` there
+      keepCavities?: true;
       reference?: {
         why: string;
         triangles?: number;

@@ -946,6 +946,7 @@ async function importPath(store: DocumentStore, geometry: GeometryBackend, path:
     source: path,
     solid: res.solid,
     ...(res.meshOnly ? { meshOnly: true as const } : {}),
+    ...(res.keepCavities ? { keepCavities: true as const } : {}),
     ...(res.color !== undefined ? { color: res.color } : {}),
     // the file's assembly tree, when it had one. Spread the same way `color` is,
     // so an import with no tree produces exactly the feature it always did.
