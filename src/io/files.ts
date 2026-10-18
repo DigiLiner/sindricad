@@ -321,11 +321,26 @@ async function readDocumentText(path: string): Promise<{ text: string; wasContai
  *  leave hidden bodies out of the file), and `bodies` are the built bodies the
  *  user has not hidden. Exports used to send store.document, the whole saved
  *  timeline, so a file could hold features and bodies nobody was looking at.
- *  `allHidden`: bodies built, but the user hid every one of them. */
+ *
+ *  `refusal` names why nothing should be exported right now, or is null:
+ *  - "toolOpen": a tool's live preview is on screen. The built document then
+ *    carries that uncommitted feature (and an edit rolls the model back to the
+ *    feature being edited), so what is shown is not the committed model. An
+ *    export is refused rather than run against a second, preview-free build,
+ *    whose body ids would not be the ones on screen.
+ *  - "allHidden": bodies built, but the user hid every one of them.
+ *  - "nothing": nothing built at all. */
 export function visibleModel(store: DocumentStore) {
   const built = store.buildState.result?.bodies ?? [];
   const bodies = built.filter((b) => store.isBodyVisible(b.id));
-  return { document: store.buildDocument(), bodies, allHidden: built.length > 0 && !bodies.length };
+  const refusal = store.hasPreview ? "toolOpen" : !bodies.length ? (built.length ? "allHidden" : "nothing") : null;
+  return { document: store.buildDocument(), bodies, refusal } as const;
+}
+
+/** The sentence for a visibleModel refusal (literal keys, so i18n:check sees them). */
+function exportRefusalText(refusal: "toolOpen" | "allHidden" | "nothing"): string {
+  if (refusal === "toolOpen") return t("file.export.toolOpen");
+  return refusal === "allHidden" ? t("file.export.allHidden") : t("file.export.nothing");
 }
 
 export async function exportModel(store: DocumentStore, geometry: GeometryBackend) {
@@ -333,9 +348,9 @@ export async function exportModel(store: DocumentStore, geometry: GeometryBacken
     console.warn("export needs the native app (a real filesystem path)");
     return;
   }
-  const { bodies, allHidden } = visibleModel(store);
-  if (!bodies.length) {
-    await reportError(t(allHidden ? "file.export.allHidden" : "file.export.nothing"));
+  const { bodies, refusal } = visibleModel(store);
+  if (refusal) {
+    await reportError(exportRefusalText(refusal));
     return;
   }
   // With several bodies, ask what to export: all merged, each as its own file, or
@@ -391,6 +406,11 @@ export async function exportBody(
   }
   const body = store.buildState.result?.bodies?.find((b) => b.id === bodyId);
   if (!body) return;
+  // the body is named outright, so only a live preview stops it (hidden is fine)
+  if (visibleModel(store).refusal === "toolOpen") {
+    await reportError(t("file.export.toolOpen"));
+    return;
+  }
   const name = (store.bodyName(bodyId) ?? body.name).replace(/[\\/:*?"<>|]/g, "_").trim() || "part";
   const { save } = await import("@tauri-apps/plugin-dialog");
   let path = await save({
@@ -494,9 +514,9 @@ export async function exportPrintProject(
     await reportError(t("file.export.needsSidecar"));
     return null;
   }
-  const { bodies, allHidden } = visibleModel(store);
-  if (!bodies.length) {
-    await reportError(t(allHidden ? "file.export.allHidden" : "file.export.nothing"));
+  const { bodies, refusal } = visibleModel(store);
+  if (refusal) {
+    await reportError(exportRefusalText(refusal));
     return null;
   }
 

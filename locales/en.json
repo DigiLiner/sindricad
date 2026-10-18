@@ -926,6 +926,7 @@
       "projectDone": "Exported project",
       "projectDoneWarnings": "Exported project — with warnings",
       "specificBody": "A specific body",
+      "toolOpen": "Finish or cancel the current tool first (Esc). An export writes the committed model, not a tool's preview.",
       "unassignedBodies": {
         "one": "{count} body is unassigned (defaulting to slot 1)",
         "other": "{count} bodies are unassigned (defaulting to slot 1)"
@@ -2165,6 +2166,7 @@
       "title": "Publish to TinkerAtlas",
       "titlePlaceholder": "Title",
       "titleTooShort": "Title needs at least 3 characters.",
+      "toolOpen": "Finish or cancel the current tool first (Esc). Publishing uploads the committed model, not a tool's preview.",
       "untitled": "Untitled design",
       "view": "View on TinkerAtlas",
       "warningsTitle": "Publishing with warnings"

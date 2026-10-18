@@ -205,3 +205,54 @@ describe("with every body hidden there is nothing to export", () => {
     expect(toasts).toEqual([t("tinkeratlas.publish.allHidden")]);
   });
 });
+
+// A tool's live preview is on screen but not in the model: a fillet being
+// dragged, or a feature re-opened for editing (which also rolls the model back
+// to it). The built document carries that uncommitted state, so an export
+// started then is refused, never written from the preview.
+describe("an export never writes a tool's live preview", () => {
+  const PREVIEW = { id: "pv", type: "box", length: 1, width: 1, height: 1 } as Feature;
+
+  async function previewing(how: "preview" | "edit") {
+    const store = await editedStore();
+    vi.useFakeTimers();
+    if (how === "preview") store.setPreview(PREVIEW);
+    else { store.beginEditPreview("f3"); store.setEditPreview({ ...FEATURES[2]!, length: 40 } as Feature); }
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+    return store;
+  }
+
+  for (const how of ["preview", "edit"] as const) {
+    it(`File > Export refuses while a tool shows a ${how}`, async () => {
+      const store = await previewing(how);
+      const { exportModel } = await import("./files");
+      await exportModel(store, backend());
+      expect(sent).toEqual([]);
+      expect(reported).toEqual([t("file.export.toolOpen")]);
+    });
+  }
+
+  it("right-click Export, Export print project and Publish refuse too", async () => {
+    const store = await previewing("preview");
+    const { exportBody, exportPrintProject } = await import("./files");
+    await exportBody(store, backend(), "body2", "stl");
+    expect(await exportPrintProject(store, backend(), { path: "/tmp/p.3mf" })).toBeNull();
+    const { publishToTinkerAtlas } = await import("../tinkeratlas/publish");
+    await publishToTinkerAtlas(store, backend(), viewport);
+    expect(sent).toEqual([]);
+    expect(reported).toEqual([t("file.export.toolOpen"), t("file.export.toolOpen")]);
+    expect(toasts).toEqual([t("tinkeratlas.publish.toolOpen")]);
+  });
+
+  it("exports the committed model again once the preview is cleared", async () => {
+    const store = await previewing("preview");
+    vi.useFakeTimers();
+    store.setPreview(null);
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+    const { exportModel } = await import("./files");
+    await exportModel(store, backend());
+    expectVisibleDocument(sent[0]);
+  });
+});

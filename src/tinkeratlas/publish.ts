@@ -34,8 +34,10 @@ export async function publishToTinkerAtlas(
     return;
   }
   const visible = visibleModel(store);
-  if (!visible.bodies.length) {
-    toast(t(visible.allHidden ? "tinkeratlas.publish.allHidden" : "tinkeratlas.publish.nothing"), { kind: "error" });
+  if (visible.refusal) {
+    const why = visible.refusal === "toolOpen" ? t("tinkeratlas.publish.toolOpen")
+      : visible.refusal === "allHidden" ? t("tinkeratlas.publish.allHidden") : t("tinkeratlas.publish.nothing");
+    toast(why, { kind: "error" });
     return;
   }
   // publish requires an account; sign-in stays optional everywhere else.
