@@ -853,7 +853,7 @@ describe("a relation already between this pair is refused, not duplicated (f3cb1
   });
 });
 
-describe("Tangent anchors at a line's own endpoint when that end already sits on the other curve (cdd04fd1)", () => {
+describe("Tangent anchors at a line's own endpoint (cdd04fd1, c73b3174)", () => {
   it("adds the tangent2 AND a pointOn hold pinning that end to the circle", () => {
     const h = new MockHost();
     h._ents = [
@@ -882,7 +882,9 @@ describe("Tangent anchors at a line's own endpoint when that end already sits on
     expect(h.holds[0]).toEqual([{ type: "pointOn", e: "l1", p: 0, curve: "c1" }]);
   });
 
-  it("falls back to the plain (touch-anywhere) tangent when the near endpoint is NOT on the other curve", () => {
+  // Reversed for this gesture on 2026-10-18 (c73b3174): an end clicked off the
+  // curve is put on it by the same hold, rather than left a free tangency.
+  it("pins the clicked endpoint to the other curve even when it is NOT on it yet (c73b3174)", () => {
     const h = new MockHost();
     h._ents = [
       { type: "line", id: "l1", x1: 10, y1: 20, x2: 10, y2: 40 }, // neither end touches c1
@@ -890,7 +892,21 @@ describe("Tangent anchors at a line's own endpoint when that end already sits on
     ];
     h._tool = "tangent";
     const ct = new ConstraintTools(h);
-    ct.click(v(10, 20.5)); // right on l1's endpoint, not its middle
+    ct.click(v(10, 20.3)); // on l1's endpoint, not its middle
+    ct.click(v(0, 10));
+    expect(h._cons).toEqual([{ type: "tangent2", a: "l1", b: "c1" }]);
+    expect(h.holds[0]).toEqual([{ type: "pointOn", e: "l1", p: 0, curve: "c1" }]);
+  });
+
+  it("still a free tangency when the line is clicked away from both ends", () => {
+    const h = new MockHost();
+    h._ents = [
+      { type: "line", id: "l1", x1: 10, y1: 20, x2: 10, y2: 40 },
+      { type: "circle", id: "c1", radius: 10, x: 0, y: 0 },
+    ];
+    h._tool = "tangent";
+    const ct = new ConstraintTools(h);
+    ct.click(v(10, 30)); // the middle
     ct.click(v(0, 10));
     expect(h._cons).toEqual([{ type: "tangent2", a: "l1", b: "c1" }]);
     expect(h.holds[0]).toBeUndefined();

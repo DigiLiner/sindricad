@@ -345,18 +345,23 @@ export function splineTangentFor(
 
 /** The line/arc-endpoint equivalent of splineTangentFor's joint: a plain line
  *  or arc has no `hold` machinery of its own, but a click landing at/near one
- *  of ITS OWN ends, where that end already sits on the other curve, means the
- *  same thing a spline's end does — anchor the tangency there instead of
- *  leaving it free to touch anywhere (GH cdd04fd1: "I can't click an endpoint
- *  on the line and make it tangential from that endpoint").
+ *  of ITS OWN ends means the same thing a spline's end does — anchor the
+ *  tangency there instead of leaving it free to touch anywhere (GH cdd04fd1:
+ *  "I can't click an endpoint on the line and make it tangential from that
+ *  endpoint").
+ *
+ *  That end need not be on `other` yet: the hold puts it there in the same
+ *  step (c73b3174, Thomas 2026-10-18, reversing cdd04fd1's "an endpoint merely
+ *  close to the curve is still a free tangency" for this gesture only). The
+ *  reporter had to add the Point-On by hand after a tangent that touched
+ *  further along the line. Clicking the line's middle stays a free tangency.
  *
  *  `pick` is whichever of the two curves this is finding the OWN endpoint on;
  *  `other` is what it has to be a joint WITH. Null when `pick` is not a line
- *  or arc (a circle has no end to anchor), when the click did not land near
- *  one of its ends, or when that end is not actually on `other`: an endpoint
- *  merely close to the curve is still a free, generic tangency, same as
- *  clicking the line's middle. `held` means the end is already one point with
- *  `other`'s own end (coincKey), which needs no extra hold to stay there. */
+ *  or arc (a circle has no end to anchor), or when the click did not land near
+ *  one of its ends. Of two ends in reach (a short line), one already on
+ *  `other` wins, else the nearer. `held` means the end is already one point
+ *  with `other`'s own end (coincKey), which needs no extra hold to stay there. */
 function lineArcEndJoint(
   pick: TangentPick,
   other: TangentPick,
@@ -371,9 +376,9 @@ function lineArcEndJoint(
   if (!ends.length) return null;
   const { dist: offOther, ends: otherEnds } = curveGeom(other.id, other.ent, entities);
   const merged = (a: XY, b: XY) => coincKey(a.x, a.y) === coincKey(b.x, b.y);
-  const near = ends
-    .filter((q) => Math.hypot(q.pos.x - pick.at.x, q.pos.y - pick.at.y) <= clickTol)
-    .find((q) => offOther(q.pos) <= JOINT_TOL);
+  const reach = (q: { pos: XY }) => Math.hypot(q.pos.x - pick.at.x, q.pos.y - pick.at.y);
+  const inReach = ends.filter((q) => reach(q) <= clickTol).sort((q, r) => reach(q) - reach(r));
+  const near = inReach.find((q) => offOther(q.pos) <= JOINT_TOL) ?? inReach[0];
   return near ? { end: near.end, pos: near.pos, held: otherEnds.some((q) => merged(near.pos, q)) } : null;
 }
 
@@ -945,9 +950,10 @@ export class ConstraintTools {
     }
     // two lines cannot be tangent — say so rather than swallowing the pick
     if (first.kind === "line" && e.kind === "line") return this.missed();
-    // A click at/near a line or arc's OWN endpoint, where that end already
-    // sits on the other curve, anchors the tangency there (cdd04fd1) — tried
-    // in both pick orders, since either curve can be the one with the end.
+    // A click at/near a line or arc's OWN endpoint anchors the tangency there,
+    // putting that end on the other curve when it is not on it yet (cdd04fd1,
+    // c73b3174) — tried in both pick orders, since either curve can be the one
+    // with the end.
     const tol = this.host.pickTol();
     const ents = this.host.entities();
     const onA = lineArcEndJoint(a, b, ents, tol);
