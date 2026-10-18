@@ -127,7 +127,8 @@ export function mapOperandId(entIds: ReadonlyMap<string, string>, id: string): s
  *  so the copy is never tied to what it came from; an offset keeps just its
  *  pairs that were copied whole. A dimension keeps its value and gets an id of
  *  its own, recorded in `dimIds` (source id -> copy's): a parameter binding
- *  names a dim by id, and a shared id would bind the copy to the source's. */
+ *  names a dim by id, so the copy's binding (SketchMode.carryBindings) is a
+ *  binding of its own. */
 export function copiedConstraints(
   cons: readonly SketchConstraint[],
   entIds: ReadonlyMap<string, string>,

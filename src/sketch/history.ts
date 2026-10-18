@@ -13,7 +13,15 @@
 import type { SketchConstraint, SketchPattern } from "../types";
 import type { RegionCarry } from "../document/store";
 import type { PointCarry } from "../document/pointCarry";
+import type { FieldKind } from "../document/numFields";
 import type { ResolvedEntity } from "./snap";
+
+/** A parameter binding made while the sketch is open (SketchMode's
+ *  pendingBindings): it lands with the sketch at Finish. `refs` names, for
+ *  each auto parameter (dN) the expression refers to, the binding slot whose
+ *  parameter takes its place at Finish: a copied dimension's relation to
+ *  another copied one points at the copy, whose dN does not exist before. */
+export type PendingBinding = { expr: string; kind: FieldKind; name?: string; refs?: Record<string, string> };
 
 /** The editable state one undo step restores — the whole of what a sketch edit
  *  can change. */
@@ -30,6 +38,10 @@ export type SketchSnapshot = {
   /** the curves a Trim cut that kept their id (SketchMode.trimmedCurves);
    *  absent when there are none */
   trimmed?: string[];
+  /** the parameter bindings made in the session, by slot (pendingBindings):
+   *  a copy brings its own, and an undo of it has to take them away; absent
+   *  when there are none */
+  bindings?: [string, PendingBinding][];
 };
 
 export function cloneSnapshot(s: SketchSnapshot): SketchSnapshot {

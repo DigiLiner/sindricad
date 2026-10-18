@@ -60,7 +60,7 @@ const upd = (entity: string, x1: number, y1: number, x2: number, y2: number): Pr
 function openSketch() {
   const s = Object.create(SketchMode.prototype) as SketchMode & Record<string, unknown>;
   Object.assign(s, {
-    active: true, tool: "select", patterns: [], selected: new Set<string>(),
+    active: true, tool: "select", patterns: [], selected: new Set<string>(), pendingBindings: new Map(),
     entities: [
       proj("bottom", 30, -20, -30, -20), proj("left", -30, -20, -30, 40),
       { id: "hole", type: "circle", x: -20, y: -10, radius: 5 },

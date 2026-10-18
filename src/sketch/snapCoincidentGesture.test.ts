@@ -93,7 +93,7 @@ function drawing(
   const frames: (() => void)[] = [];
   Object.assign(s, {
     tool, active: true,
-    entities: [...entities], constraints: [],
+    entities: [...entities], constraints: [], pendingBindings: new Map(),
     candidates: candidatesFromEntities(entities),
     base: null, chainStart: null, basePinned: false, baseRef: null,
     lastSnapKind: "free", lastSnapRef: null, lastSnapCurve: null, lastCursor: new THREE.Vector2(),

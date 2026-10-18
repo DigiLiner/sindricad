@@ -124,12 +124,17 @@ const fold = (deg: number) => {
  *  `level` names lines that were horizontal in the source with no constraint
  *  saying so (the bottom side of a rectangle that came out as lines): across
  *  a "turn" line they take part in the relations Horizontal and Vertical
- *  leave behind. */
+ *  leave behind. `wraps` records, by dimension id, how the expression of a
+ *  parameter binding has to change for a value read the other way round:
+ *  an X or Y distance that negates is bound to minus it, and an angle whose
+ *  side is read backwards to its supplement (a binding sets an angle's
+ *  magnitude, numFields.dimValueFromParam, and the sign stays the copy's). */
 export function mirroredConstraints(
   cons: readonly SketchConstraint[],
   r: Reflection,
   renumber: ReadonlyMap<string, Renumber>,
   level: readonly string[] = [],
+  wraps?: Map<string, (expr: string) => string>,
 ): SketchConstraint[] {
   const split = (id: string) => {
     const k = id.indexOf("~");
@@ -167,13 +172,16 @@ export function mirroredConstraints(
     if (c.type === "p2pDistanceX" || c.type === "p2pDistanceY") {
       if (r.axes === "turn") continue;
       const x = c.type === "p2pDistanceX";
-      if (r.axes === "swap") out.push({ ...c, type: x ? "p2pDistanceY" : "p2pDistanceX", value: r.sign * c.value });
-      else out.push({ ...c, value: (x ? r.sign : -r.sign) * c.value });
+      const sign = r.axes === "swap" || x ? r.sign : -r.sign;
+      if (sign < 0 && c.id) wraps?.set(c.id, (e) => `-(${e})`);
+      if (r.axes === "swap") out.push({ ...c, type: x ? "p2pDistanceY" : "p2pDistanceX", value: sign * c.value });
+      else out.push({ ...c, value: sign * c.value });
       continue;
     }
     if (c0.type === "angle" && c.type === "angle") {
       // a side read backwards turns its direction, and so the angle, by 180
       const turned = Number(sideOf(c0.l1).reversed) + Number(sideOf(c0.l2).reversed);
+      if (turned % 2 && c.id) wraps?.set(c.id, (e) => `180 - (${e})`);
       out.push({ ...c, value: fold(-c.value + (turned % 2 ? 180 : 0)) });
       continue;
     }

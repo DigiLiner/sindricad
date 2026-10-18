@@ -5,7 +5,7 @@
 import * as THREE from "three";
 import type { Viewport } from "../viewport/viewport";
 import type { DocumentStore } from "../document/store";
-import type { EdgeFingerprint, ExtrudeRef, Feature, ParamTarget, PlaceOffset, PlaneSpec, ProjectedSource, ProjectionUpdate, Selector, SketchConstraint, SketchEntity, SketchPattern } from "../types";
+import type { EdgeFingerprint, ExtrudeRef, Feature, ParamDef, ParamTarget, PlaceOffset, PlaneSpec, ProjectedSource, ProjectionUpdate, Selector, SketchConstraint, SketchEntity, SketchPattern } from "../types";
 import type { ProjectionRequest } from "../geometry/client";
 import type { EdgeRef } from "../viewport/edgeLines";
 import { applyProjectionUpdate, dimPlaceOf, isBadgeEntity, isDriven, isPlacedDim } from "../types";
@@ -29,9 +29,9 @@ import { pickEntity, pointBeatsCurve, tangencyPoints, crossingPoints, trimSpan, 
 import { newEntityId, newConstraintId, isDimConstraint, notePatternId, copiedConstraints, mapOperandId } from "./id";
 import { cornerRenumber, mirroredConstraints, reflection, SLOT_RENUMBER, type Reflection, type Renumber } from "./mirror";
 import { angleQuadrant, reflectAcrossLine } from "./geom2d";
-import { SketchHistory, cloneSnapshot, type SketchSnapshot } from "./history";
+import { SketchHistory, cloneSnapshot, type PendingBinding, type SketchSnapshot } from "./history";
 import { isPlainNumber, parseField, dimValueOk, fmtLength, fieldText, canonicalDecimal, storedDimExpr } from "../ui/units";
-import { splitNameValue, validateName } from "../params/engine";
+import { isAutoName, splitNameValue, validateName } from "../params/engine";
 import { parseExpr, refsOfNode } from "../params/parse";
 import { RIGID_ENTITY_NUM_FIELDS, coerceForField, dimValueFromParam, paramValueOfDim, type FieldKind } from "../document/numFields";
 import type { RegionCarry, SketchBinding } from "../document/store";
@@ -214,6 +214,20 @@ const isCompoundShape = (e: ResolvedEntity) =>
   e.type === "rectangle" || e.type === "polygon" || e.type === "slot";
 
 // Tools that operate on the current multi-selection, so setTool must keep it.
+/** The numbers of a shape (RIGID_ENTITY_NUM_FIELDS) that place it rather
+ *  than size it: a copy keeps its own, not its source's binding. */
+const COPY_STAYS_FIELDS = new Set(["x", "y", "x1", "y1", "x2", "y2"]);
+
+/** The parameter names an expression refers to; none for one that does not
+ *  parse (it refers to nothing the engine would read). */
+function exprRefs(expr: string): string[] {
+  try {
+    return refsOfNode(parseExpr(expr));
+  } catch {
+    return [];
+  }
+}
+
 const KEEPS_SELECTION = new Set<SketchTool>(["mirror", "move", "copy", "rotate", "scale"]);
 /** The tools that move the selection about a point the user clicks. Armed with
  *  nothing selected, they take clicks AS the selection first (see
@@ -1950,7 +1964,7 @@ export class SketchMode {
   // bindings are recorded here (keyed `c:<constraintId>` / `e:<entityId>:<field>`)
   // and land atomically with the sketch commit (store.applyBindings inside the
   // same mutate). Bound dims render fx: and reopen their expression.
-  private pendingBindings = new Map<string, { expr: string; kind: FieldKind; name?: string }>();
+  private pendingBindings = new Map<string, PendingBinding>();
 
   /** the sketch feature id currently open for editing (null for a new sketch
    *  or when the editor is closed) — the store's cascade must not headlessly
@@ -1971,14 +1985,19 @@ export class SketchMode {
   private drainBindings(sketchId: string): SketchBinding[] {
     const out: SketchBinding[] = [];
     for (const [key, b] of this.pendingBindings) {
-      out.push({ target: SketchMode.targetOf(key, sketchId), expr: b.expr, kind: b.kind, ...(b.name ? { name: b.name } : {}) });
+      const refs = Object.entries(b.refs ?? {}).map(([name, slot]) => ({ name, target: SketchMode.targetOf(slot, sketchId) }));
+      out.push({
+        target: SketchMode.targetOf(key, sketchId), expr: b.expr, kind: b.kind,
+        ...(b.name ? { name: b.name } : {}),
+        ...(refs.length ? { refs } : {}),
+      });
     }
     this.pendingBindings.clear();
     return out;
   }
 
   /** the DOCUMENT-side binding for a pending key (editing an existing sketch). */
-  private docBinding(key: string): { name: string; expr: string; value: number } | null {
+  private docBinding(key: string): { name: string; expr: string; value: number; unit: ParamDef["unit"] } | null {
     if (!this.editingId || !this.store) return null;
     return this.store.boundExpr(SketchMode.targetOf(key, this.editingId));
   }
@@ -2061,6 +2080,84 @@ export class SketchMode {
     const keepName = prior?.name ? { name: prior.name } : {};
     if (r.expr) this.pendingBindings.set(key, { expr: r.expr, kind, ...keepName });
     else if (prior || this.docBinding(key)) this.pendingBindings.set(key, { expr: String(r.value), kind, ...keepName });
+  }
+
+  /** The bindings on binding slots `slots` as they stand now, a session's
+   *  over the document's: what a copy of them carries (carryBindings). `name`
+   *  is the parameter's name, given or auto (dN), when it has one. */
+  private bindingsAt(slots: Iterable<string>): Map<string, PendingBinding> {
+    const out = new Map<string, PendingBinding>();
+    for (const slot of slots) {
+      const pend = this.pendingBindings.get(slot);
+      const doc = this.docBinding(slot);
+      if (!pend && !doc) continue;
+      const kind = pend?.kind ?? (doc!.unit === "deg" ? "angle" : doc!.unit === "count" ? "count" : "length");
+      const name = pend?.name ?? doc?.name;
+      out.set(slot, { expr: pend?.expr ?? doc!.expr, kind, ...(name ? { name } : {}), ...(pend?.refs ? { refs: pend.refs } : {}) });
+    }
+    return out;
+  }
+
+  /** The binding slots a copy of the entities in `entIds` (source -> copy)
+   *  and of the dimensions in `dimIds` carries, source slot -> copy's: every
+   *  dimension the copy has, and each copied shape's own numbers except its
+   *  position, which would pull the copy back onto its source. `turned`
+   *  (Mirror) leaves the angles out too: a mirror image is turned the other
+   *  way. */
+  private copiedSlots(entIds: ReadonlyMap<string, string>, dimIds: ReadonlyMap<string, string>, turned = false): Map<string, string> {
+    const out = new Map<string, string>();
+    const kept = new Set(this.constraints.flatMap((c) => (isDimConstraint(c) && c.id ? [c.id] : [])));
+    for (const [from, to] of dimIds) if (kept.has(to)) out.set(`c:${from}`, `c:${to}`);
+    const byId = new Map(this.entities.map((e) => [e.id, e]));
+    for (const [from, to] of entIds) {
+      const e = byId.get(to);
+      for (const [field] of (e && RIGID_ENTITY_NUM_FIELDS[e.type]) ?? []) {
+        if (COPY_STAYS_FIELDS.has(field) || (turned && field === "angle")) continue;
+        out.set(`e:${from}:${field}`, `e:${to}:${field}`);
+      }
+    }
+    return out;
+  }
+
+  /** Bind each copy as its source is bound (Copy, Mirror; decision B4, the
+   *  rule Copy sketch to plane has, sketchPlaneEdits.copySketch). A parameter
+   *  drives one field, so each copy's binding is its own:
+   *  - a source bound under a name the user gave follows that name, so the
+   *    source and the copy both change when it does;
+   *  - one under an auto name (dN), or none yet, holds the source's
+   *    expression, and a reference in it to the dN of another copied
+   *    dimension is pointed at that dimension's copy at Finish (`refs`: the
+   *    copy's dN does not exist before), so a relation inside what was
+   *    copied holds inside the copy, not between the copy and the source.
+   *  `bound` is bindingsAt over the source slots, `slots` source slot ->
+   *  copy's; `wraps` rewrites the expression of a copy whose value a mirror
+   *  turned round (mirroredConstraints). */
+  private carryBindings(bound: ReadonlyMap<string, PendingBinding>, slots: ReadonlyMap<string, string>, wraps?: ReadonlyMap<string, (expr: string) => string>) {
+    const autoCopy = new Map<string, string>(); // a source's dN -> the copy's slot
+    for (const [slot, b] of bound) {
+      const to = slots.get(slot);
+      if (to && b.name && isAutoName(b.name)) autoCopy.set(b.name, to);
+    }
+    const known = (name: string) =>
+      name in (this.store?.document.paramDefs ?? {}) || [...this.pendingBindings.values()].some((p) => p.name === name);
+    for (const [slot, b] of bound) {
+      const to = slots.get(slot);
+      if (!to) continue;
+      let expr = b.expr;
+      let refs: Record<string, string> | undefined;
+      if (b.name && !isAutoName(b.name) && known(b.name)) expr = b.name;
+      else {
+        const r: Record<string, string> = {};
+        for (const [name, at] of Object.entries(b.refs ?? {})) r[name] = slots.get(at) ?? at;
+        for (const name of exprRefs(expr)) {
+          const at = autoCopy.get(name);
+          if (at) r[name] = at;
+        }
+        if (Object.keys(r).length) refs = r;
+      }
+      const wrap = wraps?.get(to);
+      this.pendingBindings.set(to, { expr: wrap ? wrap(expr) : expr, kind: b.kind, ...(refs ? { refs } : {}) });
+    }
   }
 
   /** Shared raw-input commit for a bindable dim slot with a known key.
@@ -2287,6 +2384,9 @@ export class SketchMode {
       : row.valueMm;
     const expr = this.exprFor(key) ?? String(heldValue);
     this.pendingBindings.set(key, { expr, kind: row.kind, name });
+    // an undo step of its own: bindings are in the undo history, and
+    // banked with the next edit instead, an Undo of that edit took the name
+    this.bankIfChanged();
     this.refreshActive();
     this.onState?.();
     return null;
@@ -3906,7 +4006,8 @@ export class SketchMode {
       const path = c.type === "text" && c.pathRef !== undefined ? mapOperandId(entIds, c.pathRef) : null;
       return c.type === "text" && path ? { ...c, pathRef: path } : c;
     });
-    let cons = copiedConstraints(this.constraints, entIds);
+    const dimIds = new Map<string, string>();
+    let cons = copiedConstraints(this.constraints, entIds, dimIds);
     // A rectangle is square to the sketch axes by definition (types.ts), so
     // across a line that turns them its mirror image is four lines, held
     // square by Perpendicular, as Rotate explodes one; what named its sides
@@ -3923,8 +4024,11 @@ export class SketchMode {
       }
     }
     const renumber = new Map<string, Renumber>();
+    const wraps = new Map<string, (expr: string) => string>();
     this.entities.push(...copies.map((e) => this.reflectEntity(e, flip, renumber)));
-    this.constraints.push(...mirroredConstraints(cons, flip, renumber, level));
+    this.constraints.push(...mirroredConstraints(cons, flip, renumber, level, wraps));
+    const slots = this.copiedSlots(entIds, dimIds, true);
+    this.carryBindings(this.bindingsAt(slots.keys()), slots, new Map([...wraps].map(([id, w]) => [`c:${id}`, w])));
     this.selected.clear();
     if (level.length) toast(t("sketch.transform.mirrorRectangleToLines", { count: level.length }), { timeout: 8000 });
     this.afterModify();
@@ -6500,8 +6604,12 @@ export class SketchMode {
         copies.push(c.type === "text" && path ? { ...c, pathRef: path } : c);
       }
       this.entities = [...this.entities, ...copies];
-      // and the constraints and dimensions among them (6c0c9504)
-      this.constraints = [...this.constraints, ...copiedConstraints(this.constraints, entIds)];
+      // and the constraints and dimensions among them (6c0c9504), bound as
+      // the source's are
+      const dimIds = new Map<string, string>();
+      this.constraints = [...this.constraints, ...copiedConstraints(this.constraints, entIds, dimIds)];
+      const slots = this.copiedSlots(entIds, dimIds);
+      this.carryBindings(this.bindingsAt(slots.keys()), slots);
       this.selected = sel; // leave the copies selected (Fusion-style)
       this.afterModify();
     } else {
@@ -7245,6 +7353,7 @@ export class SketchMode {
       ...(carry && Object.keys(carry).length ? { regionCarry: carry } : {}),
       ...(points && Object.keys(points).length ? { pointCarry: points } : {}),
       ...(trimmed?.length ? { trimmed } : {}),
+      ...(this.pendingBindings.size ? { bindings: [...this.pendingBindings] } : {}),
     });
   }
 
@@ -7256,6 +7365,7 @@ export class SketchMode {
     this.regionCarry = c.regionCarry ?? {};
     this.pointCarry = c.pointCarry ?? {};
     this.trimmedCurves = c.trimmed ?? [];
+    this.pendingBindings = new Map(c.bindings);
   }
 
   /** Re-arm the history baseline. Called when the state SETTLES after a solve,
@@ -7302,10 +7412,10 @@ export class SketchMode {
     this.dragSnapshot = null; // committed — drop the revert buffer
     this.dragConsBefore = null;
     if (!before || !this.active) return;
-    const banked = this.history.bankBefore(
-      { entities: before, constraints: consBefore, patterns: this.patterns },
-      this.snapshot(),
-    );
+    // the rest of the state (bindings included) is what it was: a drag only
+    // moves geometry
+    const now = this.snapshot();
+    const banked = this.history.bankBefore({ ...now, entities: before, constraints: consBefore }, now);
     if (banked) this.onState?.(); // the undo button just became live — see bankIfChanged
   }
 

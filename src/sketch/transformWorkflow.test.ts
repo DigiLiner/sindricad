@@ -559,8 +559,9 @@ describe("Copy carries the constraints inside the copied set", () => {
     // names a dim by id, so sharing one would bind the copy to the original's
     expect(new Set(dimIds).size).toBe(6);
     for (const id of dimIds) expect(["c1", "c2", "c3", "c4", "c5", "c6"]).not.toContain(id);
-    // the copy's distance is the source's value, not its parameter
-    expect([...s.pendingBindings.keys()]).toEqual(["c:c1"]);
+    // the copy's distance follows the source's parameter, with a binding of
+    // its own (copyBindings.test.ts has the rest of that rule)
+    expect([...s.pendingBindings]).toEqual([["c:c1", { expr: "width", kind: "length" }], [`c:${dimIds[0]}`, { expr: "width", kind: "length" }]]);
     // nothing shared: moving the copy's label leaves the original's where it is
     (added[3] as { place: { ox: number } }).place.ox = 99;
     expect((s.constraints[3] as { place: { ox: number } }).place.ox).toBe(1);

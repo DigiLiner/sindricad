@@ -4,7 +4,7 @@
 // listeners (viewport, timeline, tree).
 
 import { isDriven, TRIMMED_AWAY } from "../types";
-import type { CadDocument, DimField, Feature, ParamTarget, PlaneDef, PlaneSpec, ProjectionUpdate, RebuildReply, RebuildResult, Selector, SketchConstraint, SketchEntity, ViewCubeSide, ViewOverride } from "../types";
+import type { CadDocument, DimField, Feature, ParamDef, ParamTarget, PlaneDef, PlaneSpec, ProjectionUpdate, RebuildReply, RebuildResult, Selector, SketchConstraint, SketchEntity, ViewCubeSide, ViewOverride } from "../types";
 import type { GeometryBackend, ProjectionRequest, ProjectionResult, QueryResult } from "../geometry/client";
 import { featureErrorText } from "../geometry/featureErrorText";
 import { migrateDocument, savedVersion } from "./migrate";
@@ -17,6 +17,7 @@ import { isDimConstraint, newConstraintId } from "../sketch/id";
 import { resolveRealEntities, toSketchEntity } from "../sketch/resolve";
 import type { ResolvedEntity } from "../sketch/snap";
 import * as params from "../params/engine";
+import { renameRefs } from "../params/parse";
 import type { FieldKind } from "./numFields";
 import { DEFAULT_EXTRUDE_DISTANCE, boundShapeFields, dimValueFromParam, hasUpToTarget, paramValueOfDim, writeTarget } from "./numFields";
 import { p2lSideFlipped, paramStep, paramSteps, refreshStep, refreshSteps } from "./projectionWalk";
@@ -137,6 +138,11 @@ export interface SketchBinding {
   kind: FieldKind;
   /** Fusion's on-the-fly `name=expr`: bind under this chosen name instead of dN. */
   name?: string;
+  /** References in `expr` to re-point once every binding is in: each `name`
+   *  becomes the parameter bound to `target` (a copied dimension's relation
+   *  to another copied one, whose dN is minted only here; see
+   *  history.PendingBinding). */
+  refs?: { name: string; target: ParamTarget }[];
 }
 
 export interface RebuildState {
@@ -1643,11 +1649,11 @@ export class DocumentStore {
   }
 
   /** The expression driving `target`, when a model param is bound to it. */
-  boundExpr(target: ParamTarget): { name: string; expr: string; value: number } | null {
+  boundExpr(target: ParamTarget): { name: string; expr: string; value: number; unit: ParamDef["unit"] } | null {
     const name = params.boundParam(this.doc, target);
     if (!name) return null;
     const def = params.defsOf(this.doc)[name]!;
-    return { name, expr: def.expr, value: def.value };
+    return { name, expr: def.expr, value: def.value, unit: def.unit };
   }
 
   /** True when `target` is driven by a non-literal expression (fx: fields —
@@ -1661,6 +1667,7 @@ export class DocumentStore {
    *  A binding that stopped validating (its param was deleted mid-edit) is
    *  dropped LOUDLY — the dim keeps its last value. */
   private applyBindings(d: CadDocument, bindings?: SketchBinding[]) {
+    const applied: SketchBinding[] = [];
     for (const b of bindings ?? []) {
       // re-validate against the final doc — the dim/entity now exists in it
       const bound = params.boundParam(d, b.target);
@@ -1672,6 +1679,19 @@ export class DocumentStore {
       }
       if (b.name) params.commitNamedFieldExpr(d, b.target, b.name, b.expr, b.kind);
       else params.commitFieldExpr(d, b.target, b.expr, b.kind);
+      applied.push(b);
+    }
+    // Every binding is in, so every dN is: point the references at them. A
+    // reference whose target has no parameter (the copy was deleted) keeps
+    // naming the source's.
+    for (const b of applied) {
+      const own = b.refs?.length ? params.boundParam(d, b.target) : null;
+      if (!own) continue;
+      const def = params.defsOf(d)[own]!;
+      for (const r of b.refs!) {
+        const to = params.boundParam(d, r.target);
+        if (to) def.expr = renameRefs(def.expr, r.name, to);
+      }
     }
   }
 

@@ -102,6 +102,7 @@ function mount(opts: { badges?: boolean; more?: SketchConstraint[]; moreEnts?: R
     entities: ents,
     constraints: cons,
     patterns: [],
+    pendingBindings: new Map(),
     selected: new Set<string>(),
     history: new SketchHistory(),
     conflictIdx: new Set<number>(),
