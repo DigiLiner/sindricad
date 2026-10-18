@@ -19,7 +19,7 @@ import { isEditableTarget } from "../ui/focus";
 import { SketchDimensions, dimBadgeFields, type ExtraDim } from "./sketchDimensions";
 import { SketchGlyphs } from "./sketchGlyphs";
 import { constraintGlyphs, diagnosisOf, type ConstraintGlyph } from "./glyphs";
-import { alignmentAsDistance, entityDims, constraintDims, constraintEntityIds, dimRefPoints, curveKind, hoverOperandCurve, lineOperand, lineOperandAt, linearDim, operandPoint, rebindPolygonSides, refPoint, refPointNear, setDimPixelScale, RECT_CENTRE, shapeSideAt, slotAxisAt, staggeredDefaults, angleDimMeasure, type DimField, type ConstraintDim } from "./entityDims";
+import { alignmentAsDistance, entityDims, constraintDims, constraintEntityIds, dimRefPoints, curveKind, hoverOperandCurve, lineOperand, lineOperandAt, linearDim, operandPoint, pointAlignment, rebindPolygonSides, refPoint, refPointNear, setDimPixelScale, RECT_CENTRE, shapeSideAt, slotAxisAt, staggeredDefaults, angleDimMeasure, type DimField, type ConstraintDim } from "./entityDims";
 import {
   clampPlace, isDimError, isRoundTarget, pickDimTarget, rebindTarget, resolveDim, targetIdentity,
   targetKey, unsupportedMessage,
@@ -1846,8 +1846,11 @@ export class SketchMode {
    *  unlike offset they DISPLAY their sign, so the user can type it, and
    *  forcing the old sign back would make "put this point on the other side"
    *  unsayable. The editor gate (units.dimValueOk) is what lets the negative
-   *  through to this line. */
-  private writeDimValue(c: SketchConstraint & { value: number }, val: number) {
+   *  through to this line.
+   *
+   *  `moves` names the entity that moves when the dimension has a pick order
+   *  to go by (an alignment's first point); without it, soleDimEntity's. */
+  private writeDimValue(c: SketchConstraint & { value: number }, val: number, moves?: string) {
     c.value = dimValueFromParam(c, this.angleAsStoredValue(c, val));
     // a zero distance shown as an alignment (types.ts) is a distance now
     if ("alignment" in c) delete c.alignment;
@@ -1857,7 +1860,9 @@ export class SketchMode {
     // it sits tangent inside grew with it. See sketchSolve.soleDimEntity for why
     // a genuine two-entity dim deliberately gets no bias.
     const mover = soleDimEntity(c);
-    if (mover) this.pendingBias = { moves: [mover] }; // BEFORE requestSolve: the pump reads it synchronously
+    // BEFORE requestSolve: the pump reads it synchronously
+    if (moves) this.pendingBias = biasOnto([moves], [c]);
+    else if (mover) this.pendingBias = { moves: [mover] };
     this.requestSolve();
     // no solver on this machine: the value has to reach the geometry here, the
     // same way setDrivingDimension does it (see applyDrivingDimsDirectly)
@@ -2335,9 +2340,14 @@ export class SketchMode {
     // 0, swapped in only once the value is accepted
     const c = held?.type === "pointsHorizontal" || held?.type === "pointsVertical" ? alignmentAsDistance(held) : held;
     if (!c || !isDimConstraint(c) || isDriven(c)) return t("sketch.dimension.error.notEditable");
+    // An alignment's points were picked in order, the first being the one
+    // that moved onto the second, so the first is what a gap typed here moves
+    // (explore-sketcher-1016-2): solved free, the gap split between a point
+    // and the rectangle it was levelled with, and the rectangle shrank.
+    const first = held && pointAlignment(held) !== null && "e1" in held ? held.e1 : undefined;
     const write = (v: number) => {
       this.constraints[at] = c;
-      this.writeDimValue(c, v);
+      this.writeDimValue(c, v, first);
     };
     if (!isPlainNumber(raw) || (c.id && this.exprFor(`c:${c.id}`) !== undefined)) {
       if (!c.id) c.id = newConstraintId();
