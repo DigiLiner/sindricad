@@ -510,3 +510,83 @@ describe("a fix badge is nudged clear of its point too, the same as coincident",
     expect(drawn).not.toEqual({ x: point.x, y: point.y });
   });
 });
+
+// A point badge sits ON_POINT_OFFSET_PX above and to the right of its point.
+// A point near the top or the right edge of the view put its badge partly or
+// wholly outside the view, where the clip trims it and it cannot be read or
+// right-clicked. It flips to the other side of its point then, and only then:
+// a badge that fits where it is stays there, so panning does not make it jump.
+describe("a point badge flips to the other side of its point only when it would leave the view", () => {
+  const W = 900, H = 700;
+  /** plane mm == screen px, y down, origin top left: a point at (x, y) is drawn at (x, y). */
+  const projecting = {
+    camera: new THREE.PerspectiveCamera(),
+    projectToOverlay: (w: THREE.Vector3) => ({ x: w.x, y: w.y, width: W, height: H }),
+  } as unknown as Viewport;
+  /** where the one fix badge on (x, y) is drawn, as its transform says */
+  function fixBadgeAt(x: number, y: number) {
+    body().innerHTML = "";
+    const glyphs = new SketchGlyphs(projecting);
+    const ents: ResolvedEntity[] = [{ type: "point", id: "p", x, y }];
+    glyphs.show(constraintGlyphs(ents, [{ type: "fix", e: "p", p: 0 }]), plane, new Set(), new Set());
+    (glyphs as unknown as { loop: () => void }).loop();
+    const [el] = byClass(body(), "sketch-glyph");
+    expect(el?.textContent).toBe("⚓");
+    const m = /translate\(([-\d.]+)px, ([-\d.]+)px\)/.exec(el!.style.transform ?? "");
+    return { x: Number(m![1]), y: Number(m![2]) };
+  }
+  /** the 16 px badge centred at `c` lies wholly inside the view */
+  const inside = (c: { x: number; y: number }) => c.x - 8 >= 0 && c.x + 8 <= W && c.y - 8 >= 0 && c.y + 8 <= H;
+
+  it("CONTROL: in the middle of the view it sits above and to the right, where it always did", () => {
+    expect(fixBadgeAt(400, 300)).toEqual({ x: 412, y: 288 });
+  });
+
+  it("near the top edge it drops below its point, and is wholly in the view", () => {
+    const at = fixBadgeAt(400, 5);
+    expect(inside(at), JSON.stringify(at)).toBe(true);
+    expect(at).toEqual({ x: 412, y: 17 });
+  });
+
+  it("near the right edge it moves to the left of its point", () => {
+    const at = fixBadgeAt(W - 4, 300);
+    expect(inside(at), JSON.stringify(at)).toBe(true);
+    expect(at).toEqual({ x: W - 16, y: 288 });
+  });
+
+  it("in the top right corner it flips on both axes", () => {
+    const at = fixBadgeAt(W - 4, 4);
+    expect(inside(at), JSON.stringify(at)).toBe(true);
+    expect(at).toEqual({ x: W - 16, y: 16 });
+  });
+
+  it("does not jump while it still fits: 21 px from the top edge it stays above", () => {
+    // the 16 px badge centred 12 px above spans 1..17 px from the top: inside
+    expect(fixBadgeAt(400, 21)).toEqual({ x: 412, y: 9 });
+  });
+});
+
+describe("two badges on one point near the right edge", () => {
+  it("the one that flips does not land on the other", () => {
+    body().innerHTML = "";
+    const projecting = {
+      camera: new THREE.PerspectiveCamera(),
+      projectToOverlay: (w: THREE.Vector3) => ({ x: w.x, y: w.y, width: 900, height: 700 }),
+    } as unknown as Viewport;
+    const glyphs = new SketchGlyphs(projecting);
+    const ents: ResolvedEntity[] = [
+      { type: "line", id: "a", x1: 896, y1: 300, x2: 800, y2: 200 },
+      { type: "line", id: "b", x1: 896, y1: 300, x2: 800, y2: 400 },
+    ];
+    const cons: SketchConstraint[] = [
+      { type: "coincident", e1: "a", p1: 0, e2: "b", p2: 0 },
+      { type: "fix", e: "a", p: 0 },
+    ];
+    glyphs.show(constraintGlyphs(ents, cons), plane, new Set(), new Set());
+    (glyphs as unknown as { loop: () => void }).loop();
+    const xs = byClass(body(), "sketch-glyph").map((el) => Number(/translate\(([-\d.]+)px/.exec(el.style.transform ?? "")![1]));
+    expect(xs).toHaveLength(2);
+    expect(new Set(xs).size, JSON.stringify(xs)).toBe(2);
+    for (const x of xs) expect(x + 8, JSON.stringify(xs)).toBeLessThanOrEqual(900);
+  });
+});

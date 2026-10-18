@@ -13,7 +13,8 @@
 // Only a real browser can answer this: it is a question about stacking, hit
 // testing and layout, and every unit around it passes while the bug is live.
 // Three things are asserted, at the opening view and at four zoom steps:
-//   (a) every drawn label is anchored inside #viewport,
+//   (a) every drawn label is anchored inside #viewport (a point glyph lies
+//       wholly inside it),
 //   (b) no point over #browser, #inspector, #ribbon or the sketch palette
 //       hit-tests to a label (the palette is the second half of the same bug:
 //       .sketch-dims sat at z-index 150, above every piece of chrome there is),
@@ -143,16 +144,18 @@ const DOC = {
     //
     // A dimension badge is centred on its anchor; a point glyph is not. Fix,
     // Coincident and Point-On sit ON_POINT_OFFSET_PX (12) above and to one
-    // side of their point so it shows through (sketchGlyphs.ts), so an anchor
-    // just inside the right edge puts the ⚓'s centre just outside it. Taking
-    // the centre for the anchor failed this 6 runs in 10 after two notches,
-    // where one fix point lands about 2 px inside the edge and run-to-run
-    // jitter decided which side of it. Allow exactly that nudge for those.
+    // side of their point so it shows through (sketchGlyphs.ts), and flip to
+    // the other side of it when that side would leave the view. So a drawn
+    // point glyph is WHOLLY inside the viewport, however close to an edge its
+    // point is (two notches in, one fix point lands about 2 px inside the
+    // right edge: its ⚓ used to hang half outside, and fail this 6 runs in 10).
     const ON_POINT = new Set(["⊙", "∈", "⚓"]);
     const escaped = labels.filter((n) => {
-      const nudge = n.cls.startsWith("sketch-glyph") && ON_POINT.has(n.text) ? 12 : 0;
+      if (n.cls.startsWith("sketch-glyph") && ON_POINT.has(n.text)) {
+        return n.l < vp.l - 0.5 || n.r > vp.r + 0.5 || n.t < vp.t - 0.5 || n.b > vp.b + 0.5;
+      }
       const cx = (n.l + n.r) / 2, cy = (n.t + n.b) / 2;
-      return cx < vp.l - nudge || cx > vp.r + nudge || cy < vp.t - nudge || cy > vp.b + nudge;
+      return cx < vp.l || cx > vp.r || cy < vp.t || cy > vp.b;
     });
 
     // Sweep the panels: is a sketch label the TOPMOST thing anywhere over them?

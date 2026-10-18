@@ -24,6 +24,9 @@ interface GlyphEl {
   linePts?: [THREE.Vector2, THREE.Vector2];
   /** what loop() last wrote to its style (placeBadge) */
   placed?: string;
+  /** half its drawn size, measured once (a fallback symbol draws it wider than
+   *  the 16px minimum: ⚓ is about 20px) */
+  half?: { x: number; y: number };
 }
 
 /** Badges anchored exactly on the point they mark (glyphs.ts's `refPos`), rather
@@ -39,6 +42,8 @@ interface GlyphEl {
 const ON_POINT_LABELS = new Set(["⊙", "∈", "⚓"]);
 /** screen pixels, clear of the 16px-square badge (styles.css .sketch-glyph) */
 const ON_POINT_OFFSET_PX = 12;
+/** half the badge's 16px min size (styles.css .sketch-glyph) */
+const BADGE_HALF_PX = 8;
 
 /** Regression bisected to 3a63f7d ("badge both operands of a symmetric
  *  two-operand constraint"): badging both lines of a Perpendicular/Parallel/
@@ -55,6 +60,19 @@ const ON_POINT_OFFSET_PX = 12;
  *  the line's real midpoint (right-click-to-delete and follow()'s drag
  *  tracking key off that), only the on-screen badge moves. */
 const LINE_MIDPOINT_OFFSET_PX = 12;
+
+/** Does a badge reaching `half` either side of `at` lie wholly within [0, `size`]? */
+const fits = (at: number, half: number, size: number) => at - half >= 0 && at + half <= size;
+
+/** How far badge `g` reaches from its centre, measured the first time it is
+ *  laid out (a layout read per badge, once, not once a frame). */
+function halfSize(g: GlyphEl): { x: number; y: number } {
+  g.half ??= {
+    x: Math.max(BADGE_HALF_PX, (g.el.offsetWidth || 0) / 2),
+    y: Math.max(BADGE_HALF_PX, (g.el.offsetHeight || 0) / 2),
+  };
+  return g.half;
+}
 
 export class SketchGlyphs {
   private root: HTMLDivElement;
@@ -241,7 +259,7 @@ export class SketchGlyphs {
     // each other (sketch_palette_e2e). A group holding a point badge is laid
     // out in a row just above that point, alternating right and left of it,
     // so no badge covers the point and none covers another.
-    const placed: { g: GlyphEl; p: { x: number; y: number }; key: string }[] = [];
+    const placed: { g: GlyphEl; p: { x: number; y: number; width: number; height: number }; key: string }[] = [];
     const onPointGroup = new Set<string>();
     for (const g of this.items) {
       this.plane.to3D(g.pos.x, g.pos.y, this.scratch);
@@ -252,16 +270,32 @@ export class SketchGlyphs {
       }
       const key = `${Math.round(p.x)},${Math.round(p.y)}`;
       if (ON_POINT_LABELS.has(g.label)) onPointGroup.add(key);
-      placed.push({ g, p: { x: p.x, y: p.y }, key });
+      placed.push({ g, p: { x: p.x, y: p.y, width: p.width, height: p.height }, key });
     }
     const taken = new Map<string, number>();
+    /** the x offsets each point group's row already holds */
+    const used = new Map<string, Set<number>>();
     for (const { g, p, key } of placed) {
       const n = taken.get(key) ?? 0;
       taken.set(key, n + 1);
       if (onPointGroup.has(key)) {
+        // Above and to the side of the point, and on the OTHER side only when
+        // that one would put the badge out of the view (the clip trims it, and
+        // half a badge can be neither read nor right-clicked). Never just
+        // because it is near an edge: a badge that fits stays put while the
+        // view pans, rather than jumping about.
         const side = n % 2 === 0 ? 1 : -1;
-        const x = p.x + side * (ON_POINT_OFFSET_PX + Math.floor(n / 2) * SketchGlyphs.SIDE_BY_SIDE_PX);
-        placeBadge(g, `translate(${x}px, ${p.y - ON_POINT_OFFSET_PX}px) translate(-50%, -50%)`);
+        let dx = side * (ON_POINT_OFFSET_PX + Math.floor(n / 2) * SketchGlyphs.SIDE_BY_SIDE_PX);
+        const half = halfSize(g);
+        if (!fits(p.x + dx, half.x, p.width) && fits(p.x - dx, half.x, p.width)) dx = -dx;
+        // a badge of this group flipped onto this slot already: the next one out
+        let row = used.get(key);
+        if (!row) used.set(key, (row = new Set()));
+        while (row.has(dx)) dx += Math.sign(dx) * SketchGlyphs.SIDE_BY_SIDE_PX;
+        row.add(dx);
+        const above = p.y - ON_POINT_OFFSET_PX, below = p.y + ON_POINT_OFFSET_PX;
+        const y = fits(above, half.y, p.height) || !fits(below, half.y, p.height) ? above : below;
+        placeBadge(g, `translate(${p.x + dx}px, ${y}px) translate(-50%, -50%)`);
         continue;
       }
       this.layoutLineBadge(g, p, n);
