@@ -15,8 +15,10 @@
 // request goes unacked for a few seconds (src-tauri/src/close_guard.rs). The
 // handler acks FIRST, on every request, prompt or not.
 //
-// Not covered, because nothing reaches this event: macOS Cmd+Q (the default
-// menu's Quit is a native terminate:) and a Windows session end.
+// macOS Cmd+Q and the app menu's Quit arrive here too: the shell replaces the
+// native Quit (a terminate: nothing can veto) with one that closes the window
+// (close_guard.rs app_menu). Not covered, because nothing reaches this event:
+// the Dock's Quit, logging out, and a Windows session end.
 
 import type { DocumentStore } from "../document/store";
 import { confirmDiscardChanges } from "./files";

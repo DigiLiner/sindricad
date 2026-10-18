@@ -269,6 +269,14 @@ pub fn run() {
                 }
             }
         });
+    // macOS Cmd+Q and the app menu's Quit close the window through that same
+    // guard instead of terminating on the spot: see close_guard::app_menu.
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(close_guard::app_menu).on_menu_event(|app, event| {
+        if event.id() == close_guard::QUIT_MENU_ID {
+            close_guard::quit(app);
+        }
+    });
 
     // The Rust/OCCT geometry commands (`geom_rebuild`/`geom_export`) only exist when
     // the `rust-geom` feature is on (VITE_GEOM=rust). generate_handler! won't accept
