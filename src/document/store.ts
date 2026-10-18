@@ -10,7 +10,7 @@ import { featureErrorText } from "../geometry/featureErrorText";
 import { migrateDocument, savedVersion } from "./migrate";
 import { applyDrivingDimsDirect, dimBindingFor, planDimEdit, upsertDrivingDim, type DimBinding } from "../sketch/directDims";
 import { rowConstraintAt, type SketchDimRow } from "../sketch/dimRows";
-import { entityDims, rebindPolygonSides } from "../sketch/entityDims";
+import { alignmentAsDistance, entityDims, rebindPolygonSides } from "../sketch/entityDims";
 import { followOffsets, followRefusal, type FollowRefusal } from "../sketch/modify";
 import { dimConflictMsg } from "../sketch/dimConflict";
 import { isDimConstraint, newConstraintId } from "../sketch/id";
@@ -1509,7 +1509,9 @@ export class DocumentStore {
       f.constraints = upsertDrivingDim(f.constraints ?? [], { ...slot.c, id } as SketchConstraint);
       return { kind: "constraint", sketch: sketchId, constraint: id };
     }
-    const c = f.constraints?.[slot.at];
+    let c = f.constraints?.[slot.at];
+    // a Horizontal/Vertical on two points is the X/Y distance it holds at 0
+    if (c?.type === "pointsHorizontal" || c?.type === "pointsVertical") c = f.constraints![slot.at] = alignmentAsDistance(c);
     if (!c || !isDimConstraint(c)) return null;
     c.id ??= newConstraintId();
     return { kind: "constraint", sketch: sketchId, constraint: c.id };
@@ -1523,9 +1525,13 @@ export class DocumentStore {
     const cur = this.closedSketch(sketchId);
     if (!cur) return;
     const at = rowConstraintAt(cur.constraints ?? [], ref);
-    const old = cur.constraints?.[at];
+    const held = cur.constraints?.[at];
+    // a Horizontal/Vertical on two points becomes the X/Y distance it held at 0
+    const old = held?.type === "pointsHorizontal" || held?.type === "pointsVertical" ? alignmentAsDistance(held) : held;
     if (!old || !isDimConstraint(old) || isDriven(old)) return;
     const retyped = { ...old, value: dimValueFromParam(old, value) } as SketchConstraint;
+    // a zero distance shown as an alignment (types.ts) is a distance now
+    if ("alignment" in retyped) delete retyped.alignment;
     const constraints = (cur.constraints ?? []).map((c, i) => (i === at ? retyped : c));
     let next: Extract<Feature, { type: "sketch" }> = { ...cur, constraints };
     const r = await this.solveSketchOutcome(next, this.doc.parameters);

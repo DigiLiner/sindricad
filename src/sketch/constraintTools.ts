@@ -11,7 +11,7 @@ import type { ResolvedEntity } from "./snap";
 import type { SketchConstraint } from "../types";
 import { pickEntity, PROJECTED_FIXED_MSG } from "./modify";
 import { coincKey } from "./sketchSolve";
-import { POLYGON_CENTRE, RECT_CENTRE, asRound, curveKind, dimRefPoints, lineOperand, lineOperandAt, refPoint, refPointNear, slotAxisAt } from "./entityDims";
+import { POLYGON_CENTRE, RECT_CENTRE, asRound, curveKind, dimRefPoints, lineOperand, lineOperandAt, pointAlignment, refPoint, refPointNear, slotAxisAt } from "./entityDims";
 import { distToSeg } from "./geom2d";
 import { isOriginGeometry } from "./origin";
 import { splineEndIndices } from "./spline";
@@ -56,11 +56,11 @@ const isRoundOp = (o: Operand) => o.kind === "circle" || o.kind === "arc";
  *  every other constraint type (holds, splines — those are not what
  *  f3cb1331/X-double-tangent are about).
  *
- *  p2pDistanceX/p2pDistanceY key on the POINT (`e#p`), not the entity, since
+ *  The two-point alignments key on the POINT (`e#p`), not the entity, since
  *  that is what Horizontal/Vertical's two-point pick names (ed07f912) — a
  *  repeat click on the same pair of points must refuse the same way a repeat
- *  Parallel does, rather than stacking a second zero-value constraint on top
- *  of the first. */
+ *  Parallel does, rather than stacking a second one on top of the first. So
+ *  do p2pDistanceX/Y, which is what an alignment was stored as before v8. */
 function relationPair(c: SketchConstraint): [string, string] | null {
   switch (c.type) {
     case "parallel": case "perpendicular": case "collinear": case "equal":
@@ -69,7 +69,7 @@ function relationPair(c: SketchConstraint): [string, string] | null {
       return [c.a, c.b].sort() as [string, string];
     case "concentric":
       return [c.c1, c.c2].sort() as [string, string];
-    case "p2pDistanceX": case "p2pDistanceY":
+    case "p2pDistanceX": case "p2pDistanceY": case "pointsHorizontal": case "pointsVertical":
       return [`${c.e1}#${c.p1}`, `${c.e2}#${c.p2}`].sort() as [string, string];
     default:
       return null;
@@ -88,8 +88,13 @@ function relationPair(c: SketchConstraint): [string, string] | null {
 export function alreadyRelates(constraints: readonly SketchConstraint[], c: SketchConstraint): boolean {
   const pair = relationPair(c);
   if (!pair) return false;
+  // an alignment from an older file is still a zero X/Y distance (pointAlignment)
+  const kind = (k: SketchConstraint) => {
+    const axis = pointAlignment(k);
+    return axis === "horizontal" ? "pointsHorizontal" : axis === "vertical" ? "pointsVertical" : k.type;
+  };
   return constraints.some((k) => {
-    if (k.type !== c.type) return false;
+    if (kind(k) !== kind(c)) return false;
     const kp = relationPair(k);
     return !!kp && kp[0] === pair[0] && kp[1] === pair[1];
   });
@@ -463,11 +468,11 @@ export class ConstraintTools {
 
   /** Horizontal/Vertical: a line BODY makes the whole line square to that
    *  axis, as it always did. Two POINTS instead level (or line up) the gap
-   *  between them on that axis, at zero — the existing `p2pDistanceX`/
-   *  `p2pDistanceY` the Dimension tool's point-to-point pick already emits
-   *  for any two points, just pinned to 0 instead of whatever gap they
-   *  happen to be apart. Nothing new is invented for this (ed07f912): "level
-   *  these two points" had no tool at all, since the whole-line reading only
+   *  between them on that axis (ed07f912): `pointsHorizontal` /
+   *  `pointsVertical`, which compile to the zero X/Y distance the Dimension
+   *  tool's point-to-point pick can also make, but are kept apart from it so
+   *  each reads back as what the user made (types.ts). "Level these two
+   *  points" had no tool at all before, since the whole-line reading only
    *  ever answers for a SINGLE line's own two ends.
    *
    *  A point under the cursor wins over a line body only when it is at
@@ -484,8 +489,8 @@ export class ConstraintTools {
       this.host.setPendingPoints([]);
       if (a.id === ep.id && a.idx === ep.idx) return this.missed(); // the same point twice holds nothing
       // horizontal LEVELS (equal Y), vertical LINES UP (equal X) — see sketchSolve
-      const type = tool === "horizontal" ? "p2pDistanceY" : "p2pDistanceX";
-      this.addConstraint({ type, e1: a.id, p1: a.idx, e2: ep.id, p2: ep.idx, value: 0 }, a.id);
+      const type = tool === "horizontal" ? "pointsHorizontal" : "pointsVertical";
+      this.addConstraint({ type, e1: a.id, p1: a.idx, e2: ep.id, p2: ep.idx }, a.id);
       return;
     }
     const ep = this.axisPickPoint(p);

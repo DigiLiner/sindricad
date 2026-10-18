@@ -982,18 +982,34 @@ export function angleDimMeasure(byId: Map<string, ResolvedEntity>, c: { l1: stri
   return signedAngleDeg(s1, s2);
 }
 
-/** The alignment a two-point X/Y distance of ZERO is, or null for a real
- *  dimension. The Horizontal and Vertical tools store a two-point alignment
- *  this way (constraintTools.axisClick): Vertical as a horizontal distance of
- *  0 (same X), Horizontal as a vertical distance of 0 (same Y). Shown as the
- *  dimension it is stored as, a pair made with Vertical read "Horizontal
- *  distance 0", which is the wrong way round to the user who made it (report
- *  c89a43be); shown as this, it is an H or a V like a line's. A reference
- *  dimension measures, so it is never one. Returns the constraint TYPE of the
- *  matching line alignment, so a caller can name it the way it names those. */
+/** The alignment a Horizontal or Vertical on two points is, or null for
+ *  anything else. Shown as an H or a V on each point like a line's, not as
+ *  the zero distance it compiles to: a pair made with Vertical read
+ *  "Horizontal distance 0", the wrong way round to the user who made it
+ *  (report c89a43be). Returns the constraint TYPE of the matching line
+ *  alignment, so a caller can name it the way it names those.
+ *
+ *  Its own type since v8 (pointsHorizontal / pointsVertical). Before that the
+ *  tools stored it as an X/Y distance of 0, byte for byte what the Dimension
+ *  tool makes of two points at the same X, so a zero distance from an older
+ *  file that may be either carries `alignment` and is shown as one, as it was
+ *  then (migrate.ts). A Dimension-tool 0 mm distance made since is a
+ *  dimension. A reference dimension measures, so it is never one. */
 export function pointAlignment(c: SketchConstraint): "horizontal" | "vertical" | null {
-  if ((c.type !== "p2pDistanceX" && c.type !== "p2pDistanceY") || c.value !== 0 || isDriven(c)) return null;
+  if (c.type === "pointsHorizontal") return "horizontal";
+  if (c.type === "pointsVertical") return "vertical";
+  if ((c.type !== "p2pDistanceX" && c.type !== "p2pDistanceY") || !c.alignment || c.value !== 0 || isDriven(c)) return null;
   return c.type === "p2pDistanceX" ? "vertical" : "horizontal";
+}
+
+/** A two-point alignment as the X/Y distance it is a zero of (Vertical: same
+ *  X, a horizontal distance of 0), for a number typed into its row: from then
+ *  on it is that distance, under a fresh dimension id once it is given one. */
+export function alignmentAsDistance(
+  c: Extract<SketchConstraint, { type: "pointsHorizontal" | "pointsVertical" }>,
+): Extract<SketchConstraint, { type: "p2pDistanceX" | "p2pDistanceY" }> {
+  const type = c.type === "pointsVertical" ? "p2pDistanceX" : "p2pDistanceY";
+  return { type, e1: c.e1, p1: c.p1, e2: c.e2, p2: c.p2, value: 0 };
 }
 
 /** annotation + label geometry for the distance constraints (the driving dims

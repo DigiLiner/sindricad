@@ -104,8 +104,10 @@ describe("migrateDocument", () => {
     // content hash carried in the container), but a v3 document still passes
     // through migrateDocument untouched: `brep` is still READ, so nothing here
     // rewrites it. v6 (shape operands) and v7 (a primitive's centre) are
-    // stamps too, each only on a document that uses it.
-    expect(FORMAT_VERSION).toBe(7);
+    // stamps too, each only on a document that uses it. v8 (two-point
+    // alignments) rewrites only zero X/Y distances, which this document has
+    // none of.
+    expect(FORMAT_VERSION).toBe(8);
     const doc = v1({
       version: 3,
       features: [{ id: "f1", type: "sketch", plane: "XY", entities: [

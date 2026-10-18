@@ -933,13 +933,13 @@ describe("a tangent's hold is not stacked when it is already there (f3cb1331, X-
   });
 });
 
-describe("Horizontal/Vertical on two points levels them (p2pDistance = 0), not a whole line (ed07f912)", () => {
+describe("Horizontal/Vertical on two points levels them (pointsHorizontal/Vertical), not a whole line (ed07f912)", () => {
   const twoLines = (): ResolvedEntity[] => [
     { type: "line", id: "a", x1: 0, y1: 0, x2: 20, y2: 3 },
     { type: "line", id: "b", x1: 30, y1: 10, x2: 50, y2: 14 },
   ];
 
-  it("vertical on two different lines' endpoints lines them up: p2pDistanceX = 0 between those points", () => {
+  it("vertical on two different lines' endpoints lines them up: pointsVertical between those points", () => {
     const h = new MockHost();
     h._ents = twoLines();
     h._tool = "vertical";
@@ -947,17 +947,17 @@ describe("Horizontal/Vertical on two points levels them (p2pDistance = 0), not a
     ct.click(v(0, 0)); // a's first endpoint: arms it, adds nothing yet
     expect(h._cons).toEqual([]);
     ct.click(v(30, 10)); // b's first endpoint: completes the pair
-    expect(h._cons).toEqual([{ type: "p2pDistanceX", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }]);
+    expect(h._cons).toEqual([{ type: "pointsVertical", e1: "a", p1: 0, e2: "b", p2: 0 }]);
   });
 
-  it("horizontal on two points levels them: p2pDistanceY = 0", () => {
+  it("horizontal on two points levels them: pointsHorizontal", () => {
     const h = new MockHost();
     h._ents = twoLines();
     h._tool = "horizontal";
     const ct = new ConstraintTools(h);
     ct.click(v(0, 0));
     ct.click(v(50, 14)); // b's SECOND endpoint
-    expect(h._cons).toEqual([{ type: "p2pDistanceY", e1: "a", p1: 0, e2: "b", p2: 1, value: 0 }]);
+    expect(h._cons).toEqual([{ type: "pointsHorizontal", e1: "a", p1: 0, e2: "b", p2: 1 }]);
   });
 
   it("still squares a whole line when the click lands on its body, away from either end", () => {
@@ -1002,7 +1002,7 @@ describe("Horizontal/Vertical: a point only beats a closer line body in a tie (r
     expect(h._cons).toEqual([]);
     expect(h.pendingSets).toBe(1);
     ct.click(v(30, 10));
-    expect(h._cons).toEqual([{ type: "p2pDistanceX", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }]);
+    expect(h._cons).toEqual([{ type: "pointsVertical", e1: "a", p1: 0, e2: "b", p2: 0 }]);
   });
 
   it("the highlight agrees with the click: hoverPoint is null exactly where the line wins", () => {
@@ -1020,22 +1020,34 @@ describe("a repeat Horizontal/Vertical on the same two points is refused, not st
     { type: "line", id: "b", x1: 30, y1: 10, x2: 50, y2: 14 },
   ];
 
-  it("a second horizontal click on the same pair warns instead of stacking a second p2pDistanceY", () => {
+  it("a second horizontal click on the same pair warns instead of stacking a second one", () => {
     const h = new MockHost();
     h._ents = twoLines();
-    h._cons = [{ type: "p2pDistanceY", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }];
+    h._cons = [{ type: "pointsHorizontal", e1: "a", p1: 0, e2: "b", p2: 0 }];
     h._tool = "horizontal";
     const ct = new ConstraintTools(h);
     ct.click(v(0, 0));
     ct.click(v(30, 10));
-    expect(h._cons).toEqual([{ type: "p2pDistanceY", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 }]);
+    expect(h._cons).toEqual([{ type: "pointsHorizontal", e1: "a", p1: 0, e2: "b", p2: 0 }]);
+    expect(h.warnings).toEqual([t("sketch.constraint.alreadyRelated")]);
+  });
+
+  it("an older file's alignment (a zero distance marked as one) counts as the same", () => {
+    const h = new MockHost();
+    h._ents = twoLines();
+    h._cons = [{ type: "p2pDistanceY", id: "c3", e1: "a", p1: 0, e2: "b", p2: 0, value: 0, alignment: true }];
+    h._tool = "horizontal";
+    const ct = new ConstraintTools(h);
+    ct.click(v(0, 0));
+    ct.click(v(30, 10));
+    expect(h._cons).toHaveLength(1);
     expect(h.warnings).toEqual([t("sketch.constraint.alreadyRelated")]);
   });
 
   it("catches it however the existing pair's points were ordered", () => {
     const h = new MockHost();
     h._ents = twoLines();
-    h._cons = [{ type: "p2pDistanceY", e1: "b", p1: 0, e2: "a", p2: 0, value: 0 }]; // reversed
+    h._cons = [{ type: "pointsHorizontal", e1: "b", p1: 0, e2: "a", p2: 0 }]; // reversed
     h._tool = "horizontal";
     const ct = new ConstraintTools(h);
     ct.click(v(0, 0));

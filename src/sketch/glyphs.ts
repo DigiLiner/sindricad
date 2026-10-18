@@ -239,7 +239,7 @@ export function constraintGlyphs(ents: ResolvedEntity[], constraints: SketchCons
       case "fix": push(i, "⚓", refPos(c.e, c.p)); break;
       // Horizontal/Vertical on two points: one badge on each, like the
       // two-operand relations above. A non-zero X/Y distance is a dimension.
-      case "p2pDistanceX": case "p2pDistanceY": {
+      case "p2pDistanceX": case "p2pDistanceY": case "pointsHorizontal": case "pointsVertical": {
         const axis = pointAlignment(c);
         if (!axis) break;
         const label = axis === "horizontal" ? "H" : "V";

@@ -862,6 +862,12 @@ async function compileAndSolveOnce(
       const kind = c.type === "p2pDistanceX" ? "distanceX" : "distanceY";
       if (a && b && a !== b) cons.push({ id, type: kind, a, b, value: c.value });
     }
+    // the zero X/Y distance a two-point alignment was stored as before v8
+    else if (c.type === "pointsHorizontal" || c.type === "pointsVertical") {
+      const a = dimPoint(c.e1, c.p1), b = dimPoint(c.e2, c.p2);
+      const kind = c.type === "pointsVertical" ? "distanceX" : "distanceY";
+      if (a && b && a !== b) cons.push({ id, type: kind, a, b, value: 0 });
+    }
     else if (c.type === "p2lDistance") {
       const p = dimPoint(c.e, c.p);
       if (p && isLine(c.line)) cons.push({ id, type: "p2lDistance", p, line: c.line, value: c.value });

@@ -38,6 +38,8 @@ export const CONSTRAINT_NAME_KEYS: Record<SketchConstraint["type"], string> = {
   p2pDistance: "sketch.constraint.p2pDistance",
   p2pDistanceX: "sketch.constraint.p2pDistanceX",
   p2pDistanceY: "sketch.constraint.p2pDistanceY",
+  pointsHorizontal: "sketch.constraint.horizontal",
+  pointsVertical: "sketch.constraint.vertical",
   p2lDistance: "sketch.constraint.p2lDistance",
   radialGap: "sketch.constraint.radialGap",
   c2cDistance: "sketch.constraint.c2cDistance",

@@ -112,6 +112,7 @@ function operands(c: SketchConstraint): string[] {
     case "radius": return [c.e];
     case "angle": return [c.l1, c.l2];
     case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY": return [c.e1, c.e2];
+    case "pointsHorizontal": case "pointsVertical": return [c.e1, c.e2];
     case "p2lDistance": return [c.e, c.line];
     case "radialGap": return [c.inner, c.outer];
     case "c2cDistance": return [c.c1, c.c2];
@@ -132,6 +133,7 @@ function constraintWord(c: SketchConstraint): string {
     case "radius": return t("common.radius");
     case "angle": return t("common.angle");
     // a zero-gap pair is the Horizontal/Vertical the user made (pointAlignment)
+    case "pointsHorizontal": case "pointsVertical":
     case "p2pDistanceX": case "p2pDistanceY": {
       const axis = pointAlignment(c);
       if (axis) return constraintName(axis);
@@ -199,7 +201,10 @@ export function sketchDimRows(entities: readonly ResolvedEntity[], constraints: 
   // MEASURED value, an offset's magnitude, an X/Y distance's sign.
   const drawn = new Map(constraintDims([...entities], [...constraints]).map((d) => [d.cIndex, d]));
   constraints.forEach((c, index) => {
-    if (!isDimConstraint(c) || shownAsBadge(c, byId)) return;
+    // A Horizontal/Vertical on two points is listed too, as the 0 it holds
+    // their gap at: a number typed there makes it that X/Y distance.
+    const aligned = pointAlignment(c) !== null;
+    if (!(isDimConstraint(c) || aligned) || shownAsBadge(c, byId)) return;
     const ops = operands(c);
     const shapes = [...new Set(ops.map(shapeOf))];
     const id = (c as { id?: string }).id;
@@ -214,11 +219,11 @@ export function sketchDimRows(entities: readonly ResolvedEntity[], constraints: 
       dim: constraintWord(c),
       construction: one?.construction === true,
       entities: shapes.filter((s) => byId.has(s) && !unlisted(s)),
-      valueMm: d?.valueMm ?? paramValueOfDim(c),
+      valueMm: d?.valueMm ?? (isDimConstraint(c) ? paramValueOfDim(c) : 0),
       kind: c.type === "angle" ? "angle" : "length",
       driven: isDriven(c),
       // an alignment has no drawn dimension to ask, and is an X/Y distance
-      signed: d?.signed === true || pointAlignment(c) !== null,
+      signed: d?.signed === true || aligned,
     });
   });
   return rows;
@@ -234,9 +239,11 @@ export function dimRowLabel(row: SketchDimRow, suffix: string): string {
 
 /** The row's constraint in `constraints`: by id when it has one, else at its
  *  index. -1 when it is gone, or when the constraint now at that index is not
- *  a dimension (the list was edited since the row was made). */
+ *  a dimension or a two-point alignment (the list was edited since the row
+ *  was made). */
 export function rowConstraintAt(constraints: readonly SketchConstraint[], ref: Extract<DimRowRef, { kind: "constraint" }>): number {
   if (ref.id) return constraints.findIndex((c) => (c as { id?: string }).id === ref.id);
   const c = constraints[ref.index];
-  return c && isDimConstraint(c) && !(c as { id?: string }).id ? ref.index : -1;
+  // a two-point alignment has no id, ever (pointAlignment)
+  return c && (isDimConstraint(c) || pointAlignment(c) !== null) && !(c as { id?: string }).id ? ref.index : -1;
 }

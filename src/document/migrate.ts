@@ -23,7 +23,8 @@
 // the format. `plane` is still written alongside `planeId` as a resolved cache,
 // so an older build opening a v4 file still places the sketch correctly.
 
-import type { CadDocument, Feature, ParamDef, ParamTarget, SketchEntity } from "../types";
+import type { CadDocument, Feature, ParamDef, ParamTarget, SketchConstraint, SketchEntity } from "../types";
+import { isDriven } from "../types";
 import { FEATURE_NUM_FIELDS, RIGID_ENTITY_NUM_FIELDS, kindUnit } from "./numFields";
 import { isDimConstraint, newConstraintId, noteConstraintId } from "../sketch/id";
 import { RECT_CENTRE, constraintEntityIds } from "../sketch/entityDims";
@@ -85,15 +86,38 @@ import { t } from "../i18n";
 // on open. Stamped only on such a document, as v6 is: a primitive with no x/y/z
 // (every one saved before) or all three 0 builds the same in both.
 
+// v7 → v8: Horizontal and Vertical on two POINTS got their own constraint
+// types, pointsHorizontal and pointsVertical (2026-10, types.ts). Before, the
+// tools stored them as a p2pDistanceY / p2pDistanceX of 0, which is also what
+// the Dimension tool makes of two points at the same X or Y, so every zero
+// X/Y distance was shown as an alignment, the Dimension tool's included.
+//
+// An older file cannot say which tool made a zero distance, and only one case
+// is certain: the Dimension tool stamps an id the moment it places a
+// dimension, and this loader stamps one on every dimension it opens, so a
+// zero distance saved with no id and no label placement was made by the
+// Horizontal/Vertical tool and never reopened. That one becomes the new type.
+// Every other non-reference zero X/Y distance is left a distance and marked
+// `alignment`, so it is shown as the alignment it was shown as before.
+//
+// A sketch holding one of the new types is saved as v8, so that an older
+// build warns on open: it does not know the type, holds nothing there and
+// draws nothing for it. So is a zero X/Y distance NOT marked, one the
+// Dimension tool made in this build: saved as v7, the next open here would
+// take it for an older file's and mark it.
+
 /** .sindri file-format version: the newest this build reads (bump when the
  *  on-disk shape changes incompatibly). A document is SAVED as the oldest
  *  version that holds what it uses: savedVersion. */
-export const FORMAT_VERSION = 7;
+export const FORMAT_VERSION = 8;
 
-/** The version a document is saved as: v7 when a primitive is placed off the
- *  origin (v6 → v7 above), v6 when a sketch names a shape's corner, centre or
- *  side or holds a projected point (v5 → v6 above), else v5. */
+/** The version a document is saved as: v8 when a sketch holds a two-point
+ *  alignment or a zero X/Y distance that is not one (v7 → v8 above), v7 when
+ *  a primitive is placed off the origin (v6 → v7 above), v6 when a sketch
+ *  names a shape's corner, centre or side or holds a projected point (v5 → v6
+ *  above), else v5. */
 export function savedVersion(features: readonly Feature[]): number {
+  if (features.some(usesPointAlignments)) return 8;
   if (features.some(usesPrimitiveCentre)) return 7;
   return features.some((f) => usesShapeOperands(f) || usesProjectedPoints(f)) ? 6 : 5;
 }
@@ -102,6 +126,19 @@ export function savedVersion(features: readonly Feature[]): number {
 function usesPrimitiveCentre(f: Feature): boolean {
   if (f.type !== "box" && f.type !== "cylinder" && f.type !== "sphere") return false;
   return [f.x, f.y, f.z].some((v) => v !== undefined && v !== 0);
+}
+
+/** True if a sketch holds a two-point Horizontal/Vertical, or a zero X/Y
+ *  distance that is a dimension (v7 → v8 above). */
+function usesPointAlignments(f: Feature): boolean {
+  return f.type === "sketch" && (f.constraints ?? []).some((c) =>
+    c.type === "pointsHorizontal" || c.type === "pointsVertical" || (isZeroAxisDistance(c) && !c.alignment));
+}
+
+/** A driving X/Y distance of 0: what a two-point Horizontal/Vertical was
+ *  stored as before v8. */
+function isZeroAxisDistance(c: SketchConstraint): c is Extract<SketchConstraint, { type: "p2pDistanceX" | "p2pDistanceY" }> {
+  return (c.type === "p2pDistanceX" || c.type === "p2pDistanceY") && c.value === 0 && !isDriven(c);
 }
 
 /** True if a sketch holds a projected point (v5 → v6 above). */
@@ -160,6 +197,22 @@ export function migrateDocument(parsed: CadDocument, readsUpTo = FORMAT_VERSION)
           e.angle = (e.angle * 180) / Math.PI;
         }
       }
+    }
+  }
+
+  // --- v7 → v8: two-point alignments get their own type (see above) ---
+  // Before the ids are stamped below: a missing id is the evidence.
+  if (version < 8) {
+    for (const f of features) {
+      if (f.type !== "sketch" || !f.constraints) continue;
+      f.constraints = f.constraints.map((c) => {
+        if (!isZeroAxisDistance(c)) return c;
+        if (c.id == null && c.place == null) {
+          const type = c.type === "p2pDistanceX" ? "pointsVertical" : "pointsHorizontal";
+          return { type, e1: c.e1, p1: c.p1, e2: c.e2, p2: c.p2 };
+        }
+        return { ...c, alignment: true };
+      });
     }
   }
 

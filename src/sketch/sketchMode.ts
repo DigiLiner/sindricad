@@ -19,7 +19,7 @@ import { isEditableTarget } from "../ui/focus";
 import { SketchDimensions, dimBadgeFields, type ExtraDim } from "./sketchDimensions";
 import { SketchGlyphs } from "./sketchGlyphs";
 import { constraintGlyphs, diagnosisOf, type ConstraintGlyph } from "./glyphs";
-import { entityDims, constraintDims, constraintEntityIds, dimRefPoints, curveKind, hoverOperandCurve, lineOperand, lineOperandAt, linearDim, operandPoint, rebindPolygonSides, refPoint, refPointNear, setDimPixelScale, RECT_CENTRE, shapeSideAt, slotAxisAt, staggeredDefaults, angleDimMeasure, type DimField, type ConstraintDim } from "./entityDims";
+import { alignmentAsDistance, entityDims, constraintDims, constraintEntityIds, dimRefPoints, curveKind, hoverOperandCurve, lineOperand, lineOperandAt, linearDim, operandPoint, rebindPolygonSides, refPoint, refPointNear, setDimPixelScale, RECT_CENTRE, shapeSideAt, slotAxisAt, staggeredDefaults, angleDimMeasure, type DimField, type ConstraintDim } from "./entityDims";
 import {
   clampPlace, isDimError, isRoundTarget, pickDimTarget, rebindTarget, resolveDim, targetIdentity,
   targetKey, unsupportedMessage,
@@ -1849,6 +1849,8 @@ export class SketchMode {
    *  through to this line. */
   private writeDimValue(c: SketchConstraint & { value: number }, val: number) {
     c.value = dimValueFromParam(c, this.angleAsStoredValue(c, val));
+    // a zero distance shown as an alignment (types.ts) is a distance now
+    if ("alignment" in c) delete c.alignment;
     // A single-entity dimension moves that entity. Without this the solve runs
     // free and planegcs splits the correction across everything the dimension
     // can reach: report d8c5265e retyped a circle's diameter and the rectangle
@@ -2327,15 +2329,23 @@ export class SketchMode {
       this.onState?.();
       return null;
     }
-    const c = this.constraints[rowConstraintAt(this.constraints, ref)];
+    const at = rowConstraintAt(this.constraints, ref);
+    const held = this.constraints[at];
+    // a Horizontal/Vertical on two points becomes the X/Y distance it holds at
+    // 0, swapped in only once the value is accepted
+    const c = held?.type === "pointsHorizontal" || held?.type === "pointsVertical" ? alignmentAsDistance(held) : held;
     if (!c || !isDimConstraint(c) || isDriven(c)) return t("sketch.dimension.error.notEditable");
+    const write = (v: number) => {
+      this.constraints[at] = c;
+      this.writeDimValue(c, v);
+    };
     if (!isPlainNumber(raw) || (c.id && this.exprFor(`c:${c.id}`) !== undefined)) {
       if (!c.id) c.id = newConstraintId();
-      return this.commitExprInput(`c:${c.id}`, row.kind, canonicalDecimal(raw), (v) => this.writeDimValue(c, v), row.signed);
+      return this.commitExprInput(`c:${c.id}`, row.kind, canonicalDecimal(raw), write, row.signed);
     }
     const v = parseField(raw, row.kind);
     if (!dimValueOk(v, row.kind, row.signed)) return t("sketch.dimension.error.invalidValue");
-    this.writeDimValue(c, v);
+    write(v);
     return null;
   }
 
@@ -2352,7 +2362,15 @@ export class SketchMode {
     let key = this.rowBindingKey(row);
     if (!key && ref.kind === "constraint") {
       // a dimension saved before dimensions had ids gets one now, to bind by
-      const c = this.constraints[rowConstraintAt(this.constraints, ref)];
+      const at = rowConstraintAt(this.constraints, ref);
+      let c = this.constraints[at];
+      // a Horizontal/Vertical on two points, named, is the X/Y distance it
+      // holds at 0 (commitPanelDim), once the name is known to be good
+      if (c?.type === "pointsHorizontal" || c?.type === "pointsVertical") {
+        const bad = this.nameRefused(name, null);
+        if (bad) return bad;
+        c = this.constraints[at] = alignmentAsDistance(c);
+      }
       if (!c || !isDimConstraint(c)) return t("sketch.dimension.error.notEditable");
       c.id = newConstraintId();
       key = `c:${c.id}`;
@@ -7376,7 +7394,9 @@ export class SketchMode {
         // spelling a slot side's ends have (dimensionTool's parallel distance)
         case "p2pDistance": return hasPointOperand(c.e1) && hasPointOperand(c.e2);
         case "p2pDistanceX":
-        case "p2pDistanceY": return hasPointOperand(c.e1) && hasPointOperand(c.e2);
+        case "p2pDistanceY":
+        case "pointsHorizontal":
+        case "pointsVertical": return hasPointOperand(c.e1) && hasPointOperand(c.e2);
         case "p2lDistance": return hasPointOperand(c.e) && hasLineOperand(c.line);
         // rim (edge-to-edge) dims — a round operand is a circle OR an arc
         case "radialGap": return roundIds.has(c.inner) && roundIds.has(c.outer);

@@ -1095,7 +1095,8 @@ function remapTrimmed(
         const spline = curve(c.spline), other = nearestTo(c.other, { e: c.spline, p: c.end });
         return spline && other ? [{ ...c, spline, other }] : null;
       }
-      case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY": {
+      case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY":
+      case "pointsHorizontal": case "pointsVertical": {
         const a = point(c.e1, c.p1), b = point(c.e2, c.p2);
         return a && b ? [{ ...c, e1: a.e, p1: a.p, e2: b.e, p2: b.p }] : null;
       }
@@ -1503,6 +1504,10 @@ export function explodeCompound(
         const a = point(k.e1, k.p1), b = point(k.e2, k.p2);
         return a && b ? { ...k, e1: a.e, p1: a.p, e2: b.e, p2: b.p } : null;
       }
+      case "pointsHorizontal": case "pointsVertical": {
+        const a = point(k.e1, k.p1), b = point(k.e2, k.p2);
+        return a && b ? { ...k, e1: a.e, p1: a.p, e2: b.e, p2: b.p } : null;
+      }
       case "symmetric": {
         const a = point(k.e1, k.p1), b = point(k.e2, k.p2), l = side(k.line);
         return a && b && l ? { ...k, e1: a.e, p1: a.p, e2: b.e, p2: b.p, line: l } : null;
@@ -1791,8 +1796,8 @@ export function translationTie(
     case "p2lDistance": case "c2lDistance": return !alongLine(c.line);
     case "tangent": return !alongLine(c.line);
     case "tangent2": return !(alongLine(c.a) || alongLine(c.b));
-    case "p2pDistanceX": return !along(0, 1);
-    case "p2pDistanceY": return !along(1, 0);
+    case "p2pDistanceX": case "pointsVertical": return !along(0, 1);
+    case "p2pDistanceY": case "pointsHorizontal": return !along(1, 0);
     default: return true;
   }
 }
@@ -2906,7 +2911,8 @@ function joined(
         if (j1 || j2) return other && other.e !== id ? onLine(other) : null;
         return q1 && q2 ? { ...c, e1: q1.e, p1: q1.p, e2: q2.e, p2: q2.p } : null;
       }
-      case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY": {
+      case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY":
+      case "pointsHorizontal": case "pointsVertical": {
         const q1 = point(c.e1, c.p1), q2 = point(c.e2, c.p2);
         return q1 && q2 ? { ...c, e1: q1.e, p1: q1.p, e2: q2.e, p2: q2.p } : null;
       }

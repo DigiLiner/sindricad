@@ -15,7 +15,10 @@
 //     lines. Across any other line the copy is turned off the axes, and what
 //     they said between the mirrored lines is carried instead: parallel or
 //     perpendicular to the first of them, as a rectangle turned off the axes
-//     is held square by Perpendicular;
+//     is held square by Perpendicular. On two POINTS (pointsHorizontal,
+//     pointsVertical) they stay or swap the same way; across any other line
+//     there is no line to carry them by, and they stay behind, as an X or Y
+//     distance does;
 //   - a label offset is a vector, and is mirrored as one.
 //
 // The rest (lengths, radii, unsigned distances, coincidences, tangency,
@@ -176,6 +179,12 @@ export function mirroredConstraints(
       if (sign < 0 && c.id) wraps?.set(c.id, (e) => `-(${e})`);
       if (r.axes === "swap") out.push({ ...c, type: x ? "p2pDistanceY" : "p2pDistanceX", value: sign * c.value });
       else out.push({ ...c, value: sign * c.value });
+      continue;
+    }
+    if (c.type === "pointsHorizontal" || c.type === "pointsVertical") {
+      if (r.axes === "turn") continue;
+      if (r.axes === "swap") out.push({ ...c, type: c.type === "pointsHorizontal" ? "pointsVertical" : "pointsHorizontal" });
+      else out.push(c);
       continue;
     }
     if (c0.type === "angle" && c.type === "angle") {

@@ -70,7 +70,8 @@ export function remapConstraint(
       return { ...c, line: op(c.line), circle: op(c.circle) };
     case "tangent2": case "equalRadius":
       return { ...c, a: op(c.a), b: op(c.b) };
-    case "coincident": case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY": {
+    case "coincident": case "p2pDistance": case "p2pDistanceX": case "p2pDistanceY":
+    case "pointsHorizontal": case "pointsVertical": {
       const a = pt(c.e1, c.p1), b = pt(c.e2, c.p2);
       return { ...c, e1: a.e, p1: a.p, e2: b.e, p2: b.p };
     }

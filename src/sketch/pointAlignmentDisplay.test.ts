@@ -38,17 +38,17 @@ const rowFor = (live: ReturnType<typeof liveSketch>, index: number) =>
   sketchDimRows(live.s.entities, live.s.constraints).find((r) => r.ref.kind === "constraint" && r.ref.index === index);
 
 describe("a two-point Horizontal/Vertical reads back as the alignment the user made (c89a43be)", () => {
-  it("Vertical on two points: stored as a horizontal distance of 0, listed as Vertical", () => {
+  it("Vertical on two points: stored as a two-point Vertical, listed as Vertical", () => {
     const { live, c, index } = made("vertical", [-85.27655493724903, -201.16708864587585], [-85.27655493724903, -172.0593277493453]);
-    expect(c).toMatchObject({ type: "p2pDistanceX", value: 0 }); // the document model is unchanged
+    expect(c).toEqual({ type: "pointsVertical", e1: "e255", p1: 0, e2: "e256", p2: 0 });
     const row = rowFor(live, index);
     expect(row?.dim).toBe(t("sketch.constraint.vertical"));
     expect(row?.dim).not.toBe(t("inspector.sketchDim.kind.horizontal"));
   });
 
-  it("Horizontal on two points: stored as a vertical distance of 0, listed as Horizontal", () => {
+  it("Horizontal on two points: stored as a two-point Horizontal, listed as Horizontal", () => {
     const { live, c, index } = made("horizontal", [-85.27655493724903, -172.0593277493453], [-92.08822971926188, -172.0593277493453]);
-    expect(c).toMatchObject({ type: "p2pDistanceY", value: 0 });
+    expect(c).toEqual({ type: "pointsHorizontal", e1: "e256", p1: 0, e2: "e251", p2: 0 });
     expect(rowFor(live, index)?.dim).toBe(t("sketch.constraint.horizontal"));
   });
 

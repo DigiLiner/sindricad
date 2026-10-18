@@ -328,8 +328,22 @@ export type SketchConstraint =
   // axis, so swapping the picks negates it. That is deliberate — it is what lets
   // a horizontal dimension say "to the left" — and it means these must never be
   // canonicalised by sorting the operand ids the way an unsigned constraint can be.
-  | { type: "p2pDistanceX"; id?: string; e1: string; p1: number; e2: string; p2: number; value: number; driven?: boolean; place?: PlaceOffset }
-  | { type: "p2pDistanceY"; id?: string; e1: string; p1: number; e2: string; p2: number; value: number; driven?: boolean; place?: PlaceOffset }
+  //
+  // `alignment`: this zero distance IS a Horizontal/Vertical on two points, and
+  // is shown as one (entityDims.pointAlignment). Set only on a zero distance
+  // loaded from a file older than v8, which stored the Horizontal/Vertical
+  // tool's two-point alignment exactly as a Dimension-tool distance of 0 and
+  // cannot say which made it (migrate.ts v7 -> v8). Dropped once a value is
+  // typed into it.
+  | { type: "p2pDistanceX"; id?: string; e1: string; p1: number; e2: string; p2: number; value: number; driven?: boolean; place?: PlaceOffset; alignment?: true }
+  | { type: "p2pDistanceY"; id?: string; e1: string; p1: number; e2: string; p2: number; value: number; driven?: boolean; place?: PlaceOffset; alignment?: true }
+  // Horizontal / Vertical on two POINTS (the tools' two-point pick): the points
+  // level (same Y) or line up (same X). Compiled to the zero p2pDistanceY / X
+  // they were stored as before v8, but no dimension: no value, shown as an H or
+  // V on each point. A number typed into its row makes it that X/Y distance
+  // (entityDims.alignmentAsDistance). A sketch holding one is saved as v8.
+  | { type: "pointsHorizontal"; e1: string; p1: number; e2: string; p2: number }
+  | { type: "pointsVertical"; e1: string; p1: number; e2: string; p2: number }
   // p2lDistance: driving perpendicular distance from a picked point to a line
   // operand (same `p` semantics as p2pDistance; `line` may be a rect edge)
   | { type: "p2lDistance"; id?: string; e: string; p: number; line: string; value: number; driven?: boolean; place?: PlaceOffset }
