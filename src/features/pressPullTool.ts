@@ -330,7 +330,7 @@ export class PressPullTool {
     this.dim.position(s.x, s.y);
     this.dim.updateFromCursor({ distance: 0 });
     setPrompt(t("feature.pressPull.dragPrompt"));
-    this.raf = requestAnimationFrame(this.boundTick);
+    this.tick(); // place the handle now, not a frame late (see SectionTool.start)
   }
 
   /** keep the handle a constant on-screen size, point it the way we're dragging,

@@ -725,7 +725,7 @@ export class EdgeFeatureTool {
     this.dim.updateFromCursor({ [this.field.name]: this.value });
     this.prompt(t(`feature.edge.dragPrompt.${this.field.name}`));
     this.pushPreview();
-    this.raf = requestAnimationFrame(this.boundTick);
+    this.tick(); // place the handle now, not a frame late (see SectionTool.start)
   }
 
   /** keep the handle a constant on-screen size + oriented, and keep a typed value

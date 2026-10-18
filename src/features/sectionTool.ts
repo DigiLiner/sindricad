@@ -197,7 +197,9 @@ export class SectionTool {
     // tick() would then hold the cut at it against the arrow.
     this.dim.updateFromCursor({ at: this.at });
     setPrompt(t("feature.section.prompt", { axis: axisName }));
-    this.raf = requestAnimationFrame(this.boundTick);
+    // Place the arrow now, not in the next frame: a press that beats that
+    // frame has to find it where it is about to be drawn.
+    this.tick();
   }
 
   /** The check button, or Enter: done with the arrow, the cut STAYS (stop(true)).

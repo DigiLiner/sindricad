@@ -86,7 +86,7 @@ export class PlaneOffsetTool {
     this.dim.show([{ name: "offset", label: t("tool.offset"), kind: "length" }], () => this.commit(), () => this.cancel());
     const s = this.viewport.projectToScreen(this.anchor);
     this.dim.position(s.x, s.y);
-    this.raf = requestAnimationFrame(this.boundTick);
+    this.tick(); // place the handle now, not a frame late (see SectionTool.start)
     this.updateGhost();
   }
 

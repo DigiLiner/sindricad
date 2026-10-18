@@ -110,6 +110,7 @@ const viewportStub = {
   addToScene() {},
   removeFromScene() {},
   projectToScreen: () => ({ x: 0, y: 0 }),
+  pixelWorldSize: () => 1,
   clearHover() {},
   hoverDatum() {},
   pointInSolid: () => false,

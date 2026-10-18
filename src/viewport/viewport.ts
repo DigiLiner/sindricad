@@ -38,6 +38,7 @@ import { ndcToRect } from "./overlayHost";
 import { sceneStats } from "../diagnostics/sceneStats";
 import { makeZebraMaterial, buildCurvatureCombs } from "./overlays";
 import { Picker, throughCut, type Hit, type EdgeHit, type PickClip } from "./picking";
+import { PickRaycaster } from "./pickRaycaster";
 import { ViewCube, FACE_VIEWS } from "./viewCube";
 import {
   loadPivotMode,
@@ -824,7 +825,7 @@ export class Viewport {
     return cap ? (this.model.bodies.find((b) => b.mesh === cap.mesh)?.id ?? null) : null;
   }
 
-  private psRay = new THREE.Raycaster();
+  private psRay = new PickRaycaster();
   // a diagonal probe direction: never coplanar with the model's axis-aligned
   // faces, so the parity count can't graze along a face and miscount.
   private psDir = new THREE.Vector3(0.5773, 0.5772, 0.5774).normalize();
@@ -2560,8 +2561,9 @@ export class Viewport {
     return acc.normalize().transformDirection(body.mesh.matrixWorld).normalize();
   }
 
-  /** a reusable Raycaster aimed at the given client coords (no allocation) */
-  private sharedRaycaster = new THREE.Raycaster();
+  /** a reusable Raycaster aimed at the given client coords (no allocation);
+   *  it hit-tests where things are now, not where the last frame drew them */
+  private sharedRaycaster = new PickRaycaster();
   private ndc = new THREE.Vector2();
   rayFrom(clientX: number, clientY: number): THREE.Raycaster {
     const rect = this.canvas.getBoundingClientRect();

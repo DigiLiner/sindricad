@@ -282,7 +282,7 @@ export class MoveTool {
     this.dim.updateFromCursor({ move: 0 });
     this.refreshPreview();
     setPrompt(prompt);
-    this.raf = requestAnimationFrame(this.boundTick);
+    this.tick(); // place the handle now, not a frame late (see SectionTool.start)
   }
 
   private comp(i: number): number {

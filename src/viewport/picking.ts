@@ -10,6 +10,7 @@ import { bodyOfHit, edgeObjects, faceIdOfHit, isScanHit, visibleBodyMeshes } fro
 import type { BodyEdges, EdgeRef } from "./edgeLines";
 import { edgeSelectorFrom } from "./edgeMatch";
 import { flushRaycastIndex } from "./raycastIndex";
+import { PickRaycaster } from "./pickRaycaster";
 
 export interface EdgeHit {
   kind: "edge";
@@ -65,7 +66,7 @@ export function throughCut(
 }
 
 export class Picker {
-  private raycaster = new THREE.Raycaster();
+  private raycaster = new PickRaycaster();
   private ndc = new THREE.Vector2();
   private scratch = new THREE.Vector3();
   // screen-space distance (px) of the best edge hit from the last pickEdge() —

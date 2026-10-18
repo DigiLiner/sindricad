@@ -96,6 +96,7 @@ function harness(world: World, opts: { realDrag?: boolean } = {}) {
     pickDatumAt: () => world.datum ?? null,
     selectedFacesForPressPull: () => null, // no pre-selection: start() arms the pick phase
     projectToScreen: () => ({ x: 0, y: 0 }),
+    pixelWorldSize: () => 1,
     addToScene() {},
     removeFromScene() {},
     setPressPullGhost() {},

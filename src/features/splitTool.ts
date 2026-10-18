@@ -324,7 +324,7 @@ export class SplitTool {
       onCancel: () => this.cancel(),
     });
     this.refresh();
-    this.raf = requestAnimationFrame(this.boundTick);
+    this.tick(); // place the handle now, not a frame late (see SectionTool.start)
   }
 
   private set(next: SplitState) {
