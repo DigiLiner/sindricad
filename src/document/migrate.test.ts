@@ -103,9 +103,9 @@ describe("migrateDocument", () => {
     // v5 moved geometry OUT of the document (inline base64 `brep` -> the `geom`
     // content hash carried in the container), but a v3 document still passes
     // through migrateDocument untouched: `brep` is still READ, so nothing here
-    // rewrites it. v6 (shape operands) is a stamp too, and only on a document
-    // that uses them.
-    expect(FORMAT_VERSION).toBe(6);
+    // rewrites it. v6 (shape operands) and v7 (a primitive's centre) are
+    // stamps too, each only on a document that uses it.
+    expect(FORMAT_VERSION).toBe(7);
     const doc = v1({
       version: 3,
       features: [{ id: "f1", type: "sketch", plane: "XY", entities: [
@@ -228,5 +228,34 @@ describe("savedVersion: v6 only for a sketch that names a shape's corner, centre
     const doc = (): CadDocument => ({ version: 6, parameters: {}, features: sketch({ type: "fix", e: "H", p: -1 }) });
     expect(migrateDocument(doc())).toEqual([]);
     expect(migrateDocument(doc(), 5)).toEqual([t("file.warning.newerVersion")]);
+  });
+});
+
+// Field report 3ff3dc1b. A build before Centre X/Y/Z builds every primitive on
+// the origin whatever its x/y/z say, so a document that puts one anywhere else
+// is v7 and that build warns on open. At the origin it builds the same there:
+// still v5.
+describe("savedVersion: v7 only for a primitive placed off the origin", () => {
+  const box = { id: "b1", type: "box", length: 20, width: 20, height: 20 };
+  it.each<[string, Record<string, unknown>]>([
+    ["a box resting on the grid", { ...box, x: 0, y: 0, z: 10 }],
+    ["a box moved sideways", { ...box, x: -4 }],
+    ["a cylinder", { id: "c1", type: "cylinder", radius: 10, height: 20, y: 3 }],
+    ["a sphere", { id: "s1", type: "sphere", radius: 10, z: 10 }],
+  ])("%s is v7", (_name, f) => {
+    expect(savedVersion([f as unknown as Feature])).toBe(7);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    ["a box saved before the fields", box],
+    ["a box placed at the origin", { ...box, x: 0, y: 0, z: 0 }],
+  ])("%s stays v5", (_name, f) => {
+    expect(savedVersion([f as unknown as Feature])).toBe(5);
+  });
+
+  it("this build reads v7 without a word; the build before it warns", () => {
+    const doc = (): CadDocument => ({ version: 7, parameters: {}, features: [{ ...box, z: 10 } as unknown as Feature] });
+    expect(migrateDocument(doc())).toEqual([]);
+    expect(migrateDocument(doc(), 6)).toEqual([t("file.warning.newerVersion")]);
   });
 });

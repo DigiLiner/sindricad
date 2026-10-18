@@ -78,16 +78,30 @@ import { t } from "../i18n";
 // straight pieces, as it always did, and its link keeps the flag, so this
 // build makes it smooth again.
 
+// v6 → v7: a Box, Cylinder or Sphere carries its centre (x/y/z, field report
+// 3ff3dc1b), and a new one is placed resting on the grid. An older build
+// ignores the fields and builds it centred on the origin, without a word, so a
+// document holding a primitive placed anywhere else is v7 and that build warns
+// on open. Stamped only on such a document, as v6 is: a primitive with no x/y/z
+// (every one saved before) or all three 0 builds the same in both.
+
 /** .sindri file-format version: the newest this build reads (bump when the
  *  on-disk shape changes incompatibly). A document is SAVED as the oldest
  *  version that holds what it uses: savedVersion. */
-export const FORMAT_VERSION = 6;
+export const FORMAT_VERSION = 7;
 
-/** The version a document is saved as: v6 when a sketch names a shape's
- *  corner, centre or side or holds a projected point (see v5 → v6 above),
- *  else v5. */
+/** The version a document is saved as: v7 when a primitive is placed off the
+ *  origin (v6 → v7 above), v6 when a sketch names a shape's corner, centre or
+ *  side or holds a projected point (v5 → v6 above), else v5. */
 export function savedVersion(features: readonly Feature[]): number {
+  if (features.some(usesPrimitiveCentre)) return 7;
   return features.some((f) => usesShapeOperands(f) || usesProjectedPoints(f)) ? 6 : 5;
+}
+
+/** True if a primitive's centre is off the origin (v6 → v7 above). */
+function usesPrimitiveCentre(f: Feature): boolean {
+  if (f.type !== "box" && f.type !== "cylinder" && f.type !== "sphere") return false;
+  return [f.x, f.y, f.z].some((v) => v !== undefined && v !== 0);
 }
 
 /** True if a sketch holds a projected point (v5 → v6 above). */

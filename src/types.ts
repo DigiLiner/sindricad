@@ -870,11 +870,14 @@ export type Feature =
   // consumed unless keepTools. Omitted target/tools default to "all bodies".
   // `joinTouchingOnly`: see the extrude above.
   | { id: string; type: "combine"; operation: "join" | "cut" | "intersect"; target?: string; tools?: string[]; keepTools?: boolean; joinTouchingOnly?: boolean }
-  // Primitive bodies (centered at the origin). Each creates a new body; edit the
-  // dimensions in the inspector. Handy as boolean tool bodies for Combine.
-  | { id: string; type: "box"; length: Num; width: Num; height: Num }
-  | { id: string; type: "cylinder"; radius: Num; height: Num }
-  | { id: string; type: "sphere"; radius: Num }
+  // Primitive bodies. Each creates a new body; edit the dimensions and the
+  // centre in the inspector. Handy as boolean tool bodies for Combine.
+  // `x`/`y`/`z` is the world position of the body's CENTRE; absent is 0 (a
+  // primitive saved before them is centred on the origin). One placed off the
+  // origin makes the document format v7 (migrate.savedVersion).
+  | { id: string; type: "box"; length: Num; width: Num; height: Num; x?: Num; y?: Num; z?: Num }
+  | { id: string; type: "cylinder"; radius: Num; height: Num; x?: Num; y?: Num; z?: Num }
+  | { id: string; type: "sphere"; radius: Num; x?: Num; y?: Num; z?: Num }
   // Hollow the active body to a wall thickness, removing the selected faces
   // (none = a fully closed hollow).
   | { id: string; type: "shell"; thickness: Num; faces?: Selector | Selector[] }

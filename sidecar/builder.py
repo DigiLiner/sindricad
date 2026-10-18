@@ -8439,22 +8439,30 @@ def _require_sketch(ctx, sid, op):
     return entry
 
 
+def _placed(f, ctx, shape):
+    """A primitive's optional x/y/z is the world position of its CENTRE. Absent
+    is 0, and all zero builds the bare shape (no Pos), so a primitive saved
+    before the fields existed stays byte-identical."""
+    x, y, z = (ctx.val(f.get(k, 0)) for k in ("x", "y", "z"))
+    return Pos(x, y, z) * shape if (x or y or z) else shape
+
+
 def _handle_box(f, ctx):
     l, w, h = ctx.val(f["length"]), ctx.val(f["width"]), ctx.val(f["height"])
     _require_positive("Box", length=l, width=w, height=h)
-    ctx.new_body(Box(l, w, h), "Box")
+    ctx.new_body(_placed(f, ctx, Box(l, w, h)), "Box")
 
 
 def _handle_cylinder(f, ctx):
     r, h = ctx.val(f["radius"]), ctx.val(f["height"])
     _require_positive("Cylinder", radius=r, height=h)
-    ctx.new_body(Cylinder(r, h), "Cylinder")
+    ctx.new_body(_placed(f, ctx, Cylinder(r, h)), "Cylinder")
 
 
 def _handle_sphere(f, ctx):
     r = ctx.val(f["radius"])
     _require_positive("Sphere", radius=r)
-    ctx.new_body(Sphere(r), "Sphere")
+    ctx.new_body(_placed(f, ctx, Sphere(r)), "Sphere")
 
 
 def _handle_shell(f, ctx):

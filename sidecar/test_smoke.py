@@ -1237,6 +1237,80 @@ def test_primitives():
     print(f"  primitives OK: box−cylinder hole vol {part.volume:.0f}, sphere vol {sp.volume:.0f}")
 
 
+def test_primitive_centre():
+    """A primitive's optional x/y/z is the WORLD position of its centre (field
+    report 3ff3dc1b: a primitive could only be resized, never placed). Absent or
+    all zero must build the very shape it always did, BREP byte for byte, so a
+    saved document's primitives stay exactly where they were."""
+    from build123d import Box, Cylinder, Sphere, export_brep
+
+    def brep(shape):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.brep")
+            export_brep(shape, p)
+            with open(p, "rb") as fh:
+                return fh.read()
+
+    def built(f, params=None):
+        part, err, _b = rebuild({"parameters": params or {}, "features": [f]})
+        assert not err, err
+        return part
+
+    def span(part):
+        bb = part.bounding_box()
+        return [round(v, 6) for v in (bb.min.X, bb.min.Y, bb.min.Z, bb.max.X, bb.max.Y, bb.max.Z)]
+
+    box = {"id": "b", "type": "box", "length": 20, "width": 20, "height": 20}
+    cyl = {"id": "c", "type": "cylinder", "radius": 10, "height": 20}
+    sph = {"id": "s", "type": "sphere", "radius": 10}
+    for f, direct in [(box, Box(20, 20, 20)), (cyl, Cylinder(10, 20)), (sph, Sphere(10))]:
+        assert brep(built(f)) == brep(direct), f"a saved {f['type']} without x/y/z no longer builds byte-identical"
+        zeros = dict(f, x=0, y=0, z=0)
+        assert brep(built(zeros)) == brep(direct), f"a {f['type']} at x=y=z=0 is not the shape it always was"
+
+    assert span(built(dict(box, z=10))) == [-10, -10, 0, 10, 10, 20], "box z=10 should rest on z=0"
+    assert span(built(dict(box, x=5, y=-3, z=10))) == [-5, -13, 0, 15, 7, 20]
+    cz = span(built(dict(cyl, z=10)))
+    assert abs(cz[2]) < 1e-6 and abs(cz[5] - 20) < 1e-6, f"cylinder z=10 should span 0..20, got {cz}"
+    sz = span(built(dict(sph, z=10)))
+    assert abs(sz[2]) < 1e-6 and abs(sz[5] - 20) < 1e-6, f"sphere z=10 should span 0..20, got {sz}"
+    # A parameter drives it like any other numeric field.
+    pz = span(built(dict(box, z="lift"), {"lift": 15}))
+    assert pz[2] == 5 and pz[5] == 25, f"box z bound to lift=15 should span 5..25, got {pz}"
+
+    # A placed box is a tool body like any other: a positioned cylinder still
+    # drills it.
+    part, err, bodies = rebuild({"parameters": {}, "features": [
+        dict(box, z=10), dict(cyl, radius=5, height=30, z=10),
+        {"id": "cb", "type": "combine", "operation": "cut", "target": "body1", "tools": ["body2"]},
+    ]})
+    assert not err, err
+    assert len(bodies) == 1 and 6200 < part.volume < 6700, f"placed box with a drilled hole ≈ 6429, got {part.volume:.0f}"
+
+    # Move still works on top of the field: it adds to the placement.
+    part, err, _b = rebuild({"parameters": {}, "features": [
+        dict(box, x=5, z=10), {"id": "mv", "type": "move", "dz": 7, "bodies": ["body1"]},
+    ]})
+    assert not err, err
+    assert span(part) == [-5, -10, 7, 15, 10, 27], f"Move on a placed box: {span(part)}"
+
+    # A fillet authored on a placed box (a new document) binds its edge, by
+    # match and by point, and still does once Centre Z is edited.
+    from geom_select import edge_fingerprint
+    _p, err, bodies = rebuild({"parameters": {}, "features": [dict(box, z=10)]})
+    shape = bodies[0]["shape"]
+    top_x = [e for e in shape.edges() if abs(e.center().X - 10) < 1e-6 and abs(e.center().Z - 20) < 1e-6]
+    assert len(top_x) == 1
+    for sel in ({"kind": "edge", "by": "match", "fp": edge_fingerprint(top_x[0], shape), "body": "body1"},
+                {"kind": "edge", "by": "nearest", "point": [10, 0, 20]}):
+        for z in (10, 15):
+            part, err, _b = rebuild({"parameters": {}, "features": [
+                dict(box, z=z), {"id": "fl", "type": "fillet", "radius": 2, "edges": [sel]}]})
+            assert not err, (sel["by"], z, err)
+            assert len(part.faces()) == 7 and part.volume < 7990, f"{sel['by']} fillet at z={z} did not round the edge"
+    print("  primitive centre OK: absent/zero byte-identical, x/y/z place, parameter-bound, Move adds")
+
+
 def test_modify_tools():
     """Shell (hollow), rectangular + circular pattern, and draft on a box."""
     _s, base = _box(1, 20, 20, 20)  # 20³ box, z=0..20
@@ -5674,6 +5748,7 @@ if __name__ == "__main__":
     test_extrude_noop_guards()
     test_cut_that_empties_a_body_is_refused()
     test_primitives()
+    test_primitive_centre()
     test_modify_tools()
     test_offset_face_and_thicken()
     test_offset_ladder()

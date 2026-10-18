@@ -122,7 +122,7 @@ describe("inspector: where the edit gesture lands", () => {
     inspector.select("f1", true);
 
     const all = rows(root);
-    expect(all.map((r) => r.label)).toEqual(["width", "Radius mm", "Height mm"]);
+    expect(all.map((r) => r.label)).toEqual(["width", "Radius mm", "Height mm", "Centre X mm", "Centre Y mm", "Centre Z mm"]);
     expect(fakeFocus.el, "nothing was focused at all").not.toBeNull();
     expect(fakeFocus.el, "the caret is in the global `width` parameter row").not.toBe(all[0]!.input);
     expect(all.find((r) => r.input === fakeFocus.el)?.label).toBe("Radius mm");
@@ -139,7 +139,7 @@ describe("inspector: where the edit gesture lands", () => {
     // focus there yanks the caret out of whatever the user was typing.
     const { root, inspector } = mount([cylinder]);
     inspector.select("f1");
-    expect(rows(root).length).toBe(3);
+    expect(rows(root).length).toBe(6);
     expect(fakeFocus.el).toBeNull();
   });
 
@@ -354,6 +354,62 @@ describe("inspector: clearing an up-to target", () => {
     const f = store.document.features[0] as unknown as Record<string, unknown>;
     expect("upTo" in f, "the picked face survived the clear").toBe(false);
     expect(rows(root).map((r) => r.label)).toEqual(["Distance mm"]);
+  });
+});
+
+// --- where a primitive sits (field report 3ff3dc1b) --------------------------
+//
+// "I placed a primitive and could only resize it." Its centre is three more
+// numbers in the same panel, so they are typed, and bound to a parameter, the
+// way its size is. Run against the REAL store: what counts is the document.
+
+describe("inspector: a primitive's centre", () => {
+  // a committed number schedules a rebuild on window's timer
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubGlobal("window", globalThis);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  const placedBox = { id: "b1", type: "box", length: 20, width: 20, height: 20, x: 0, y: 0, z: 10 } as unknown as Feature;
+  const field = (store: DocumentStore, key: string) => (store.document.features[0] as unknown as Record<string, unknown>)[key];
+
+  it("offers Centre X, Y and Z under the size, and typing one moves the box", () => {
+    const { root, inspector, store } = mountReal(placedBox);
+    inspector.select("b1");
+    expect(rows(root).map((r) => r.label)).toEqual(["Length mm", "Width mm", "Height mm", "Centre X mm", "Centre Y mm", "Centre Z mm"]);
+    const z = rows(root).find((r) => r.label === "Centre Z mm")!.input;
+    expect(z.value).toBe("10");
+    z.value = "-5";
+    z.dispatch("change");
+    expect(field(store, "z")).toBe(-5);
+  });
+
+  it("binds Centre Z to a parameter like any size field", async () => {
+    const { root, inspector, store } = mountReal(placedBox);
+    expect(store.addParam("lift", "15")).toBeNull();
+    await vi.runAllTimersAsync(); // parameter commits land on the store's param chain
+    inspector.select("b1");
+    const z = rows(root).find((r) => r.label === "Centre Z mm")!.input;
+    z.value = "lift";
+    z.dispatch("change");
+    await vi.runAllTimersAsync();
+    expect(field(store, "z")).toBe(15);
+    expect(store.isParamBound({ kind: "feature", feature: "b1", field: "z" })).toBe(true);
+  });
+
+  it("a cylinder and a sphere get the same three rows", () => {
+    for (const f of [
+      { id: "c1", type: "cylinder", radius: 10, height: 20, x: 0, y: 0, z: 10 },
+      { id: "s1", type: "sphere", radius: 10, x: 0, y: 0, z: 10 },
+    ]) {
+      const { root, inspector } = mountReal(f as unknown as Feature);
+      inspector.select(f.id);
+      expect(rows(root).map((r) => r.label).slice(-3), f.type).toEqual(["Centre X mm", "Centre Y mm", "Centre Z mm"]);
+    }
   });
 });
 

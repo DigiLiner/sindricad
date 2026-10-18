@@ -424,16 +424,17 @@ fn build(doc: &Document, diags: &mut Vec<ResolveDiag>) -> Result<Shape, String> 
                 let solid = Solid::loft(wires.iter());
                 part = Some(solid.into_shape());
             }
-            // Primitive bodies (centered at the origin), mirroring builder.py's
-            // Box / Cylinder / Sphere. The Rust kernel is still single-body, so a
-            // primitive becomes the part if none exists yet, else it's unioned in.
+            // Primitive bodies, mirroring builder.py's Box / Cylinder / Sphere:
+            // centred on their optional x/y/z (absent = 0, the origin). The Rust
+            // kernel is still single-body, so a primitive becomes the part if
+            // none exists yet, else it's unioned in.
             "box" => {
                 let s = Shape::box_centered(
                     num_field(f, "length", params),
                     num_field(f, "width", params),
                     num_field(f, "height", params),
                 );
-                part = Some(merge_body(part, s));
+                part = Some(merge_body(part, placed(f, params, s)));
             }
             "cylinder" => {
                 let s = Shape::cylinder_centered(
@@ -442,11 +443,11 @@ fn build(doc: &Document, diags: &mut Vec<ResolveDiag>) -> Result<Shape, String> 
                     DVec3::Z,
                     num_field(f, "height", params),
                 );
-                part = Some(merge_body(part, s));
+                part = Some(merge_body(part, placed(f, params, s)));
             }
             "sphere" => {
                 let s = Shape::sphere(num_field(f, "radius", params)).build();
-                part = Some(merge_body(part, s));
+                part = Some(merge_body(part, placed(f, params, s)));
             }
             // An unimplemented feature type must FAIL, not vanish. This arm used
             // to `eprintln!` and carry on, so a document using anything this
@@ -470,6 +471,12 @@ fn build(doc: &Document, diags: &mut Vec<ResolveDiag>) -> Result<Shape, String> 
 /// Add a fresh base body (a primitive) in the single-body Rust model: it becomes
 /// the part if none exists yet, else it's unioned in. (The Python multi-body
 /// kernel would keep it as a separate body — Rust multi-body is future work.)
+/// A primitive moved to its centre (builder.py `_placed`); all zero leaves it be.
+fn placed(f: &serde_json::Value, params: &std::collections::HashMap<String, f64>, s: Shape) -> Shape {
+    let at = DVec3::new(num_field(f, "x", params), num_field(f, "y", params), num_field(f, "z", params));
+    if at == DVec3::ZERO { s } else { s.translated(at) }
+}
+
 fn merge_body(part: Option<Shape>, s: Shape) -> Shape {
     match part {
         None => s,
@@ -1531,6 +1538,12 @@ mod tests {
             { "id": "b", "type": "box", "length": 20, "width": 20, "height": 20 },
             { "id": "c", "type": "cylinder", "radius": 4, "height": 40 }]})).expect("combo");
         assert!(!combo.mesh.positions.is_empty(), "box+cylinder merged geometry");
+
+        // x/y/z is the centre: a box at z=10 rests on z=0.
+        let placed = geom_rebuild(json!({"parameters": {}, "features": [
+            { "id": "b", "type": "box", "length": 20, "width": 20, "height": 20, "x": 5, "z": 10 }]})).expect("placed box");
+        assert!((placed.bbox.min[2]).abs() < 0.05 && (placed.bbox.max[2] - 20.0).abs() < 0.05, "placed box z 0..20");
+        assert!((placed.bbox.min[0] + 5.0).abs() < 0.05, "placed box x -5..15");
     }
 
     /// A circle hole cut from a rectangle plate: rectangle extrude (new) then a

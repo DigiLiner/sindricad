@@ -58,6 +58,13 @@ export function isHelixSweep(f: Feature): boolean {
   return f.type === "sweep" && f.helixCircle !== undefined;
 }
 
+/** Where a primitive's centre sits, after its size rows. */
+const PRIMITIVE_CENTRE: NumFieldRow[] = [
+  ["x", t("inspector.field.centreX"), "length"],
+  ["y", t("inspector.field.centreY"), "length"],
+  ["z", t("inspector.field.centreZ"), "length"],
+];
+
 /** [field, label, kind] rows per feature type. */
 export const FEATURE_NUM_FIELDS: Partial<Record<Feature["type"], NumFieldRow[]>> = {
   // "Start offset" lifts the profile off its sketch plane before the sweep;
@@ -84,9 +91,9 @@ export const FEATURE_NUM_FIELDS: Partial<Record<Feature["type"], NumFieldRow[]>>
   // the Split Body panel's Offset field and arrow set. Listed here so a split
   // is editable in the inspector too, and so a parameter can drive it.
   split: [["offset", t("inspector.field.offset"), "length"]],
-  box: [["length", t("inspector.field.length"), "length"], ["width", t("inspector.field.width"), "length"], ["height", t("inspector.field.height"), "length"]],
-  cylinder: [["radius", t("inspector.field.radius"), "length"], ["height", t("inspector.field.height"), "length"]],
-  sphere: [["radius", t("inspector.field.radius"), "length"]],
+  box: [["length", t("inspector.field.length"), "length"], ["width", t("inspector.field.width"), "length"], ["height", t("inspector.field.height"), "length"], ...PRIMITIVE_CENTRE],
+  cylinder: [["radius", t("inspector.field.radius"), "length"], ["height", t("inspector.field.height"), "length"], ...PRIMITIVE_CENTRE],
+  sphere: [["radius", t("inspector.field.radius"), "length"], ...PRIMITIVE_CENTRE],
   shell: [["thickness", t("inspector.field.thickness"), "length"]],
   offsetFace: [["distance", t("inspector.field.distance"), "length"]],
   thicken: [["thickness", t("inspector.field.thickness"), "length"]],
