@@ -27,6 +27,7 @@ import {
 } from "./dimensionTool";
 import { pickEntity, pointBeatsCurve, tangencyPoints, crossingPoints, trimSpan, trimWithConstraints, detachEndpoint, detachableEnd, isBreakCut, filletCorner, chamferCorner, cornerJoins, explodeCompound, polygonRingHolds, rotationTie, translationTie, offsetEntity, offsetChain, offsetChainJunction, signedOffsetAt, followOffsets, followRefusal, breakWithConstraints, joinLines, extendLine, breakLink, attachmentPoints, bodyDragBlocked, bodyDragFrame, fixPinnedAt, fixPinnedIds, pickDragPoint, FIXED_POINT_MSG, PROJECTED_FIXED_MSG, type ExplodeResult, type OffsetResult, type TrimResult } from "./modify";
 import { newEntityId, newConstraintId, isDimConstraint, notePatternId, copiedConstraints, mapOperandId } from "./id";
+import { cornerRenumber, mirroredConstraints, reflection, SLOT_RENUMBER, type Reflection, type Renumber } from "./mirror";
 import { angleQuadrant, reflectAcrossLine } from "./geom2d";
 import { SketchHistory, cloneSnapshot, type SketchSnapshot } from "./history";
 import { isPlainNumber, parseField, dimValueOk, fmtLength, fieldText, canonicalDecimal, storedDimExpr } from "../ui/units";
@@ -51,7 +52,7 @@ import {
   curvesEndingAt, inferArcTangents, inferLineRelations, isGeometrySnap, relationConstraints,
   type ArcPoints, type LineInference,
 } from "./autoConstrain";
-import { detectRegions, entityPolyline, EPS, pointInLoop, rectCorners, resolveRegionRef, sameRegionIds, twinRegion, type Region } from "./region";
+import { detectRegions, entityPolyline, EPS, pointInLoop, polygonPoints, rectCorners, resolveRegionRef, sameRegionIds, twinRegion, type Region } from "./region";
 import { splineFlags } from "./spline";
 import { worldPointInRegion } from "./regionSelect";
 import { setSpaceMouseOrbitLocked } from "../input/spacemouse";
@@ -3883,6 +3884,9 @@ export class SketchMode {
   }
 
   // --- mirror: click a line; reflect the multi-selection across it -------
+  // The copy carries the constraints and dimensions among what it mirrors,
+  // read the mirrored way (mirror.ts): made as a Copy makes them, then
+  // reflected, so one rule decides what comes along for both.
   private mirrorClick(p: THREE.Vector2) {
     const idx = pickEntity(this.entities, p, this.pickTol());
     const axis = idx >= 0 ? this.entities[idx] : undefined;
@@ -3894,69 +3898,45 @@ export class SketchMode {
     const projected = this.warnSelectedProjected();
     const chosen = selectedSources.filter((e) => !projected.has(e.id));
     if (!chosen.length) return; // nothing selected to mirror
-    const a = new THREE.Vector2(axis.x1, axis.y1);
-    const b = new THREE.Vector2(axis.x2, axis.y2);
-    let toLines = 0;
-    for (const e of chosen) {
-      if (e.type !== "rectangle") {
-        this.entities.push(this.reflectEntity(e, a, b));
-        continue;
+    const flip = reflection({ x: axis.x1, y: axis.y1 }, { x: axis.x2, y: axis.y2 });
+    const entIds = new Map(chosen.map((e) => [e.id, newEntityId()]));
+    let copies = chosen.map((e): ResolvedEntity => {
+      const c = { ...structuredClone(e), id: entIds.get(e.id)! };
+      // text on a mirrored path follows the mirror image of the path
+      const path = c.type === "text" && c.pathRef !== undefined ? mapOperandId(entIds, c.pathRef) : null;
+      return c.type === "text" && path ? { ...c, pathRef: path } : c;
+    });
+    let cons = copiedConstraints(this.constraints, entIds);
+    // A rectangle is square to the sketch axes by definition (types.ts), so
+    // across a line that turns them its mirror image is four lines, held
+    // square by Perpendicular, as Rotate explodes one; what named its sides
+    // and corners names the lines (explodeCompound). One with no size stays
+    // a rectangle.
+    const level: string[] = [];
+    if (flip.axes === "turn") {
+      for (const r of copies.filter((e) => e.type === "rectangle")) {
+        const x = explodeCompound(copies, cons, copies.indexOf(r), { square: "perpendicular" });
+        if (!x) continue;
+        copies = x.entities;
+        cons = x.constraints;
+        level.push(x.sides[0]!);
       }
-      const r = this.reflectRectangle(e, a, b);
-      this.entities.push(...r.entities);
-      this.constraints.push(...r.holds);
-      if (r.holds.length) toLines++;
     }
+    const renumber = new Map<string, Renumber>();
+    this.entities.push(...copies.map((e) => this.reflectEntity(e, flip, renumber)));
+    this.constraints.push(...mirroredConstraints(cons, flip, renumber, level));
     this.selected.clear();
-    if (toLines) toast(t("sketch.transform.mirrorRectangleToLines", { count: toLines }), { timeout: 8000 });
+    if (level.length) toast(t("sketch.transform.mirrorRectangleToLines", { count: level.length }), { timeout: 8000 });
     this.afterModify();
   }
-  /** reflect a 2D point across the infinite line through a→b */
-  private reflectPoint(x: number, y: number, a: THREE.Vector2, b: THREE.Vector2): { x: number; y: number } {
-    const dx = b.x - a.x, dy = b.y - a.y;
-    const len2 = dx * dx + dy * dy || 1;
-    const t = ((x - a.x) * dx + (y - a.y) * dy) / len2;
-    const px = a.x + t * dx, py = a.y + t * dy; // foot of perpendicular
-    return { x: 2 * px - x, y: 2 * py - y };
-  }
-  /** A reflected COPY of a rectangle across the line a→b. A reflection turns
-   *  it by twice the line's angle, and a rectangle is square to the sketch axes
-   *  by definition (types.ts), so the copy is a rectangle only when it comes
-   *  out square to them again (a horizontal or vertical line, or 45 degrees
-   *  with width and height swapped). Otherwise it is four lines on the
-   *  reflected corners, held square by Perpendicular, as Rotate explodes one
-   *  (explodeSelectedRectangles). The corners are the same numbers on both
-   *  lines that meet there, which is what joins them in the solver. */
-  private reflectRectangle(
-    e: Extract<ResolvedEntity, { type: "rectangle" }>, a: THREE.Vector2, b: THREE.Vector2,
-  ): { entities: ResolvedEntity[]; holds: SketchConstraint[] } {
-    const c = e.construction ? { construction: true } : {};
-    const ctr = this.reflectPoint(e.x, e.y, a, b);
-    const rect = (width: number, height: number) => ({
-      entities: [{ type: "rectangle" as const, id: newEntityId(), width, height, x: ctr.x, y: ctr.y, ...c }],
-      holds: [],
-    });
-    if (!(e.width > 0 && e.height > 0)) return rect(e.width, e.height);
-    const q = rectCorners(e.x, e.y, e.width, e.height).map((p) => this.reflectPoint(p.x, p.y, a, b));
-    const tol = 1e-6 * Math.hypot(q[1]!.x - q[0]!.x, q[1]!.y - q[0]!.y);
-    if (Math.abs(q[1]!.y - q[0]!.y) <= tol) return rect(e.width, e.height); // bottom edge still horizontal
-    if (Math.abs(q[1]!.x - q[0]!.x) <= tol) return rect(e.height, e.width); // bottom edge turned vertical
-    const ids = q.map(() => newEntityId());
-    const entities: ResolvedEntity[] = q.map((p, k) => {
-      const n = q[(k + 1) % 4]!;
-      return { type: "line", id: ids[k]!, x1: p.x, y1: p.y, x2: n.x, y2: n.y, ...c };
-    });
-    const holds: SketchConstraint[] = [0, 1, 2].map((k) => ({ type: "perpendicular", l1: ids[k]!, l2: ids[k + 1]! }));
-    return { entities, holds };
-  }
-  /** a reflected COPY of an entity (fresh id) across the line a→b. One case per
-   *  entity type and no fallback, so a type added later fails to compile here
-   *  instead of mirroring as a point (a slot and a polygon once did: the slot's
-   *  point had NaN coordinates). A rectangle has its own (reflectRectangle):
-   *  its copy can be four lines. */
-  private reflectEntity(e: Exclude<ResolvedEntity, { type: "rectangle" }>, a: THREE.Vector2, b: THREE.Vector2): ResolvedEntity {
-    const rp = (x: number, y: number) => this.reflectPoint(x, y, a, b);
-    const id = newEntityId();
+  /** The mirror image of entity `e` across `r`, same id. One case per entity
+   *  type and no fallback, so a type added later fails to compile here instead
+   *  of mirroring as a point (a slot and a polygon once did: the slot's point
+   *  had NaN coordinates). A rectangle, polygon or slot numbers its corners
+   *  and sides anew on its mirror image; how is recorded in `renumber`. */
+  private reflectEntity(e: ResolvedEntity, r: Reflection, renumber: Map<string, Renumber>): ResolvedEntity {
+    const rp = (x: number, y: number) => r.point({ x, y });
+    const id = e.id;
     const c = e.construction ? { construction: true } : {};
     switch (e.type) {
       case "line": {
@@ -3972,23 +3952,40 @@ export class SketchMode {
         const p1 = rp(e.x1, e.y1), p2 = rp(e.x2, e.y2), m = rp(e.mx, e.my);
         return { type: "arc", id, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, mx: m.x, my: m.y, ...c };
       }
+      case "rectangle": {
+        // still square to the axes here (mirrorClick made lines of one that
+        // is not), with width and height swapped across a 45 degree line;
+        // its corners are numbered by where the source's land
+        const ctr = rp(e.x, e.y);
+        const [width, height] = r.axes === "swap" ? [e.height, e.width] : [e.width, e.height];
+        const now = rectCorners(ctr.x, ctr.y, width, height);
+        const near = (q: { x: number; y: number }) => {
+          const d = now.map((v) => Math.hypot(v.x - q.x, v.y - q.y));
+          return d.indexOf(Math.min(...d));
+        };
+        renumber.set(id, cornerRenumber(rectCorners(e.x, e.y, e.width, e.height).map((q) => near(rp(q.x, q.y)))));
+        return { type: "rectangle", id, width, height, x: ctr.x, y: ctr.y, ...c };
+      }
       case "spline":
         return { type: "spline", id, points: e.points.map((q) => rp(q.x, q.y)), ...splineFlags(e), ...c };
       case "slot": {
         // symmetric about its own axis, so the two end centres carry it
         const p1 = rp(e.x1, e.y1), p2 = rp(e.x2, e.y2);
+        renumber.set(id, SLOT_RENUMBER);
         return { type: "slot", id, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y, width: e.width, ...c };
       }
       case "polygon": {
         // a vertex at angle φ lands at 2θ - φ (θ the mirror line's direction),
-        // and a regular polygon's vertex set maps onto itself started there
+        // and a regular polygon's vertex set maps onto itself started there:
+        // corner k is the copy's corner -k
         const ctr = rp(e.x, e.y);
-        const axisDeg = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI;
-        return { type: "polygon", id, x: ctr.x, y: ctr.y, radius: e.radius, sides: e.sides, angle: 2 * axisDeg - e.angle, ...c };
+        const n = polygonPoints(e.x, e.y, e.radius, e.sides, 0).length;
+        renumber.set(id, cornerRenumber(Array.from({ length: n }, (_, k) => (n - k) % n)));
+        return { type: "polygon", id, x: ctr.x, y: ctr.y, radius: e.radius, sides: e.sides, angle: 2 * r.deg - e.angle, ...c };
       }
       case "text": {
         const at = rp(e.x, e.y); // reflect the anchor; keep the string/style (glyphs aren't mirrored)
-        return { ...e, id, x: at.x, y: at.y };
+        return { ...e, x: at.x, y: at.y };
       }
       case "point": {
         const q = rp(e.x, e.y);
