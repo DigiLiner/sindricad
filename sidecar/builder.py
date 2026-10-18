@@ -313,8 +313,13 @@ def _list_shapes(lst):
     return tuple(lst)  # non-manifold: rare, and correctness beats the microseconds
 
 
-def _tick_every(k, n=64):
-    """Publish liveness from inside a long loop, every `n`th iteration.
+class _PastDeadline(Exception):
+    """A `_tick_every(..., deadline=)` loop ran past its deadline."""
+
+
+def _tick_every(k, n=64, deadline=None):
+    """Publish liveness from inside a long loop, every `n`th iteration, and
+    raise _PastDeadline there once time.monotonic() passes `deadline`.
 
     Shared by `_refacet_clean` and `_replane_mesh_file`, the two longest
     loop-heavy stretches on the mesh-import path. `keep_index=True` because both
@@ -324,6 +329,8 @@ def _tick_every(k, n=64):
     reply naming nothing."""
     if k % n == 0:
         progress_tick(keep_index=True)
+        if deadline is not None and time.monotonic() > deadline:
+            raise _PastDeadline()
 
 
 # region-rebuild outcomes, shared by `_refacet_clean` and `_replane_mesh_file`.
@@ -3317,7 +3324,7 @@ def _fit_or_refacet_one(part, tol, report, revolutions=True):
     return fitted if n_fit <= len(cleaned.faces()) else cleaned
 
 
-def _fit_or_refacet(shape, tol=0.12, report=None, revolutions=True):
+def _fit_or_refacet(shape, tol=0.12, report=None, revolutions=True, max_faces=None):
     """Recognise curved surfaces, or failing that collapse facet debris — PER
     BODY, and returning the INPUT OBJECT when no body changed.
 
@@ -3338,14 +3345,21 @@ def _fit_or_refacet(shape, tol=0.12, report=None, revolutions=True):
     inside-out solid, and recombining would let the caller's `_unify_body`
     fill that void. Returning `shape` itself when every
     body declined keeps the "any doubt returns the input object" contract, and
-    that is the case Clean Up hits on a body it cannot improve."""
+    that is the case Clean Up hits on a body it cannot improve.
+
+    `max_faces`: a body with more faces than this is left as it is."""
+    def one(p):
+        if max_faces is not None and len(p.faces()) > max_faces:
+            return p
+        return _fit_or_refacet_one(p, tol, report, revolutions)
+
     parts = _explode_solids(shape)
     if len(parts) > 1:
-        picked = [_fit_or_refacet_one(p, tol, report, revolutions) for p in parts]
+        picked = [one(p) for p in parts]
         if all(a is b for a, b in zip(picked, parts)):
             return shape
         return Compound(picked)
-    return _fit_or_refacet_one(shape, tol, report, revolutions)
+    return one(shape)
 
 
 class _DebrisMemo:
@@ -4091,6 +4105,14 @@ def _stl_distinct_normals(path):
 # ~2 minutes or SIGSEGVs.
 MAX_IMPORT_FACET_DIRECTIONS = 20_000
 
+# Wall-clock cap on `_replane_mesh_file`, after which it declines and the import
+# takes the plain path. Replane is the FAST path (50 s on a 123,510-triangle
+# textured export, and the House field file is quicker), so a mesh still
+# replaning after two minutes is one it will not finish well: a 106,914-triangle
+# textured cylinder took 1,308 s. Checked at every liveness tick and between
+# its kernel calls; a single kernel call cannot be interrupted from here.
+REPLANE_TIME_CAP = 120.0
+
 
 def _too_dense_error(ntri):
     """The user-facing refusal for a mesh past MAX_IMPORT_TRIANGLES.
@@ -4200,7 +4222,17 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
       but "may" is not "does", and a shell imports as reference geometry.
     - Validation is by AREA. Volume is not an oracle for a mesh that might not
       be watertight, and there is no original B-rep to compare a solid count to.
+
+    Correct over fast: a mesh that IS watertight must come back as solids. The
+    sew at 1.5 x tol can open one (a texture's narrow regions collapse), and
+    then a clean textured CAD export landed as invalid open shells while the
+    plain path gives valid solids, so replane declines instead. Declining at the
+    sew, before ShapeFix_Shape, is also what keeps it fast: the fixer is where
+    a 106,914-triangle textured cylinder spent over 20 minutes. Past
+    REPLANE_TIME_CAP it declines too.
     """
+    deadline = time.monotonic() + REPLANE_TIME_CAP
+
     import numpy as np
 
     try:
@@ -4243,7 +4275,7 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
         starts = np.flatnonzero(head)
         adj = [[] for _ in range(len(W))]
         for g, (s, e) in enumerate(zip(starts, np.append(starts[1:], len(ev)))):
-            _tick_every(g, 8192)  # one mesh edge per iteration: long stride
+            _tick_every(g, 8192, deadline)  # one mesh edge per iteration: long stride
             if e - s < 2:
                 continue  # a boundary edge: one triangle, nobody to join
             grp = owner[s:e]
@@ -4258,7 +4290,7 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
         region = np.full(len(W), -1, dtype=np.int64)
         planes = []
         for grown, seed in enumerate(np.argsort(-areas)):
-            _tick_every(grown, 8192)
+            _tick_every(grown, 8192, deadline)
             if region[seed] >= 0 or not areas[seed] > 0:
                 continue
             p0, nn = V[W[seed, 0]], normals[seed]
@@ -4268,7 +4300,7 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
             queue, popped = [seed], 0
             while queue:
                 popped += 1
-                _tick_every(popped, 8192)
+                _tick_every(popped, 8192, deadline)
                 for j in adj[queue.pop()]:
                     if region[j] < 0 and np.abs((V[W[j]] - p0) @ nn).max() <= tol:
                         region[j] = rid
@@ -4298,6 +4330,9 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
         nreg = len(planes)
         if not nreg or nreg * 4 > len(W):
             return None
+        # every edge shared by exactly two triangles: the mesh closes
+        sizes = np.append(starts[1:], len(ev)) - starts
+        watertight = bool(np.all(sizes == 2))
 
         # The decline that matters: a mesh of FACETS rather than of planes.
         # The ratio above cannot see the difference — measured, a torus reaches
@@ -4314,7 +4349,6 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
         # gap, and like MAX_IMPORT_FACET_DIRECTIONS it is calibrated from those
         # measurements rather than derived. Being wrong costs a fallback to the
         # existing import, which is what a curved mesh gets today anyway.
-        sizes = np.append(starts[1:], len(ev)) - starts
         two = starts[sizes == 2]
         ra, rb = region[owner[two]], region[owner[two + 1]]
         seam = (ra != rb) & (ra >= 0) & (rb >= 0)
@@ -4331,7 +4365,7 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
 
         vregions = [set() for _ in range(len(V))]
         for t, rid in enumerate(region):
-            _tick_every(t, 8192)
+            _tick_every(t, 8192, deadline)
             if rid >= 0:
                 for a in W[t]:
                     vregions[a].add(rid)
@@ -4342,7 +4376,7 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
         # instead of flying off along a bad intersection line
         snapped = V.copy()
         for vi, rs in enumerate(vregions):
-            _tick_every(vi, 8192)
+            _tick_every(vi, 8192, deadline)
             if not rs:
                 continue
             if len(rs) == 1:
@@ -4366,13 +4400,13 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
 
         region_tris = defaultdict(list)
         for t, rid in enumerate(region):
-            _tick_every(t, 8192)
+            _tick_every(t, 8192, deadline)
             if rid >= 0:
                 region_tris[rid].append(W[t])
 
         new_faces, fallback = [], 0
         for rebuilt, (rid, rtris) in enumerate(region_tris.items()):
-            _tick_every(rebuilt, 16)  # a whole region per iteration: short stride
+            _tick_every(rebuilt, 16, deadline)  # a whole region per iteration: short stride
             p0, nn = planes[rid]
             status, face = _planar_face_from_region(rtris, p0, nn, snapped,
                                                     prune_collinear=True)
@@ -4397,6 +4431,12 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
             sew.Add(f)
         sew.Perform()
         progress_tick(keep_index=True)  # no loop to tick inside either call
+        if watertight and sew.NbFreeEdges():
+            if debug:
+                print(f"replane: the sew opened a closed mesh ({sew.NbFreeEdges()} free edges)")
+            return None
+        if time.monotonic() > deadline:
+            raise _PastDeadline()
         fixer = ShapeFix_Shape(sew.SewedShape())
         fixer.Perform()
         progress_tick(keep_index=True)
@@ -4411,6 +4451,12 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
                  if p.faces() and abs(p.area) > 0.01 * tol * p.bounding_box().diagonal]
         if not parts:
             return None
+        # A Shell here is a component that would not close (or closed invalid,
+        # see _close_sewn_components); from a closed mesh that is our doing.
+        if watertight and any(not p.solids() for p in parts):
+            return None
+        if time.monotonic() > deadline:
+            raise _PastDeadline()
         out = _unify_if_valid(parts[0] if len(parts) == 1 else Compound(parts))
 
         # Validate against the MESH, the only original there is. Area, not
@@ -4438,6 +4484,10 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
             print(f"replane: {len(W)} triangles -> {nf} faces from {nreg} regions "
                   f"({fallback} kept as triangles), solids {len(out.solids())}")
         return out
+    except _PastDeadline:
+        print(f"[replane] declined after {REPLANE_TIME_CAP:g} s; importing the plain way",
+              file=sys.stderr, flush=True)
+        return None
     except Exception:
         if debug:
             raise
@@ -4551,6 +4601,12 @@ def _sew_mesh_file(path, report=None):
         # the pipeline — but the face counts still have to be judged and still
         # have to reach the user, so this falls through rather than returning.
         _note_reference(report, "tooManyFacetDirections", directions=nn)
+        # ...but the directions are counted over the whole FILE, and a plain
+        # body beside a textured one is cheap to fit. Measured on the four-body
+        # textured field export: its three plain bodies fit from 230, 1,495 and
+        # 52 faces to 30, 553 and 3 in 3.5 s, while the textured one (82,494
+        # faces) is the expensive one and lands as reference geometry anyway.
+        shape = _fit_or_refacet(shape, report=report, max_faces=MAX_IMPORT_FACES)
     else:
         # Recognise curved surfaces FIRST, while the vertices are still exactly
         # on them: `_refacet_clean` snaps mesh vertices onto PLANES, which
