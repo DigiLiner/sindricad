@@ -61,9 +61,27 @@ describe("a 0 mm distance made with the Dimension tool reads as a distance (expl
     expect(rows.map((r) => r.dim)).toEqual([t("inspector.sketchDim.kind.horizontal")]);
     expect(rows[0]!.valueMm).toBe(0);
     expect(constraintGlyphs(ents(), cons)).toEqual([]);
-    // and, as before d28dc27, no label on the canvas: a dimension with no
-    // length has no direction to draw along (constraintDims' meas < 1e-6)
-    expect(constraintDims(ents(), cons)).toEqual([]);
+    // and a "0" label on the canvas, off the points along the axis it
+    // measures (X here, so beside them in Y) with a leader to them
+    const dims = constraintDims(ents(), cons);
+    expect(dims).toHaveLength(1);
+    expect(dims[0]!.valueMm).toBe(0);
+    expect(dims[0]!.labelPos.x).toBeCloseTo(A.x, 9);
+    expect(Math.abs(dims[0]!.labelPos.y - A.y)).toBeGreaterThan(1);
+    expect(dims[0]!.lines.length).toBeGreaterThan(0);
+    for (const [p, q] of dims[0]!.lines) expect(p.distanceTo(q)).toBeGreaterThan(1e-9);
+  });
+
+  it("an aligned 0 mm distance between two coincident points gets its label too, and a Y one beside them in X", () => {
+    const at = (type: "p2pDistance" | "p2pDistanceY") => constraintDims(
+      [{ type: "point", id: "a", x: 10, y: 0 }, { type: "point", id: "b", x: 10, y: 0 }],
+      [{ type, id: "c1", e1: "a", p1: 0, e2: "b", p2: 0, value: 0 } as SketchConstraint],
+    );
+    const aligned = at("p2pDistance"), dy = at("p2pDistanceY");
+    expect(aligned).toHaveLength(1);
+    expect(Math.abs(aligned[0]!.labelPos.y)).toBeGreaterThan(1);
+    expect(dy).toHaveLength(1);
+    expect(Math.abs(dy[0]!.labelPos.x - 10)).toBeGreaterThan(1);
   });
 
   it("CONTROL: Vertical on the same two points is still a V on each, and no dimension", () => {

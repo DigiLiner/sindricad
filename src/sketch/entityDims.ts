@@ -1173,14 +1173,25 @@ export function constraintDims(ents: ResolvedEntity[], constraints: SketchConstr
     } else return;
     if (!a || !b) return;
     const meas = a.distanceTo(b);
-    if (meas < 1e-6) return;
-    const dir = b.clone().sub(a).normalize();
+    // A point-to-point distance of 0 has no direction of its own: it takes the
+    // axis it measures along (X for an aligned one), so its "0" sits just off
+    // the points with a leader to them, as editable as any label. Before, it
+    // drew nothing at all, and a 0 mm distance from the Dimension tool was
+    // only to be found in the inspector.
+    const zero = meas < 1e-6;
+    const dir = !zero ? b.clone().sub(a).normalize()
+      : c.type === "p2pDistanceY" ? v(0, 1)
+      : c.type === "p2pDistanceX" || c.type === "p2pDistance" ? v(1, 0)
+      : null;
+    if (!dir) return;
     const nrm = v(-dir.y, dir.x);
     // the frozen placement, projected onto the dim's own left normal: magnitude
     // = how far off the geometry, sign = which side
     const off = place ? place.ox * nrm.x + place.oy * nrm.y : undefined;
     const lin = linear(a, b, nrm, meas, off);
-    out.push({ cIndex: i, labelPos: lin.labelPos, valueMm: driven ? measured ?? meas : value, lines: lin.lines, driven, place: lin.place, ...(measured !== null ? { signed: true } : {}) });
+    // the dimension line and its arrows have no length at 0: the leader is left
+    const lines = zero ? lin.lines.filter(([p, q]) => p.distanceTo(q) > 1e-9) : lin.lines;
+    out.push({ cIndex: i, labelPos: lin.labelPos, valueMm: driven ? measured ?? meas : value, lines, driven, place: lin.place, ...(measured !== null ? { signed: true } : {}) });
   });
   return out;
 }

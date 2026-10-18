@@ -901,6 +901,15 @@ jobs:
           SC_TOKEN: citoken
           SC_CHROME: /usr/bin/google-chrome
         run: node e2e/sketch_dim_conflict_e2e.cjs
+      # A 0 mm distance from the Dimension tool drew nothing on the canvas (no
+      # length, so no direction): it gets a "0" label beside its points. Whether
+      # that label is on screen, beside the points and editable is only true in
+      # a rendered page.
+      - name: Zero-length sketch dimension end-to-end
+        env:
+          SC_TOKEN: citoken
+          SC_CHROME: /usr/bin/google-chrome
+        run: node e2e/sketch_zero_dim_e2e.cjs
       # Field report f45fe95c: a construction plane drawn as a hardcoded 80x80
       # quad ends mid-body on any part wider than that, and its boundary slides
       # across the face while orbiting — "lines overlaying the surface of the
