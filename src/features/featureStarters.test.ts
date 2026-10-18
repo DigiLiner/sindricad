@@ -610,14 +610,29 @@ describe("Extrude on a selected face", () => {
 });
 
 // Field 3ff3dc1b: "I placed a primitive and could not figure out how to move
-// it, only resize it." Move (ribbon or the M key) already works on any body
-// regardless of what feature made it (moveTool.ts has no feature-type gate at
-// all) — the gap was purely that nothing on screen pointed there, since the
-// inspector only ever shows a primitive's Length/Width/Height resize fields.
-// Thomas's call: ship only the one-time hint, never change where primitives
-// rest (that is a backward-compatibility call on existing saved documents,
-// not an engineering one).
-describe("primitive placement points at Move", () => {
+// it, only resize it." A primitive now carries its centre (x/y/z, Centre X/Y/Z
+// in the inspector), and a NEW one rests on the grid: its centre is written
+// half its height (a sphere's radius) above the origin, so the ground grid
+// stays at z=0 and the origin marker sits at the middle of its base. Thomas's
+// call (2026-10-18), reversing his 2026-10-11 "never change where primitives
+// rest" for new primitives only: that rule was about saved documents, and a
+// saved primitive has no x/y/z, which builds where it always did (centred).
+describe("primitive placement", () => {
+  it.each([
+    ["box", { type: "box", length: 20, width: 20, height: 20, x: 0, y: 0, z: 10 }],
+    ["cylinder", { type: "cylinder", radius: 10, height: 20, x: 0, y: 0, z: 10 }],
+    ["sphere", { type: "sphere", radius: 10, x: 0, y: 0, z: 10 }],
+  ] as const)("a new %s rests on the grid, its centre written into the feature", async (shape, want) => {
+    chooseResolution.value = shape;
+    const h = harness({ busy: false, bodies: [], features: [], regions: 0 });
+    const added: { type: string }[] = [];
+    h.deps.store.addFeature = (f: { type: string }) => added.push(f);
+    await (createFeatureStarters(h.deps as never) as unknown as { startPrimitive: () => Promise<void> }).startPrimitive();
+    chooseResolution.value = null;
+    expect(added).toHaveLength(1);
+    expect(added[0]).toMatchObject(want);
+  });
+
   it("hints that Move repositions and rotates it, after the body is placed", async () => {
     chooseResolution.value = "box";
     const h = harness({ busy: false, bodies: [], features: [], regions: 0 });

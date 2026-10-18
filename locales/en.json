@@ -696,7 +696,7 @@
       "primitive": {
         "boxHint": "l×w×h",
         "cylinderHint": "r, h",
-        "moveHint": "I've placed it centred on the origin. Use Move (M) to reposition or rotate it.",
+        "moveHint": "I've set it on the grid. Type its Centre X, Y or Z in the panel to put it somewhere else, or use Move (M) to move or rotate it.",
         "sphereHint": "r",
         "title": "Create primitive"
       },
