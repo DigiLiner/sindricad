@@ -4345,6 +4345,14 @@ def _replane_mesh_file(path, tol=0.12, report=None, debug=False):
         fixer.Perform()
         progress_tick(keep_index=True)
         parts = _close_sewn_components(fixer.Shape(), tol, keep_shells=True)
+        # A region narrower than the sew tolerance is a face the sew COLLAPSED
+        # onto a line: it comes back as a loose two-edge sliver with no area,
+        # and each one became a body of its own in the Browser (a textured
+        # four-body export came back as ten bodies, six of them single slivers
+        # of 1e-7 mm2). Kept are only parts at least 1% of the tolerance wide
+        # on average, area over extent; every sliver measured is under 0.3%.
+        parts = [p for p in parts
+                 if p.faces() and abs(p.area) > 0.01 * tol * p.bounding_box().diagonal]
         if not parts:
             return None
         out = _unify_if_valid(parts[0] if len(parts) == 1 else Compound(parts))
