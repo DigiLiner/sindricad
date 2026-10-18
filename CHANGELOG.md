@@ -18,6 +18,99 @@ This file starts on 2026-08-03. For anything before that, see the
 
 ## Unreleased
 
+### Files
+
+- **Cmd+Q on a Mac asks before it throws your work away.** Cmd+Q and SindriCAD > Quit used
+  to quit at once with unsaved changes. They now ask Save, Discard or Cancel, like closing
+  the window. Quitting from the Dock still does not ask.
+- **Exports write what is on screen.** File > Export, Export print project, Open in
+  OrcaSlicer, Send to printer and TinkerAtlas Publish now leave out features past the
+  rollback marker, suppressed features and hidden bodies. With every body hidden they say so
+  instead of writing a file.
+- **Export waits for the tool you have open.** While a tool shows a live preview, Export,
+  the print project and Publish ask you to finish or cancel it first, so a file never holds
+  a half-made feature.
+
+### Sketching
+
+- **Copy, cut and paste in a sketch with Ctrl+C, Ctrl+X and Ctrl+V.** The copy lands under
+  the pointer with its constraints, dimensions and parameters, in the same sketch or the
+  next one you open, and each paste is one undo step. Ctrl+C in a sketch also no longer
+  switches to the Circle tool.
+- **Mirror in a sketch brings the constraints and dimensions along.** Everything between the
+  things you mirror comes with them, read the mirrored way: angles and X/Y distances turn
+  round, and a copy across a slanted line keeps its right angles and parallels. The mirror
+  image holds its shape when you drag it or edit one of its dimensions.
+- **A copied or mirrored dimension keeps the parameter that drives it.** Change the
+  parameter and the original and the copy both follow. A formula between copied dimensions
+  holds between the copies, and Undo takes a copy's parameters away with it.
+- **A point is held on the sketch origin only when you join it there.** A corner or line end
+  that merely sits at 0,0 is free to move like any other; Coincident or Fix holds it, and
+  drawing onto the origin with the snap still joins it (splines included now). Older
+  sketches keep what they had: their points on the origin get that join when opened.
+- **Typing a gap into a Horizontal or Vertical between two points moves the point you picked
+  first.** Aligning a point to a rectangle's corner and then giving the pair a distance in
+  the inspector used to shrink the rectangle and move the point only part of the way.
+- **A 0 mm distance made with the Dimension tool reads as a distance again.** Horizontal and
+  Vertical on two points are now their own constraints instead of a distance of 0, so the
+  two no longer look alike. Older files show what they showed before; a file that holds the
+  new kind opens with a "made by a newer version" note in older builds.
+- **A 0 mm distance shows a 0 on the sketch.** It sits just beside its points and edits like
+  any other dimension; before, it had no label at all.
+- **Tangent from a line's end puts that end on the curve.** Click the line near its end,
+  then the circle or arc, and the line touches it right there and is tangent there in one
+  go, instead of touching somewhere further along. Clicking the middle of the line still
+  lets it touch anywhere.
+- **Constraint badges on a point near the edge of the view stay in the view.** The Fix,
+  Coincident and Point-On badges flip to the other side of their point when their usual side
+  would put them off screen, and only then, so they do not jump about while you pan.
+
+### Modelling
+
+- **Mirror works across a construction plane, not only XY, XZ and YZ (#64).** Mirror (under
+  Move in the Modify group) lists your construction planes after the three base planes, and
+  right-clicking a plane offers Mirror across this plane. The mirror follows the plane when
+  you change its offset or the face it sits on. If the plane comes after the mirror in the
+  timeline, the mirror says so instead of showing an internal id. Your first rebuild after
+  updating is a slow one.
+- **Primitives have a position.** Box, Cylinder and Sphere show Centre X, Y and Z in the
+  panel, which a parameter can drive, and a new one rests on the grid instead of straddling
+  the origin and stays on it as you resize it, until you type a Centre Z. Primitives in
+  saved documents stay where they were.
+- **A shell with no opening face now makes a closed hollow part.** You get a sealed cavity
+  inside walls of the thickness you set, not a smaller solid. STL, 3MF and print exports
+  keep any sealed cavity as a void, so the slicer no longer prints it full.
+- **A hollow part exported as STL or 3MF imports back as one hollow body.** The cavity used
+  to come back as a second, inside-out body.
+- **A textured model exported as STL imports back as the bodies it was.** It used to come
+  back with extra empty bodies of one sliver face each.
+- **A detailed textured STL now imports as valid solids, not open shells.** It can take
+  longer: about 4.5 minutes for a 120,000-triangle textured file, where the old fast path
+  left two of its four bodies broken. A textured cylinder that used to take over 20 minutes
+  now takes about 3.
+- **Section waits for Fillet and Chamfer.** Opening Inspect > Section while Fillet or
+  Chamfer was open put a second tool on the model, with the fillet's edges drawn through the
+  cut away half. It now says to finish or cancel first. Starting Fillet inside a section
+  still works.
+- **A click right after something appears now lands on it.** A construction plane that was
+  just made or moved, and the drag arrow of Section, Move, Press/Pull, Offset,
+  Fillet/Chamfer and Split, could miss a click that came before the view had redrawn. Picks
+  now test where things are, and the arrows are placed the moment the tool opens.
+
+### Interface
+
+- **Dialogs and the command palette no longer blur the model behind them.** The view still
+  dims, so it is clear the window behind is not live.
+
+### Installs
+
+- **When the geometry engine cannot start on Windows because a file is blocked, the log now
+  says which one.** If numpy's DLLs refuse to load, the engine writes the Windows version
+  and every DLL it tried into its log before it stops, so a report tells me which file your
+  antivirus or a damaged install stopped.
+
+## 0.1.259 (2026-10-17)
+
 ### Support
 
 - **The title bar shows how this month's running costs are funded.** A small heart pill
@@ -40,15 +133,6 @@ This file starts on 2026-08-03. For anything before that, see the
   that happens: up to about 1,000 joined, dimensioned lines (it was about 280). While you
   drag a part that big, it follows the cursor unsolved and settles when you let go,
   so the view never freezes mid-drag.
-
-### Modelling
-
-- **Mirror works across a construction plane, not only XY, XZ and YZ (#64).** Mirror
-  (under Move in the Modify group) lists your construction planes after the three base
-  planes, and right-clicking a plane offers Mirror across this plane. The mirror follows
-  the plane when you change its offset or the face it sits on. If the plane comes after
-  the mirror in the timeline, the mirror says so instead of showing an internal id. Your
-  first rebuild after updating is a slow one.
 
 ### Welcome screen
 
