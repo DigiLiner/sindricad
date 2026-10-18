@@ -81,6 +81,14 @@ const SENTINEL = "MY LONG REPORT THAT MUST NOT BE LOST";
   //        lands on the backdrop. The dialog must survive with the text in it. ---
   await openDialog();
   await page.fill(".bug-desc", SENTINEL);
+  // The backdrop dims the view behind it and does not blur it: a blur over the
+  // WebGL canvas re-filters the whole window every frame and smears the model.
+  const backdrop = await page.$eval(".choice-backdrop", (el) => {
+    const s = getComputedStyle(el);
+    return { bg: s.backgroundColor, filter: s.backdropFilter || s.webkitBackdropFilter || "none" };
+  });
+  check(backdrop.bg === "rgba(0, 0, 0, 0.45)", "0: the backdrop dims the view", backdrop.bg);
+  check(backdrop.filter === "none", "0: the backdrop does not blur the view", backdrop.filter);
   const before = (await descBox()).h;
   await dragGrip(450);
   const stillOpen = await open();
