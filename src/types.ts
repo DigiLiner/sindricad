@@ -874,10 +874,13 @@ export type Feature =
   // centre in the inspector. Handy as boolean tool bodies for Combine.
   // `x`/`y`/`z` is the world position of the body's CENTRE; absent is 0 (a
   // primitive saved before them is centred on the origin). One placed off the
-  // origin makes the document format v7 (migrate.savedVersion).
-  | { id: string; type: "box"; length: Num; width: Num; height: Num; x?: Num; y?: Num; z?: Num }
-  | { id: string; type: "cylinder"; radius: Num; height: Num; x?: Num; y?: Num; z?: Num }
-  | { id: string; type: "sphere"; radius: Num; x?: Num; y?: Num; z?: Num }
+  // origin makes the document format v7 (migrate.savedVersion). `onGrid`: a
+  // new primitive rests on the grid, its `z` kept at half its height (a
+  // sphere's radius) as it is resized, until Centre Z is typed (numFields
+  // restOnGrid). Only the app reads it: `z` always holds the number.
+  | { id: string; type: "box"; length: Num; width: Num; height: Num; x?: Num; y?: Num; z?: Num; onGrid?: true }
+  | { id: string; type: "cylinder"; radius: Num; height: Num; x?: Num; y?: Num; z?: Num; onGrid?: true }
+  | { id: string; type: "sphere"; radius: Num; x?: Num; y?: Num; z?: Num; onGrid?: true }
   // Hollow the active body to a wall thickness, removing the selected faces
   // (none = a fully closed hollow).
   | { id: string; type: "shell"; thickness: Num; faces?: Selector | Selector[] }

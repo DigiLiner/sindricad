@@ -7,9 +7,10 @@
 // A new primitive is now written centred half its height up, so it sits on
 // z=0, and Box/Cylinder/Sphere show Centre X/Y/Z in the inspector.
 //
-// Every step goes in where the user does: the ribbon's Primitive button, the
-// Box choice, the timeline chip, the inspector's Centre Z box, the M key and
-// the Move panel. What is read back is the rebuilt model's box and the grid's
+// A new one keeps its base on the grid as it is resized, until Centre Z is
+// typed. Every step goes in where the user does: the ribbon's Primitive
+// button, the Box choice, the timeline chip, the inspector's rows, Ctrl+Z /
+// Ctrl+Y, the M key and the Move panel. What is read back is the rebuilt model's box and the grid's
 // rendered height, never a call.
 //
 // Controls, so a pass cannot be vacuous:
@@ -104,7 +105,8 @@ const OLD_DOC = {
   console.log("  new box:", JSON.stringify({ ...placed, features: undefined }));
   const box = placed.features.find((f) => f.type === "box");
   check(placed.bodies === 1 && !!box, "the ribbon placed one box");
-  check(box && box.x === 0 && box.y === 0 && box.z === 10, "its centre is written into the feature, half its height up", JSON.stringify(box));
+  check(box && box.x === 0 && box.y === 0 && box.z === 10 && box.onGrid === true,
+    "its centre is written into the feature, half its height up, following its size", JSON.stringify(box));
   check(near(placed.z?.[0], 0) && near(placed.z?.[1], 20), "the box rests on the grid: z 0..20", `z=${JSON.stringify(placed.z)}`);
   check(near(placed.gridZ, 0), "the grid stays on the XY plane, at the origin marker", `grid z=${placed.gridZ}`);
   const hint = await page.evaluate(() => [...document.querySelectorAll(".toast")].map((t) => t.textContent).join(" | "));
@@ -126,13 +128,43 @@ const OLD_DOC = {
   check(["Centre X mm", "Centre Y mm", "Centre Z mm"].every((l) => l in rows), "the panel lists Centre X, Y and Z");
   check(rows["Centre Z mm"] === "10", "Centre Z reads the box's centre", `"${rows["Centre Z mm"]}"`);
 
-  before = await settles();
-  const zInput = page.locator("#inspector .param-row", { hasText: "Centre Z" }).locator("input");
-  await zInput.fill("20");
-  await zInput.press("Enter");
-  await settled(before);
-  const typed = await read();
-  check(near(typed.z?.[0], 10) && near(typed.z?.[1], 30), "Centre Z 20 puts the box at z 10..30", `z=${JSON.stringify(typed.z)}`);
+  /** Type into an inspector row and press Enter, as the user commits it. */
+  const typeRow = async (label, text) => {
+    const before = await settles();
+    const input = page.locator("#inspector .param-row", { hasText: label }).locator("input");
+    await input.fill(text);
+    await input.press("Enter");
+    await settled(before);
+    return read();
+  };
+  const span = (r) => JSON.stringify(r.z);
+
+  // A new box's base stays on the grid as it is resized...
+  let r = await typeRow("Height", "40");
+  check(near(r.z?.[0], 0) && near(r.z?.[1], 40), "Height 40 keeps the base on the grid: z 0..40", `z=${span(r)}`);
+  check((await inspectorRows())["Centre Z mm"] === "20", "and the panel shows the centre it moved to", `"${(await inspectorRows())["Centre Z mm"]}"`);
+  // ...until Centre Z is typed: from then on the centre stays put.
+  r = await typeRow("Centre Z", "50");
+  check(near(r.z?.[0], 30) && near(r.z?.[1], 70), "Centre Z 50 puts the box at z 30..70", `z=${span(r)}`);
+  r = await typeRow("Height", "60");
+  check(near(r.z?.[0], 20) && near(r.z?.[1], 80), "Height 60 after a typed centre keeps it at 50: z 20..80", `z=${span(r)}`);
+
+  // Undo and redo walk back through those, the base-following included.
+  const key = async (combo) => {
+    const before = await settles();
+    await page.evaluate(() => document.activeElement?.blur?.());
+    await page.keyboard.press(combo);
+    await settled(before);
+    return read();
+  };
+  r = await key("Control+z");
+  check(near(r.z?.[0], 30) && near(r.z?.[1], 70), "Ctrl+Z undoes the height: z 30..70", `z=${span(r)}`);
+  r = await key("Control+z");
+  check(near(r.z?.[0], 0) && near(r.z?.[1], 40) && r.features[0]?.onGrid === true,
+    "Ctrl+Z again undoes the typed centre, base back on the grid: z 0..40", `z=${span(r)}`);
+  r = await key("Control+y");
+  r = await key("Control+y");
+  check(near(r.z?.[0], 20) && near(r.z?.[1], 80), "Ctrl+Y twice redoes both: z 20..80", `z=${span(r)}`);
 
   // --- 3. Move (M) still works on top of the typed centre --------------------
   await page.evaluate(() => document.activeElement?.blur?.());
@@ -149,7 +181,7 @@ const OLD_DOC = {
   const moved = await read();
   console.log("  after Move Z 5:", JSON.stringify({ ...moved, features: moved.features.map((f) => f.type) }));
   check(moved.features.some((f) => f.type === "move"), "the move was committed as a feature");
-  check(near(moved.z?.[0], 15) && near(moved.z?.[1], 35), "Move Z 5 adds to the centre: z 15..35", `z=${JSON.stringify(moved.z)}`);
+  check(near(moved.z?.[0], 25) && near(moved.z?.[1], 85), "Move Z 5 adds to the centre: z 25..85", `z=${JSON.stringify(moved.z)}`);
 
   // --- 4. Control: a box saved before the fields stays where it was ----------
   before = await settles();

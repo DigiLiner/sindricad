@@ -19,7 +19,7 @@ import type { ResolvedEntity } from "../sketch/snap";
 import * as params from "../params/engine";
 import { renameRefs } from "../params/parse";
 import type { FieldKind } from "./numFields";
-import { DEFAULT_EXTRUDE_DISTANCE, boundShapeFields, dimValueFromParam, hasUpToTarget, paramValueOfDim, writeTarget } from "./numFields";
+import { DEFAULT_EXTRUDE_DISTANCE, boundShapeFields, dimValueFromParam, hasUpToTarget, paramValueOfDim, releaseFromGrid, restOnGrid, writeTarget } from "./numFields";
 import { p2lSideFlipped, paramStep, paramSteps, refreshStep, refreshSteps } from "./projectionWalk";
 import { applyPointCarry, type PointCarry } from "./pointCarry";
 import { sketchLabel } from "./sketchLabel";
@@ -1561,6 +1561,7 @@ export class DocumentStore {
   private applyDerived(fn: (doc: CadDocument) => void, immediate = true) {
     fn(this.doc);
     if (this.doc.paramDefs) this.applyRecompute(params.recompute(this.doc));
+    restOnGrid(this.doc);
     this.markDirty();
     this.emitDoc();
     this.scheduleRebuild(immediate);
@@ -1631,6 +1632,7 @@ export class DocumentStore {
     const c = params.classifyExprInput(this.doc, raw, kind, bound);
     if (!c.ok) return c.error;
     this.queueParamCommit((d) => {
+      releaseFromGrid(d, target);
       if (c.name) params.commitNamedFieldExpr(d, target, c.name, c.expr, kind);
       else params.commitFieldExpr(d, target, c.expr, kind);
     });
@@ -1644,7 +1646,10 @@ export class DocumentStore {
     if (params.boundParam(this.doc, target)) {
       void this.setTargetExpr(target, String(canonical), kind);
     } else {
-      this.mutate((d) => void writeTarget(d, target, canonical));
+      this.mutate((d) => {
+        releaseFromGrid(d, target);
+        writeTarget(d, target, canonical);
+      });
     }
   }
 

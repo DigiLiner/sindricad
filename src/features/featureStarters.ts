@@ -950,7 +950,8 @@ export function createFeatureStarters(deps: FeatureStartersDeps) {
   // Primitive: drop a Box / Cylinder / Sphere body resting on the grid, the
   // origin at the middle of its base (edit its size and centre in the
   // inspector). Its centre is written half its height up (a sphere's radius),
-  // so the ground grid stays at z=0 rather than dropping to its bottom face.
+  // so the ground grid stays at z=0 rather than dropping to its bottom face,
+  // and `onGrid` keeps it there as it is resized (numFields.restOnGrid).
   // Useful as a starting block or as a boolean tool body.
   async function startPrimitive() {
     if (busy()) return;
@@ -961,9 +962,10 @@ export function createFeatureStarters(deps: FeatureStartersDeps) {
     ]);
     if (!shape) return;
     const id = store.nextId();
-    if (shape === "box") store.addFeature({ id, type: "box", length: 20, width: 20, height: 20, x: 0, y: 0, z: 10 } as Feature);
-    else if (shape === "cylinder") store.addFeature({ id, type: "cylinder", radius: 10, height: 20, x: 0, y: 0, z: 10 } as Feature);
-    else store.addFeature({ id, type: "sphere", radius: 10, x: 0, y: 0, z: 10 } as Feature);
+    const onGrid = { x: 0, y: 0, z: 10, onGrid: true };
+    if (shape === "box") store.addFeature({ id, type: "box", length: 20, width: 20, height: 20, ...onGrid } as Feature);
+    else if (shape === "cylinder") store.addFeature({ id, type: "cylinder", radius: 10, height: 20, ...onGrid } as Feature);
+    else store.addFeature({ id, type: "sphere", radius: 10, ...onGrid } as Feature);
     if (!primitiveMoveHintShown) {
       primitiveMoveHintShown = true;
       toast(t("feature.starters.primitive.moveHint"), { kind: "info" });

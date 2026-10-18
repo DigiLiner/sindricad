@@ -411,6 +411,79 @@ describe("inspector: a primitive's centre", () => {
       expect(rows(root).map((r) => r.label).slice(-3), f.type).toEqual(["Centre X mm", "Centre Y mm", "Centre Z mm"]);
     }
   });
+
+  // A NEW primitive rests on the grid (`onGrid`, what startPrimitive writes):
+  // resizing it keeps its base at z=0 until the user types Centre Z.
+  const type = (root: FakeEl, label: string, text: string) => {
+    const input = rows(root).find((r) => r.label === label)!.input;
+    input.value = text;
+    input.dispatch("change");
+  };
+  const centreZ = (root: FakeEl) => rows(root).find((r) => r.label === "Centre Z mm")!.input.value;
+
+  it("a new box keeps its base on the grid as it is resized, until Centre Z is typed", () => {
+    const { root, inspector, store } = mountReal({ ...placedBox, onGrid: true } as unknown as Feature);
+    inspector.select("b1");
+    type(root, "Height mm", "40");
+    expect(field(store, "z"), "height 40 should put the centre at 20 (base on the grid)").toBe(20);
+    expect(centreZ(root), "the panel shows the centre the base put it at").toBe("20");
+
+    type(root, "Centre Z mm", "50");
+    expect(field(store, "z")).toBe(50);
+    expect(field(store, "onGrid"), "typing Centre Z left the base following the size").toBeUndefined();
+    type(root, "Height mm", "60");
+    expect(field(store, "z"), "a typed centre moved when the height changed").toBe(50);
+
+    store.undo();
+    expect([field(store, "height"), field(store, "z")]).toEqual([40, 50]);
+    store.undo();
+    expect([field(store, "z"), field(store, "onGrid")], "undoing the typed centre should bring the base-following back").toEqual([20, true]);
+    store.undo();
+    expect([field(store, "height"), field(store, "z")]).toEqual([20, 10]);
+    store.redo();
+    store.redo();
+    store.redo();
+    expect([field(store, "height"), field(store, "z"), field(store, "onGrid")]).toEqual([60, 50, undefined]);
+  });
+
+  it("a new sphere keeps its bottom on the grid when its radius changes", () => {
+    const { root, inspector, store } = mountReal({ id: "s1", type: "sphere", radius: 10, x: 0, y: 0, z: 10, onGrid: true } as unknown as Feature);
+    inspector.select("s1");
+    type(root, "Radius mm", "15");
+    expect(field(store, "z")).toBe(15);
+  });
+
+  it("follows a height a parameter drives", async () => {
+    const { root, inspector, store } = mountReal({ ...placedBox, onGrid: true } as unknown as Feature);
+    expect(store.addParam("tall", "40")).toBeNull();
+    await vi.runAllTimersAsync();
+    inspector.select("b1");
+    type(root, "Height mm", "tall");
+    await vi.runAllTimersAsync();
+    expect([field(store, "height"), field(store, "z")]).toEqual([40, 20]);
+    expect(store.setParamExpr("tall", "60")).toBeNull();
+    await vi.runAllTimersAsync();
+    expect([field(store, "height"), field(store, "z")]).toEqual([60, 30]);
+  });
+
+  it("a box with a plain centre (saved, or typed) keeps it when resized", () => {
+    const { root, inspector, store } = mountReal(placedBox);
+    inspector.select("b1");
+    type(root, "Height mm", "40");
+    expect(field(store, "z")).toBe(10);
+  });
+
+  it("binding Centre Z to a parameter also stops the base following the size", async () => {
+    const { root, inspector, store } = mountReal({ ...placedBox, onGrid: true } as unknown as Feature);
+    expect(store.addParam("lift", "15")).toBeNull();
+    await vi.runAllTimersAsync();
+    inspector.select("b1");
+    type(root, "Centre Z mm", "lift");
+    await vi.runAllTimersAsync();
+    type(root, "Height mm", "40");
+    await vi.runAllTimersAsync();
+    expect([field(store, "z"), field(store, "onGrid")]).toEqual([15, undefined]);
+  });
 });
 
 // --- a sweep around a helix (Doug 30) ---------------------------------------

@@ -238,7 +238,8 @@ describe("savedVersion: v6 only for a sketch that names a shape's corner, centre
 describe("savedVersion: v7 only for a primitive placed off the origin", () => {
   const box = { id: "b1", type: "box", length: 20, width: 20, height: 20 };
   it.each<[string, Record<string, unknown>]>([
-    ["a box resting on the grid", { ...box, x: 0, y: 0, z: 10 }],
+    ["a new box resting on the grid", { ...box, x: 0, y: 0, z: 10, onGrid: true }],
+    ["a box with a typed centre", { ...box, x: 0, y: 0, z: 10 }],
     ["a box moved sideways", { ...box, x: -4 }],
     ["a cylinder", { id: "c1", type: "cylinder", radius: 10, height: 20, y: 3 }],
     ["a sphere", { id: "s1", type: "sphere", radius: 10, z: 10 }],

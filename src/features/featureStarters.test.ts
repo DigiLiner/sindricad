@@ -619,9 +619,9 @@ describe("Extrude on a selected face", () => {
 // saved primitive has no x/y/z, which builds where it always did (centred).
 describe("primitive placement", () => {
   it.each([
-    ["box", { type: "box", length: 20, width: 20, height: 20, x: 0, y: 0, z: 10 }],
-    ["cylinder", { type: "cylinder", radius: 10, height: 20, x: 0, y: 0, z: 10 }],
-    ["sphere", { type: "sphere", radius: 10, x: 0, y: 0, z: 10 }],
+    ["box", { type: "box", length: 20, width: 20, height: 20, x: 0, y: 0, z: 10, onGrid: true }],
+    ["cylinder", { type: "cylinder", radius: 10, height: 20, x: 0, y: 0, z: 10, onGrid: true }],
+    ["sphere", { type: "sphere", radius: 10, x: 0, y: 0, z: 10, onGrid: true }],
   ] as const)("a new %s rests on the grid, its centre written into the feature", async (shape, want) => {
     chooseResolution.value = shape;
     const h = harness({ busy: false, bodies: [], features: [], regions: 0 });

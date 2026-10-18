@@ -65,6 +65,32 @@ const PRIMITIVE_CENTRE: NumFieldRow[] = [
   ["z", t("inspector.field.centreZ"), "length"],
 ];
 
+/** A new primitive rests on the grid (`onGrid`): its centre Z follows its
+ *  size, half its height (a sphere's radius), so resizing it keeps its base
+ *  at z=0. Run on every document edit (store.applyDerived), after the
+ *  parameter recompute, so a size a parameter drives is followed too. */
+export function restOnGrid(doc: CadDocument): void {
+  doc.features.forEach((f, i) => {
+    if ((f.type !== "box" && f.type !== "cylinder" && f.type !== "sphere") || !f.onGrid) return;
+    const size = f.type === "sphere" ? f.radius : f.height;
+    if (typeof size !== "number") return;
+    const z = f.type === "sphere" ? size : size / 2;
+    if (f.z !== z) doc.features[i] = { ...f, z };
+  });
+}
+
+/** Typing Centre Z, a number or a binding, places the primitive there for
+ *  good: its base stops following its size. */
+export function releaseFromGrid(doc: CadDocument, target: ParamTarget): void {
+  if (target.kind !== "feature" || target.field !== "z") return;
+  const i = doc.features.findIndex((f) => f.id === target.feature);
+  const f = doc.features[i];
+  if (!f || !("onGrid" in f)) return;
+  const next = { ...f };
+  delete next.onGrid;
+  doc.features[i] = next;
+}
+
 /** [field, label, kind] rows per feature type. */
 export const FEATURE_NUM_FIELDS: Partial<Record<Feature["type"], NumFieldRow[]>> = {
   // "Start offset" lifts the profile off its sketch plane before the sweep;
