@@ -72,9 +72,21 @@ assert g.TIE_BAND == want, f'packaged TIE_BAND {g.TIE_BAND} != selector_tuning.j
 "
   $smoke = $LASTEXITCODE
 }
+# windll_probe.py is what server.py runs when numpy's DLLs fail to load on a
+# user's machine (14928c4f). Prove it shipped, finds numpy's DLL chain in the
+# packaged layout, and loads every file in it with the real ctypes.WinDLL. numpy
+# is imported first so its own loader has put the chain in place: this checks
+# the probe, and leaves numpy's load order to the `import builder` above.
+if ($smoke -eq 0) {
+  & $py -c "import numpy, windll_probe
+r = windll_probe.main()
+assert len(r) >= 2 and all(err is None for _, err in r), f'windll_probe on the packaged runtime: {r}'
+"
+  $smoke = $LASTEXITCODE
+}
 Pop-Location
 Remove-Item Env:PYTHONPATH
-if ($smoke -ne 0) { throw "[runtime] smoke: builder failed to import (exit $smoke)" }
-Write-Host "[runtime] smoke: builder imports, selector tuning loaded from the packaged file"
+if ($smoke -ne 0) { throw "[runtime] smoke: builder, selector tuning or windll_probe failed (exit $smoke)" }
+Write-Host "[runtime] smoke: builder imports, selector tuning loaded from the packaged file, numpy DLLs load"
 
 Write-Host "[runtime] done: $out"

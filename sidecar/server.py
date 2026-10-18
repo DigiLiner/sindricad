@@ -45,7 +45,21 @@ import urllib.parse
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 
-import numpy as np
+try:
+    import numpy as np
+except ImportError as e:
+    # 14928c4f: on Windows a DLL in numpy's chain can refuse to initialise, and
+    # numpy's message cannot say which. Name it on stderr, then re-raise as is:
+    # numpy's last line is the cause the Rust shell shows (windll_probe.py), so
+    # not even a probe that fails to import may replace it.
+    if "DLL load failed" in str(e):
+        try:
+            import windll_probe
+
+            windll_probe.main()
+        except Exception:  # noqa: BLE001
+            pass
+    raise
 
 import websockets
 

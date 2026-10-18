@@ -196,9 +196,10 @@ fn classify_exit(
 /// python-build-standalone already ships vcruntime140.dll/vcruntime140_1.dll
 /// next to the interpreter (see build-sidecar-runtime.ps1) and numpy's own
 /// wheel needs exactly those two — so this is not a missing-file packaging gap
-/// we can fix. The likelier causes (antivirus/EDR flagging OpenBLAS's JIT'd
-/// pages, or a damaged/partial install) are both things the user can act on,
-/// unlike a bare "it crashed".
+/// we can fix. The likelier causes (security software hooking or blocking a
+/// DLL at load, or a damaged/partial install) are both things the user can act
+/// on, unlike a bare "it crashed". sidecar/windll_probe.py names the DLL on the
+/// lines BEFORE numpy's error, which stays the last line and so the cause.
 ///
 /// Only called from the `#[cfg(windows)]` arm of `classify_exit` above, but kept
 /// compiled (and tested) on every platform so the text match itself — the part
@@ -207,6 +208,14 @@ fn classify_exit(
 fn is_dll_init_failure(cause: &str) -> bool {
     let lower = cause.to_lowercase();
     lower.contains("dll load failed") || lower.contains("dll init") || lower.contains("dll_init")
+}
+
+/// A stderr line that may be the cause `classify_exit` quotes: any non-blank
+/// line, trimmed. The LAST one wins, so a diagnostic printed before an error
+/// (windll_probe.py) never displaces the error itself.
+fn stderr_cause_line(line: &str) -> Option<&str> {
+    let t = line.trim();
+    (!t.is_empty()).then_some(t)
 }
 
 /// How the sidecar died, in a form a human can act on.
@@ -501,9 +510,9 @@ impl Sidecar {
                             *g = Some(msg.to_string());
                         }
                     }
-                    if !line.trim().is_empty() {
+                    if let Some(cause) = stderr_cause_line(&line) {
                         if let Ok(mut g) = last_err.lock() {
-                            *g = Some(line.trim().to_string());
+                            *g = Some(cause.to_string());
                         }
                     }
                     eprintln!("[sidecar:err] {line}");
@@ -886,6 +895,49 @@ mod tests {
         );
         assert_eq!(d.kind, "startup_failure");
         assert_eq!(d.hint, None, "the hint is Windows-only, this build is not Windows");
+    }
+
+    /// 14928c4f follow-up: on a DLL init failure the sidecar now prints
+    /// windll_probe.py's lines (one names the failing DLL, with "FAIL") before
+    /// numpy's traceback. The cause has to stay numpy's own last line, and still
+    /// read as a DLL init failure, or the toast loses its hint.
+    #[test]
+    fn the_dll_probe_lines_never_become_the_cause() {
+        let stderr = "\
+[windll_probe] windows (10, 0, 22631, 2, '') on AMD64
+[windll_probe] ok   numpy.libs\\libscipy_openblas64_-b788.dll
+[windll_probe] FAIL numpy.libs\\msvcp140-a4c2.dll: [WinError 1114] A dynamic link library (DLL) initialization routine failed
+[windll_probe] ok   numpy\\_core\\_multiarray_umath.cp312-win_amd64.pyd
+Traceback (most recent call last):
+  File \"C:\\app\\server.py\", line 49, in <module>
+    import numpy as np
+ImportError: 
+
+IMPORTANT: PLEASE READ THIS FOR ADVICE ON HOW TO SOLVE THIS ISSUE!
+
+Original error was: DLL load failed while importing _multiarray_umath: A dynamic link library (DLL) initialization routine failed.
+
+";
+        let last_err = stderr.lines().filter_map(stderr_cause_line).last().map(String::from);
+        let cause = last_err.clone().unwrap();
+        assert!(cause.starts_with("Original error was: DLL load failed"), "got {cause}");
+        assert!(is_dll_init_failure(&cause));
+
+        #[cfg(unix)]
+        let one = {
+            use std::os::unix::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1 << 8)
+        };
+        #[cfg(windows)]
+        let one = {
+            use std::os::windows::process::ExitStatusExt;
+            std::process::ExitStatus::from_raw(1)
+        };
+        let d = classify_exit(&one, None, false, last_err);
+        assert_eq!(d.kind, "startup_failure");
+        assert_eq!(d.cause, cause);
+        #[cfg(windows)]
+        assert_eq!(d.hint, Some("dllInit"));
     }
 
     #[cfg(windows)]
