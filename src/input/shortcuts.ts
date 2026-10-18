@@ -312,6 +312,7 @@ export function toggleShortcutHUD() {
   const extra = [
     ["Ctrl+K", t("shortcut.hud.palette")],
     ["Ctrl+Z / Ctrl+Y", t("shortcut.hud.undoRedo")],
+    ["Ctrl+C / Ctrl+X / Ctrl+V", t("shortcut.hud.sketchClipboard")],
     ["Ctrl+S / Ctrl+Shift+S", t("shortcut.hud.saveSaveAs")],
     ["Ctrl+N / Ctrl+O / Ctrl+E", t("shortcut.hud.newOpenExport")],
     ["Del", t("shortcut.hud.deleteFaceFeature")],

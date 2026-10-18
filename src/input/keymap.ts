@@ -2,7 +2,8 @@
 // the app decides what each action does (main.ts dispatch). Ignores keystrokes
 // while typing in inputs, with one exception: undo/redo aimed at an untouched
 // tool dimension box (see undoBelongsToTheApp). Ctrl/Cmd combos handle
-// undo/redo (file shortcuts are handled centrally in main.ts).
+// undo/redo, and copy/cut/paste inside a sketch (file shortcuts are handled
+// centrally in main.ts).
 
 import { normalizeKey, resolveShortcut } from "./shortcuts";
 import { isImeComposing } from "../ui/focus";
@@ -23,6 +24,18 @@ function undoBelongsToTheApp(e: KeyboardEvent): boolean {
     e.target instanceof HTMLInputElement &&
     e.target.getAttribute("data-undo-passthrough") === "1"
   );
+}
+
+/** Ctrl/Cmd + C, X, V inside a sketch: its own clipboard (SketchMode). Fixed
+ *  keys like undo's, so the rebindable table (shortcuts.ts, single keys) never
+ *  sees them, and the `?` sheet lists them with the other fixed ones. */
+const SKETCH_CLIPBOARD: Record<string, string> = { c: "sketch-copy", x: "sketch-cut", v: "sketch-paste" };
+
+/** Text the user selected on the page (a feature's name in the browser, a
+ *  message): Ctrl+C over it is the browser's copy, even in a sketch. */
+function pageHasSelection(): boolean {
+  const sel = window.getSelection?.();
+  return !!sel && !sel.isCollapsed;
 }
 
 /** `onAction` returns `false` to DECLINE a key it has a binding for, which leaves
@@ -54,6 +67,11 @@ export function installKeymap(
       if (k === "z" && !e.shiftKey) return onAction("undo"), e.preventDefault();
       if (k === "z" && e.shiftKey) return onAction("redo"), e.preventDefault();
       if (k === "y") return onAction("redo"), e.preventDefault();
+      const clip = SKETCH_CLIPBOARD[k];
+      if (clip && !e.shiftKey && context() === "sketch" && !pageHasSelection()) {
+        if (onAction(clip) !== false) e.preventDefault();
+        return;
+      }
       // file shortcuts (Ctrl+S/N/O/E) are handled centrally in main.ts
       return;
     }

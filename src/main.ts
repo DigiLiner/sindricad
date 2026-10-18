@@ -810,6 +810,7 @@ const NON_REPEATABLE = new Set([
   "new", "open", "save", "saveas", "export", "import",
   "print-export", "print-orca", "print-send", "welcome", "ta-publish",
   "undo", "redo", "compute-all", "shortcut-help", "finish", "cancel-sketch", "palette",
+  "sketch-copy", "sketch-cut", "sketch-paste",
   "select", // a mode switch, not a command — "Repeat Select" would be nonsense
   "fit", "iso", "top", "front", "right", "persp",
   "selmode", "selmode-faces", "selmode-bodies",
@@ -1851,6 +1852,12 @@ function handleAction(action: string) {
   // fix, so routing it any later is silently a no-op.
   if (action === "undo") return void doUndo();
   if (action === "redo") return void doRedo();
+  // Ctrl+C / Ctrl+X / Ctrl+V in a sketch (keymap.ts sends them only then):
+  // the sketch's own clipboard, and like undo not a 3D command, so before
+  // the line that finishes the sketch
+  if (action === "sketch-copy") return void sketch.copySelection();
+  if (action === "sketch-cut") return void sketch.cutSelection();
+  if (action === "sketch-paste") return void sketch.pasteClipboard();
   // a 3D modeling command finishes the active sketch first (mainstream MCAD behavior)
   if (sketch.active) sketch.finish(true);
 

@@ -1520,6 +1520,7 @@
       "newOpenExport": "New / Open / Export",
       "palette": "Command palette",
       "saveSaveAs": "Save / Save As",
+      "sketchClipboard": "Copy / Cut / Paste sketch geometry (in a sketch)",
       "title": "Keyboard shortcuts",
       "undoRedo": "Undo / Redo"
     },
@@ -1598,6 +1599,14 @@
       },
       "results": "Sketch check results",
       "title": "Sketch check"
+    },
+    "clipboard": {
+      "copied": {
+        "one": "Copied. Ctrl+V pastes it under the pointer, in this sketch or another.",
+        "other": "Copied {count} items. Ctrl+V pastes them under the pointer, in this sketch or another."
+      },
+      "empty": "Nothing to paste yet: select sketch geometry and press Ctrl+C.",
+      "nothingSelected": "Select the sketch geometry to copy first."
     },
     "constraint": {
       "alreadyPicked": "That is the point you already picked — choose the second one to mirror.",

@@ -950,6 +950,7 @@ export class SketchMode {
   private cleanup() {
     const el = this.viewport.domElement;
     this.pendingBindings.clear();
+    this.lastPointer = null;
     this.regionCarry = {};
     this.pointCarry = {};
     this.trimmedCurves = [];
@@ -2098,28 +2099,29 @@ export class SketchMode {
     return out;
   }
 
-  /** The binding slots a copy of the entities in `entIds` (source -> copy)
-   *  and of the dimensions in `dimIds` carries, source slot -> copy's: every
-   *  dimension the copy has, and each copied shape's own numbers except its
-   *  position, which would pull the copy back onto its source. `turned`
-   *  (Mirror) leaves the angles out too: a mirror image is turned the other
-   *  way. */
-  private copiedSlots(entIds: ReadonlyMap<string, string>, dimIds: ReadonlyMap<string, string>, turned = false): Map<string, string> {
+  /** The binding slots a copy of `sources` carries, source slot -> copy's:
+   *  every dimension in `dimIds` (source id -> copy's, id.copiedConstraints),
+   *  and each copied shape's own numbers (`entIds`, source id -> copy's)
+   *  except its position, which would pull the copy back onto its source.
+   *  `turned` (Mirror) leaves the angles out too: a mirror image is turned
+   *  the other way. */
+  private copiedSlots(
+    sources: readonly ResolvedEntity[], entIds: ReadonlyMap<string, string>, dimIds: ReadonlyMap<string, string>, turned = false,
+  ): Map<string, string> {
     const out = new Map<string, string>();
-    const kept = new Set(this.constraints.flatMap((c) => (isDimConstraint(c) && c.id ? [c.id] : [])));
-    for (const [from, to] of dimIds) if (kept.has(to)) out.set(`c:${from}`, `c:${to}`);
-    const byId = new Map(this.entities.map((e) => [e.id, e]));
-    for (const [from, to] of entIds) {
-      const e = byId.get(to);
-      for (const [field] of (e && RIGID_ENTITY_NUM_FIELDS[e.type]) ?? []) {
+    for (const [from, to] of dimIds) out.set(`c:${from}`, `c:${to}`);
+    for (const e of sources) {
+      const to = entIds.get(e.id);
+      if (to === undefined) continue;
+      for (const [field] of RIGID_ENTITY_NUM_FIELDS[e.type] ?? []) {
         if (COPY_STAYS_FIELDS.has(field) || (turned && field === "angle")) continue;
-        out.set(`e:${from}:${field}`, `e:${to}:${field}`);
+        out.set(`e:${e.id}:${field}`, `e:${to}:${field}`);
       }
     }
     return out;
   }
 
-  /** Bind each copy as its source is bound (Copy, Mirror; decision B4, the
+  /** Bind each copy as its source is bound (Copy, Mirror, Paste; decision B4, the
    *  rule Copy sketch to plane has, sketchPlaneEdits.copySketch). A parameter
    *  drives one field, so each copy's binding is its own:
    *  - a source bound under a name the user gave follows that name, so the
@@ -4027,7 +4029,10 @@ export class SketchMode {
     const wraps = new Map<string, (expr: string) => string>();
     this.entities.push(...copies.map((e) => this.reflectEntity(e, flip, renumber)));
     this.constraints.push(...mirroredConstraints(cons, flip, renumber, level, wraps));
-    const slots = this.copiedSlots(entIds, dimIds, true);
+    // a dimension the mirror could not carry (an X distance across a
+    // slanted line) has no binding to carry either
+    const kept = new Set(this.constraints.flatMap((c) => (isDimConstraint(c) && c.id ? [c.id] : [])));
+    const slots = this.copiedSlots(chosen, entIds, new Map([...dimIds].filter(([, to]) => kept.has(to))), true);
     this.carryBindings(this.bindingsAt(slots.keys()), slots, new Map([...wraps].map(([id, w]) => [`c:${id}`, w])));
     this.selected.clear();
     if (level.length) toast(t("sketch.transform.mirrorRectangleToLines", { count: level.length }), { timeout: 8000 });
@@ -4664,6 +4669,7 @@ export class SketchMode {
   }
 
   private onPointerMove(e: PointerEvent) {
+    this.lastPointer = { x: e.clientX, y: e.clientY };
     // right-DRAG is camera pan (viewport TRUCK), not a menu gesture — the same
     // 5 px rule the viewport's own context-click guard uses
     if (this.rightDownAt && !this.rightDragged &&
@@ -5034,6 +5040,9 @@ export class SketchMode {
         return;
       }
     }
+    // Ctrl/Cmd combos are not tool keys: Ctrl+C is Copy (keymap.ts), not
+    // the Circle tool
+    if (e.ctrlKey || e.metaKey) return;
     // tool shortcuts inside the sketch
     const k = e.key.toLowerCase();
     // Q/E deliberately NOT handled here: they fall through to the global keymap
@@ -6577,6 +6586,114 @@ export class SketchMode {
     this.dim.position(s.x, s.y);
   }
 
+  /** Copies of `sources` moved by (dx, dy), with the constraints and
+   *  dimensions among them out of `cons` (6c0c9504), bound as the sources
+   *  are (carryBindings): `bound` by source slot, or the sketch's own
+   *  bindings when absent. The copies end up selected (Fusion-style), and it
+   *  is one undo step. Copy and Paste. */
+  private placeCopies(
+    sources: readonly ResolvedEntity[], cons: readonly SketchConstraint[], dx: number, dy: number,
+    bound?: ReadonlyMap<string, PendingBinding>,
+  ) {
+    const entIds = new Map(sources.map((e) => [e.id, newEntityId()])); // source -> copy
+    const copies = sources.map((e): ResolvedEntity => {
+      const c = translated(e, dx, dy, entIds.get(e.id)!);
+      if (c.type !== "text" || c.pathRef === undefined) return c;
+      // text on a copied path follows the copy of the path
+      const path = mapOperandId(entIds, c.pathRef);
+      if (path) return { ...c, pathRef: path };
+      if (this.entities.some((x) => x.id === c.pathRef)) return c;
+      // pasted into another sketch, without the path it ran along
+      const { pathRef: _, ...free } = c;
+      return free;
+    });
+    this.entities = [...this.entities, ...copies];
+    const dimIds = new Map<string, string>();
+    this.constraints = [...this.constraints, ...copiedConstraints(cons, entIds, dimIds)];
+    const slots = this.copiedSlots(sources, entIds, dimIds);
+    this.carryBindings(bound ?? this.bindingsAt(slots.keys()), slots);
+    this.selected = new Set(entIds.values());
+    this.afterModify();
+  }
+
+  // --- the clipboard: Ctrl+C, Ctrl+X and Ctrl+V inside a sketch -----------
+  // In the app only (no OS clipboard, so no permission to ask for), and kept
+  // across sketches until the app closes: copy in one sketch, paste in the
+  // next. What is on it is a sketch Copy taken apart in time: the entities,
+  // the constraints and dimensions among them, and the bindings of those as
+  // they stood (bindingsAt), so a paste carries what a Copy carries. A paste
+  // into a sketch on another plane keeps the 2D coordinates, as Copy sketch
+  // to plane does, and then moves the copy under the pointer.
+  private static clip: {
+    entities: ResolvedEntity[];
+    constraints: SketchConstraint[];
+    bindings: Map<string, PendingBinding>;
+    /** the middle of what was copied: what a paste puts under the pointer */
+    anchor: { x: number; y: number };
+  } | null = null;
+
+  /** Where the pointer last was over the canvas, in client pixels: where a
+   *  paste lands. */
+  private lastPointer: { x: number; y: number } | null = null;
+
+  /** Ctrl+C: the selection onto the clipboard. Projected geometry stays
+   *  behind, as Copy leaves it (it is linked to the model). False when
+   *  nothing could be copied. */
+  copySelection(): boolean {
+    if (!this.active) return false;
+    const owners = this.selectedOwners();
+    const projected = owners.size ? this.warnSelectedProjected() : new Set<string>();
+    const sources = this.entities.filter((e) => owners.has(e.id) && !projected.has(e.id) && !isOriginGeometry(e.id));
+    if (!sources.length) {
+      if (!projected.size) toast(t("sketch.clipboard.nothingSelected"));
+      return false;
+    }
+    // the constraints among them, and the slots of their bindings, under ids
+    // of the clipboard's own (a paste gives every copy fresh ones again)
+    const same = new Map(sources.map((e) => [e.id, e.id]));
+    const dimIds = new Map<string, string>();
+    const constraints = copiedConstraints(this.constraints, same, dimIds);
+    const slots = this.copiedSlots(sources, same, dimIds);
+    const bindings = new Map<string, PendingBinding>();
+    for (const [from, b] of this.bindingsAt(slots.keys())) {
+      const refs = b.refs && Object.fromEntries(Object.entries(b.refs).map(([name, at]) => [name, slots.get(at) ?? at]));
+      bindings.set(slots.get(from)!, { ...b, ...(refs ? { refs } : {}) });
+    }
+    const pts = sources.flatMap((e) => (e.type === "text" ? [{ x: e.x, y: e.y }] : entityPolyline(e)));
+    const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y);
+    const anchor = { x: (Math.min(...xs) + Math.max(...xs)) / 2, y: (Math.min(...ys) + Math.max(...ys)) / 2 };
+    SketchMode.clip = { entities: structuredClone(sources), constraints, bindings, anchor };
+    toast(t("sketch.clipboard.copied", { count: sources.length }));
+    return true;
+  }
+
+  /** Ctrl+X: copy, then delete what was copied (what Copy leaves behind,
+   *  projected geometry, stays). One undo step: the delete. */
+  cutSelection(): boolean {
+    if (!this.copySelection()) return false;
+    const copied = new Set(SketchMode.clip!.entities.map((e) => e.id));
+    this.entities = this.entities.filter((e) => !copied.has(e.id));
+    this.selected.clear();
+    this.afterModify();
+    return true;
+  }
+
+  /** Ctrl+V: a copy of the clipboard, its middle under the pointer (where it
+   *  was copied from, when the pointer has not been over the canvas in this
+   *  sketch), with what a Copy carries. One undo step; the copy is selected. */
+  pasteClipboard(): boolean {
+    const clip = SketchMode.clip;
+    if (!this.active) return false;
+    if (!clip) {
+      toast(t("sketch.clipboard.empty"));
+      return false;
+    }
+    const at = this.lastPointer ? this.planePointAt(this.lastPointer.x, this.lastPointer.y) : null;
+    const dx = at ? at.x - clip.anchor.x : 0, dy = at ? at.y - clip.anchor.y : 0;
+    this.placeCopies(clip.entities, clip.constraints, dx, dy, clip.bindings);
+    return true;
+  }
+
   /** Move/Copy: click a base point, then a destination — translate the whole
    *  selection. Move mutates in place; Copy leaves the originals and selects the copies. */
   private moveClick(p: THREE.Vector2) {
@@ -6584,34 +6701,9 @@ export class SketchMode {
     const dx = p.x - this.moveBase.x, dy = p.y - this.moveBase.y;
     this.moveBase = null;
     if (this.tool === "copy") {
-      const copies: ResolvedEntity[] = [];
-      const sel = new Set<string>();
       const projected = this.warnSelectedProjected(); // linked — can't clone the link
       const owners = this.selectedOwners();
-      const entIds = new Map<string, string>(); // source -> copy
-      for (const e of this.entities) {
-        if (!owners.has(e.id) || projected.has(e.id)) continue;
-        const id = newEntityId();
-        entIds.set(e.id, id);
-        sel.add(id);
-      }
-      for (const e of this.entities) {
-        const id = entIds.get(e.id);
-        if (id === undefined) continue;
-        const c = translated(e, dx, dy, id);
-        // text on a copied path follows the copy of the path
-        const path = c.type === "text" && c.pathRef !== undefined ? mapOperandId(entIds, c.pathRef) : null;
-        copies.push(c.type === "text" && path ? { ...c, pathRef: path } : c);
-      }
-      this.entities = [...this.entities, ...copies];
-      // and the constraints and dimensions among them (6c0c9504), bound as
-      // the source's are
-      const dimIds = new Map<string, string>();
-      this.constraints = [...this.constraints, ...copiedConstraints(this.constraints, entIds, dimIds)];
-      const slots = this.copiedSlots(entIds, dimIds);
-      this.carryBindings(this.bindingsAt(slots.keys()), slots);
-      this.selected = sel; // leave the copies selected (Fusion-style)
-      this.afterModify();
+      this.placeCopies(this.entities.filter((e) => owners.has(e.id) && !projected.has(e.id)), this.constraints, dx, dy);
     } else {
       if (this.refusePinnedSelection()) return;
       const d = { x: dx, y: dy };
