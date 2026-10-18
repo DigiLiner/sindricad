@@ -148,6 +148,52 @@ def test_a_mesh_export_carries_the_cavity():
     print(f"{PASS} STL/3MF export is watertight; the cavity is an inward shell of -25992 mm3")
 
 
+def reimport(doc, fmt, tmp):
+    """Export `doc` as `fmt`, import the file back, and rebuild the import."""
+    path = os.path.join(tmp, f"rt.{fmt}")
+    res = server._export_job(doc, fmt, path)
+    assert "error" not in res, res
+    payload = builder.import_geometry(path, fmt)
+    feature = {"id": "im", "type": "import", "name": "Hollow"}
+    feature.update({k: v for k, v in payload.items() if k != "name"})
+    errors, bodies = build(feature)
+    assert errors == [], errors
+    return bodies
+
+
+def test_the_hollow_imports_back_as_one_body():
+    """The import splits a mesh's shells into bodies, because a multi-object STL
+    arrives as one solid holding every object's shell. The cavity used to be
+    split off too, as an inside-out second body of -25992 mm3; it is the
+    hollow's own inner wall and stays inside it."""
+    doc = {"parameters": {}, "features": [BOX, closed_shell(1)]}
+    tmp = tempfile.mkdtemp()
+    try:
+        for fmt in ("stl", "3mf"):
+            bodies = reimport(doc, fmt, tmp)
+            assert len(bodies) == 1, (fmt, [round(b["shape"].volume, 1) for b in bodies])
+            assert_hollow(bodies[0]["shape"], 6008, faces=12)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print(f"{PASS} a hollow exported as STL or 3MF imports back as one hollow body")
+
+
+def test_a_part_floating_in_the_cavity_stays_its_own_body():
+    """Control: a ball sealed inside the hollow faces OUT, so it is an object of
+    its own, not a cavity of the box."""
+    doc = {"parameters": {}, "features": [
+        BOX, closed_shell(1), {"id": "s", "type": "sphere", "radius": 5}]}
+    tmp = tempfile.mkdtemp()
+    try:
+        bodies = reimport(doc, "stl", tmp)
+        vols = sorted(round(b["shape"].volume, 1) for b in bodies)
+        assert len(bodies) == 2 and vols[1] == 6008.0, vols
+        assert abs(vols[0] - 4 / 3 * 3.141592653589793 * 125) < 5, vols  # faceted ball
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    print(f"{PASS} a ball sealed in the cavity imports as a body of its own")
+
+
 def main():
     test_a_closed_box_shell_is_a_hollow()
     test_a_curved_body_shells_closed_too()
@@ -155,6 +201,8 @@ def main():
     test_a_parameter_bound_wall()
     test_walls_that_meet_are_refused()
     test_a_mesh_export_carries_the_cavity()
+    test_the_hollow_imports_back_as_one_body()
+    test_a_part_floating_in_the_cavity_stays_its_own_body()
     print("all closed-shell tests passed")
 
 

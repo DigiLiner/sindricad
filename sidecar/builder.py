@@ -3332,10 +3332,10 @@ def _fit_or_refacet(shape, tol=0.12, report=None, revolutions=True):
     already carries a comment about (GH #49); this was the one judgement still
     summed.
 
-    Identity is load-bearing. `_explode_solids` is not lossless — it wraps each
-    SHELL of a multi-shell solid in its own solid, so a sealed internal void
-    comes back as a separate inside-out solid and recombining would let the
-    caller's `_unify_body` fill the cavity. Returning `shape` itself when every
+    Identity is load-bearing. `_explode_solids` is not lossless — an inward
+    shell that no other shell of its solid encloses comes back as a separate
+    inside-out solid, and recombining would let the caller's `_unify_body`
+    fill that void. Returning `shape` itself when every
     body declined keeps the "any doubt returns the input object" contract, and
     that is the case Clean Up hits on a body it cannot improve."""
     parts = _explode_solids(shape)
@@ -3775,11 +3775,61 @@ def _loose_children(shape):
     return out
 
 
+def _solid_of(shells):
+    """One solid bounded by `shells`, as given (orientation untouched)."""
+    from OCP.BRep import BRep_Builder
+    from OCP.TopoDS import TopoDS_Solid
+
+    mk = TopoDS_Solid()
+    bld = BRep_Builder()
+    bld.MakeSolid(mk)
+    for sh in shells:
+        bld.Add(mk, sh.wrapped)
+    return _wrap_topods(mk)
+
+
+def _shell_groups(shells):
+    """The shells of one multi-shell solid, grouped into bodies, in order.
+
+    Each shell facing OUT (positive volume on its own) is an object of its own:
+    a multi-object STL arrives as one solid holding every object's shell. A
+    shell facing IN is a cavity, and stays with the smallest outward shell that
+    encloses it, so a hollow part (Shell with no opening) imports back as one
+    hollow body instead of a body plus an inside-out one. An inward shell that
+    nothing encloses is still a body of its own, as before."""
+    from OCP.BRepClass3d import BRepClass3d_SolidClassifier
+    from OCP.TopAbs import TopAbs_IN
+
+    alone = [_solid_of([sh]) for sh in shells]
+    vols = [a.volume for a in alone]
+    outward = [i for i, v in enumerate(vols) if v > 0]
+
+    def encloses(j, i):
+        box_j, box_i = alone[j].bounding_box(), alone[i].bounding_box()
+        if not (box_j.min.X <= box_i.min.X and box_j.min.Y <= box_i.min.Y and box_j.min.Z <= box_i.min.Z
+                and box_i.max.X <= box_j.max.X and box_i.max.Y <= box_j.max.Y and box_i.max.Z <= box_j.max.Z):
+            return False
+        cls = BRepClass3d_SolidClassifier(alone[j].wrapped, shells[i].vertices()[0].center().to_pnt(), 1e-6)
+        return cls.State() == TopAbs_IN
+
+    groups = {i: [i] for i in outward}
+    for i, v in enumerate(vols):
+        if v > 0:
+            continue
+        hosts = [j for j in outward if encloses(j, i)]
+        if hosts:
+            groups[min(hosts, key=lambda j: vols[j])].append(i)
+        else:
+            groups[i] = [i]
+    return [[shells[k] for k in groups[i]] for i in sorted(groups)]
+
+
 def _explode_solids(shape):
     """Split an imported shape into individually-controllable bodies. A multi-object
     STL comes back as ONE solid with several disconnected shells (Mesher fuses
     objects); a multi-object 3MF comes back as several solids. So `.solids()` alone
-    isn't enough — for each solid with >1 shell, wrap each shell in its own solid.
+    isn't enough — for each solid with >1 shell, wrap each object's shell in its
+    own solid, keeping a cavity with the shell around it (see _shell_groups).
     A non-solid (open shell / surface) is passed through as one body."""
     solids = shape.solids()
     if not solids:
@@ -3790,15 +3840,7 @@ def _explode_solids(shape):
         if len(shells) <= 1:
             out.append(sd)
             continue
-        from OCP.BRep import BRep_Builder
-        from OCP.TopoDS import TopoDS_Solid
-
-        for sh in shells:
-            mk = TopoDS_Solid()
-            bld = BRep_Builder()
-            bld.MakeSolid(mk)
-            bld.Add(mk, sh.wrapped)
-            out.append(_maybe_unify(_wrap_topods(mk)))
+        out.extend(_maybe_unify(_solid_of(group)) for group in _shell_groups(shells))
     # A compound can MIX a solid with a non-solid, and the `if not solids`
     # fallback above never fires for it. A mesh file holding one watertight and
     # one non-watertight object sews to exactly that: build123d hands back a
