@@ -111,8 +111,8 @@ const MARKER_FILE: &str = "gpu-fallback.json";
 /// `Pending` is written before the webview starts and cleared once the trial
 /// passes (`TrialEvent::Passed`), so a launch that dies in between leaves it
 /// behind. The next launch reads that as a crash and writes `Failed`, which
-/// stays: the fallback is for good, until the file is deleted (the `[gpu]` line
-/// names it).
+/// stays until the Nvidia driver or WebKitGTK changes (`stale_reason`) or the
+/// file is deleted (the `[gpu]` line names it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Marker {
     None,
@@ -255,21 +255,53 @@ fn trial_outcome(event: TrialEvent, state: TrialState) -> Option<(Marker, bool)>
     }
 }
 
-fn parse_marker(text: &str) -> Marker {
+/// What a verdict was reached under. A failed trial is retried only when one of
+/// these has changed since: an app update alone changes neither, so a machine
+/// that crashes with shared-memory buffers does not pay a bad launch per beta.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Versions {
+    /// `/sys/module/nvidia/version`
+    nvidia: Option<String>,
+    /// the WebKitGTK runtime, `webkit_get_*_version`
+    webkit: Option<String>,
+}
+
+/// Why a verdict recorded under `then` no longer holds `now`, or `None` if it
+/// still does. Only a version known on both sides and different counts: a
+/// marker written before versions were recorded, or a version that cannot be
+/// read now, keeps the verdict, because the safe answer is the fallback.
+fn stale_reason(then: &Versions, now: &Versions) -> Option<String> {
+    let changed = |what: &str, a: &Option<String>, b: &Option<String>| match (a, b) {
+        (Some(a), Some(b)) if a != b => Some(format!("{what} changed ({a} -> {b})")),
+        _ => None,
+    };
+    let reasons: Vec<String> = [
+        changed("the Nvidia driver", &then.nvidia, &now.nvidia),
+        changed("WebKitGTK", &then.webkit, &now.webkit),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!reasons.is_empty()).then(|| reasons.join(" and "))
+}
+
+fn parse_marker(text: &str) -> (Marker, Versions) {
     let value: serde_json::Value = serde_json::from_str(text).unwrap_or_default();
-    match value.get("forceShm").and_then(|v| v.as_str()) {
+    let marker = match value.get("forceShm").and_then(|v| v.as_str()) {
         Some("pending") => Marker::Pending,
         Some("failed") => Marker::Failed,
         _ => Marker::None,
-    }
+    };
+    let field = |k: &str| value.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    (marker, Versions { nvidia: field("nvidia"), webkit: field("webkit") })
 }
 
 /// A missing or unreadable marker reads as none: the machine tries again.
-fn read_marker(path: &Path) -> Marker {
-    std::fs::read_to_string(path).map_or(Marker::None, |text| parse_marker(&text))
+fn read_marker(path: &Path) -> (Marker, Versions) {
+    std::fs::read_to_string(path).map_or((Marker::None, Versions::default()), |text| parse_marker(&text))
 }
 
-fn write_marker(path: &Path, marker: Marker) -> std::io::Result<()> {
+fn write_marker(path: &Path, marker: Marker, versions: &Versions) -> std::io::Result<()> {
     let state = match marker {
         Marker::None => {
             return match std::fs::remove_file(path) {
@@ -283,7 +315,8 @@ fn write_marker(path: &Path, marker: Marker) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    std::fs::write(path, serde_json::json!({ "forceShm": state }).to_string())
+    let record = serde_json::json!({ "forceShm": state, "nvidia": versions.nvidia, "webkit": versions.webkit });
+    std::fs::write(path, record.to_string())
 }
 
 /// Tauri's app data dir on Linux, worked out the way it does (dirs::data_dir):
@@ -317,6 +350,12 @@ fn debian_family(os_release: &str) -> Option<String> {
     let like = field("ID_LIKE=").unwrap_or_default();
     let family = |s: &str| s.split_whitespace().any(|w| w == "debian" || w == "ubuntu");
     (family(&id) || family(&like)).then_some(id)
+}
+
+/// The loaded Nvidia driver's version, if the module says.
+fn nvidia_version_under(root: &Path) -> Option<String> {
+    let v = std::fs::read_to_string(root.join("sys/module/nvidia/version")).ok()?;
+    Some(v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 /// Is the Nvidia userspace driver in play?
@@ -398,6 +437,7 @@ pub struct GpuFacts(pub Mutex<Vec<String>>);
 /// where the trial stands.
 struct GpuTrial {
     marker: PathBuf,
+    versions: Versions,
     state: Mutex<TrialState>,
 }
 
@@ -406,6 +446,7 @@ pub struct GpuStartup {
     lines: Vec<String>,
     /// The marker path when this launch is a `FORCE_SHM` trial.
     trial: Option<PathBuf>,
+    versions: Versions,
 }
 
 /// A `[gpu]` line to stdout and sidecar.log (the file a bug report attaches),
@@ -436,7 +477,7 @@ pub fn record_renderer(app: &tauri::AppHandle, startup: GpuStartup) {
         if app.path().app_data_dir().ok().as_deref() != marker.parent() {
             log_fact(app, format!("[gpu] the fallback marker {} is not in the app data dir", marker.display()));
         }
-        app.manage(GpuTrial { marker, state: Mutex::new(TrialState::default()) });
+        app.manage(GpuTrial { marker, versions: startup.versions, state: Mutex::new(TrialState::default()) });
     }
     let Some(window) = app.get_webview_window("main") else { return };
     let handle = app.clone();
@@ -471,7 +512,7 @@ pub fn trial_event(app: &tauri::AppHandle, event: TrialEvent) {
         TrialEvent::Passed | TrialEvent::WebProcessCrashed => state.decided = true,
         TrialEvent::WatchdogFired => {}
     }
-    let written = write_marker(&trial.marker, marker);
+    let written = write_marker(&trial.marker, marker, &trial.versions);
     drop(state);
     if event == TrialEvent::Ready {
         let handle = app.clone();
@@ -515,12 +556,12 @@ pub fn trial_event(app: &tauri::AppHandle, event: TrialEvent) {
 pub fn apply_gpu_workarounds() -> GpuStartup {
     let marker = app_data_dir_from(std::env::var_os("XDG_DATA_HOME"), std::env::var_os("HOME"))
         .map(|d| d.join(MARKER_FILE));
-    apply_under(Path::new("/"), marker)
+    apply_under(Path::new("/"), marker, tauri::webview_version().ok())
 }
 
 /// `apply_gpu_workarounds` with the filesystem root and the marker path
 /// supplied, so a test can run the real thing against a fixture.
-fn apply_under(root: &Path, marker_path: Option<PathBuf>) -> GpuStartup {
+fn apply_under(root: &Path, marker_path: Option<PathBuf>, webkit: Option<String>) -> GpuStartup {
     if let Some(ours) = std::env::var_os(OURS) {
         for name in ours.to_string_lossy().split(',').filter(|n| !n.is_empty()) {
             std::env::remove_var(name);
@@ -529,15 +570,27 @@ fn apply_under(root: &Path, marker_path: Option<PathBuf>) -> GpuStartup {
     }
     let user_env = render_env();
     let nvidia = nvidia_driver_present_under(root);
+    let versions = Versions { nvidia: nvidia_version_under(root), webkit };
+    let (mut marker, recorded) =
+        marker_path.as_deref().map_or((Marker::None, Versions::default()), read_marker);
+    // A verdict reached under another driver or WebKitGTK says nothing about
+    // this one: try again.
+    let stale = (marker != Marker::None).then(|| stale_reason(&recorded, &versions)).flatten();
+    if stale.is_some() {
+        marker = Marker::None;
+    }
     let mut decision = decide(
         nvidia,
         USER_RENDERER_VARS.iter().any(|v| std::env::var_os(v).is_some()),
         std::env::var_os(OPT_OUT).is_some(),
         std::env::var_os(FORCE_SOFTWARE).is_some(),
-        marker_path.as_deref().map_or(Marker::None, read_marker),
+        marker,
     );
     if let Some(next) = marker_for(&decision) {
-        let written = marker_path.as_deref().map(|p| write_marker(p, next));
+        // A pending marker turned failed keeps the versions the trial ran
+        // under, so a driver update since the crash still earns a retry.
+        let under = if next == Marker::Failed { &recorded } else { &versions };
+        let written = marker_path.as_deref().map(|p| write_marker(p, next, under));
         // A trial that cannot leave its marker could crash on every launch with
         // nothing to stop it, so it does not start.
         if decision == Decision::ForceShm && !matches!(written, Some(Ok(()))) {
@@ -573,6 +626,9 @@ fn apply_under(root: &Path, marker_path: Option<PathBuf>) -> GpuStartup {
                  buffers ({FORCE_SHM}=1, issue #6). If a launch with it crashes or never reaches the \
                  interface, later launches use {DMABUF}=1 (marker {marker_name}). Set {OPT_OUT}=1 to keep WebKit's default."
             ));
+            if let Some(why) = &stale {
+                lines.push(format!("[gpu] trying shared-memory buffers again: {why} since the last verdict"));
+            }
         }
         Decision::Disable(reason) => {
             std::env::set_var(DMABUF, "1");
@@ -615,7 +671,7 @@ fn apply_under(root: &Path, marker_path: Option<PathBuf>) -> GpuStartup {
         println!("{line}");
     }
     let trial = (decision == Decision::ForceShm).then_some(marker_path).flatten();
-    GpuStartup { lines, trial }
+    GpuStartup { lines, trial, versions }
 }
 
 #[cfg(test)]
@@ -751,16 +807,19 @@ mod tests {
     fn the_marker_file_round_trips_and_clears() {
         let dir = scratch("marker");
         let path = dir.join("sub").join(MARKER_FILE);
-        assert_eq!(read_marker(&path), Marker::None, "no file reads as none");
-        write_marker(&path, Marker::Pending).unwrap();
-        assert_eq!(read_marker(&path), Marker::Pending);
-        write_marker(&path, Marker::Failed).unwrap();
-        assert_eq!(read_marker(&path), Marker::Failed);
-        write_marker(&path, Marker::None).unwrap();
+        let v = Versions { nvidia: Some("595.84".into()), webkit: Some("2.52.6".into()) };
+        assert_eq!(read_marker(&path).0, Marker::None, "no file reads as none");
+        write_marker(&path, Marker::Pending, &v).unwrap();
+        assert_eq!(read_marker(&path), (Marker::Pending, v.clone()));
+        write_marker(&path, Marker::Failed, &v).unwrap();
+        assert_eq!(read_marker(&path), (Marker::Failed, v.clone()));
+        write_marker(&path, Marker::None, &v).unwrap();
         assert!(!path.exists(), "ready removes the file");
-        write_marker(&path, Marker::None).unwrap(); // and again is fine
-        assert_eq!(parse_marker("not json"), Marker::None);
-        assert_eq!(parse_marker(r#"{"forceShm":"bogus"}"#), Marker::None);
+        write_marker(&path, Marker::None, &v).unwrap(); // and again is fine
+        assert_eq!(parse_marker("not json").0, Marker::None);
+        assert_eq!(parse_marker(r#"{"forceShm":"bogus"}"#).0, Marker::None);
+        // a marker from before versions were recorded
+        assert_eq!(parse_marker(r#"{"forceShm":"failed"}"#), (Marker::Failed, Versions::default()));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -803,26 +862,26 @@ mod tests {
         std::fs::write(root.join("proc/driver/nvidia/version"), "NVRM version …").unwrap();
         let marker = root.join("data").join(MARKER_FILE);
 
-        let first = apply_under(&root, Some(marker.clone()));
+        let first = apply_under(&root, Some(marker.clone()), Some("2.52.6".into()));
         assert_eq!(std::env::var_os(FORCE_SHM).as_deref(), Some("1".as_ref()));
         assert!(std::env::var_os(DMABUF).is_none());
-        assert_eq!(read_marker(&marker), Marker::Pending);
+        assert_eq!(read_marker(&marker).0, Marker::Pending);
         assert_eq!(first.trial.as_deref(), Some(marker.as_path()));
         assert!(first.lines[0].contains("shared-memory buffers"), "{:?}", first.lines);
         assert!(first.lines.last().unwrap().contains("WEBKIT_DMABUF_RENDERER_FORCE_SHM=1 (set by SindriCAD)"));
 
         // that launch died before the interface: the marker is still pending
         clear_env();
-        let second = apply_under(&root, Some(marker.clone()));
+        let second = apply_under(&root, Some(marker.clone()), Some("2.52.6".into()));
         assert!(std::env::var_os(FORCE_SHM).is_none());
         assert_eq!(std::env::var_os(DMABUF).as_deref(), Some("1".as_ref()));
-        assert_eq!(read_marker(&marker), Marker::Failed);
+        assert_eq!(read_marker(&marker).0, Marker::Failed);
         assert!(second.trial.is_none());
         assert!(second.lines[0].contains(FALLBACK_CRASHED), "{:?}", second.lines);
 
         // and the launch after that is a restart WE made: it inherits our
         // variables, which must not read as the user's
-        let third = apply_under(&root, Some(marker.clone()));
+        let third = apply_under(&root, Some(marker.clone()), Some("2.52.6".into()));
         assert_eq!(std::env::var_os(DMABUF).as_deref(), Some("1".as_ref()));
         assert!(third.lines[0].contains(FALLBACK_REMEMBERED), "{:?}", third.lines);
 
@@ -830,14 +889,14 @@ mod tests {
         clear_env();
         std::fs::remove_file(&marker).unwrap();
         std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        let user = apply_under(&root, Some(marker.clone()));
+        let user = apply_under(&root, Some(marker.clone()), Some("2.52.6".into()));
         assert!(std::env::var_os(FORCE_SHM).is_none() && std::env::var_os(DMABUF).is_none());
         assert!(!marker.exists());
         assert!(user.trial.is_none());
 
         // no place for the marker: no trial either
         clear_env();
-        let blind = apply_under(&root, None);
+        let blind = apply_under(&root, None, Some("2.52.6".into()));
         assert_eq!(std::env::var_os(DMABUF).as_deref(), Some("1".as_ref()));
         assert!(std::env::var_os(FORCE_SHM).is_none());
         assert!(blind.lines[0].contains(FALLBACK_NO_MARKER), "{:?}", blind.lines);
@@ -846,8 +905,88 @@ mod tests {
         clear_env();
         std::fs::create_dir_all(root.join("etc")).unwrap();
         std::fs::write(root.join("etc/os-release"), "ID=ubuntu\nID_LIKE=debian\n").unwrap();
-        let deb = apply_under(&root, Some(marker.clone()));
+        let deb = apply_under(&root, Some(marker.clone()), Some("2.52.6".into()));
         assert!(deb.lines.iter().any(|l| l.contains("ubuntu is Debian-based")), "{:?}", deb.lines);
+
+        restore_env(saved);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A failed verdict is retried only for a new driver or a new WebKitGTK.
+    /// The app's own version is not an input at all: an update alone must not
+    /// cost a #6-type machine a bad launch per beta.
+    #[test]
+    fn a_failed_verdict_goes_stale_only_when_the_driver_or_webkit_changes() {
+        let v = |n: Option<&str>, w: Option<&str>| Versions { nvidia: n.map(Into::into), webkit: w.map(Into::into) };
+        let then = v(Some("595.84"), Some("2.52.6"));
+        assert_eq!(stale_reason(&then, &v(Some("595.84"), Some("2.52.6"))), None, "same versions stay failed");
+        assert_eq!(
+            stale_reason(&then, &v(Some("600.10"), Some("2.52.6"))).as_deref(),
+            Some("the Nvidia driver changed (595.84 -> 600.10)")
+        );
+        assert_eq!(
+            stale_reason(&then, &v(Some("595.84"), Some("2.54.0"))).as_deref(),
+            Some("WebKitGTK changed (2.52.6 -> 2.54.0)")
+        );
+        assert_eq!(
+            stale_reason(&then, &v(Some("600.10"), Some("2.54.0"))).as_deref(),
+            Some("the Nvidia driver changed (595.84 -> 600.10) and WebKitGTK changed (2.52.6 -> 2.54.0)")
+        );
+        assert_eq!(stale_reason(&Versions::default(), &then), None, "a marker without versions stays failed");
+        assert_eq!(stale_reason(&then, &Versions::default()), None, "versions unreadable now: stay failed");
+    }
+
+    /// The same through the real applier and marker file.
+    #[test]
+    fn the_applier_retries_a_failed_trial_for_a_new_driver_or_webkit_only() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = clear_env();
+        let root = scratch("versions");
+        let driver = |ver: &str| {
+            std::fs::create_dir_all(root.join("sys/module/nvidia")).unwrap();
+            std::fs::write(root.join("sys/module/nvidia/version"), format!("{ver}\n")).unwrap();
+        };
+        let marker = root.join("data").join(MARKER_FILE);
+        let wk = |w: &str| Some(w.to_string());
+        let v = |n: &str, w: &str| Versions { nvidia: Some(n.into()), webkit: Some(w.into()) };
+        driver("595.84");
+
+        // failed under these very versions: the fallback holds
+        write_marker(&marker, Marker::Failed, &v("595.84", "2.52.6")).unwrap();
+        let same = apply_under(&root, Some(marker.clone()), wk("2.52.6"));
+        assert!(same.lines[0].contains(FALLBACK_REMEMBERED), "{:?}", same.lines);
+        assert_eq!(read_marker(&marker), (Marker::Failed, v("595.84", "2.52.6")));
+
+        // an old marker with no versions: the fallback holds
+        clear_env();
+        std::fs::write(&marker, r#"{"forceShm":"failed"}"#).unwrap();
+        let old = apply_under(&root, Some(marker.clone()), wk("2.52.6"));
+        assert!(old.lines[0].contains(FALLBACK_REMEMBERED), "{:?}", old.lines);
+
+        // a new driver: a new trial, under the new versions
+        clear_env();
+        write_marker(&marker, Marker::Failed, &v("595.84", "2.52.6")).unwrap();
+        driver("600.10");
+        let newer = apply_under(&root, Some(marker.clone()), wk("2.52.6"));
+        assert_eq!(std::env::var_os(FORCE_SHM).as_deref(), Some("1".as_ref()));
+        assert!(
+            newer.lines[1] == "[gpu] trying shared-memory buffers again: the Nvidia driver changed (595.84 -> 600.10) since the last verdict",
+            "{:?}",
+            newer.lines
+        );
+        assert_eq!(read_marker(&marker), (Marker::Pending, v("600.10", "2.52.6")));
+
+        // ...which crashed: the failure is recorded under the versions it ran with
+        clear_env();
+        let crashed = apply_under(&root, Some(marker.clone()), wk("2.52.6"));
+        assert!(crashed.lines[0].contains(FALLBACK_CRASHED), "{:?}", crashed.lines);
+        assert_eq!(read_marker(&marker), (Marker::Failed, v("600.10", "2.52.6")));
+
+        // a new WebKitGTK: a new trial too
+        clear_env();
+        let webkit = apply_under(&root, Some(marker.clone()), wk("2.54.0"));
+        assert_eq!(std::env::var_os(FORCE_SHM).as_deref(), Some("1".as_ref()));
+        assert!(webkit.lines[1].contains("WebKitGTK changed (2.52.6 -> 2.54.0)"), "{:?}", webkit.lines);
 
         restore_env(saved);
         let _ = std::fs::remove_dir_all(&root);
