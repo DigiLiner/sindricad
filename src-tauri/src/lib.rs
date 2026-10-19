@@ -239,7 +239,7 @@ pub fn run() {
     // environment when WebKit spawns it, so a variable set later is a variable the
     // renderer never sees. See webkit.rs for what it changes and why (issue #6).
     #[cfg(target_os = "linux")]
-    webkit::apply_gpu_workarounds();
+    let gpu_startup = webkit::apply_gpu_workarounds();
 
     let builder = tauri::Builder::default()
         // MUST be registered before every other plugin (Tauri's documented
@@ -384,6 +384,9 @@ pub fn run() {
                 }
                 Err(e) => eprintln!("failed to spawn sidecar: {e}"),
             }
+            // after the sidecar, so the renderer line also reaches sidecar.log
+            #[cfg(target_os = "linux")]
+            webkit::record_renderer(app.handle(), gpu_startup);
             // stream 3Dconnexion SpaceMouse events to the frontend (best-effort:
             // no-op if no device / no permission — see spacemouse.rs)
             spacemouse::start(app.handle().clone());

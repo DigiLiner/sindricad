@@ -820,6 +820,26 @@ fn trim_breadcrumbs(crumbs: &[String]) -> Vec<String> {
         .collect()
 }
 
+/// The shell's own facts, ahead of the frontend's trail: on Linux the `[gpu]`
+/// lines from webkit.rs (which variables were set and by whom, the WebKitGTK
+/// version, the hardware-acceleration policy read back). They carry no
+/// timestamp, so `trim_breadcrumbs` keeps them as sticky facts, and they go
+/// through the same path redaction as every other crumb.
+fn with_shell_facts(facts: Vec<String>, breadcrumbs: Vec<String>) -> Vec<String> {
+    facts.into_iter().chain(breadcrumbs).collect()
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+fn shell_facts(app: &AppHandle) -> Vec<String> {
+    #[cfg(target_os = "linux")]
+    if let Some(facts) = app.try_state::<crate::webkit::GpuFacts>() {
+        if let Ok(lines) = facts.0.lock() {
+            return lines.clone();
+        }
+    }
+    Vec::new()
+}
+
 /// Keys whose string values in a document are paths on the user's disk: an
 /// import's dialog path and an image texture's file. Nothing reads either
 /// from a report. Body names, titles and sketch text are the user's own words
@@ -933,6 +953,7 @@ pub async fn ta_bug_report(
     let account = read_account(&app).unwrap_or(None);
 
     let log_tail = if include_log { read_log_tail(&app, LOG_TAIL_BYTES) } else { None };
+    let breadcrumbs = with_shell_facts(shell_facts(&app), breadcrumbs);
     let body = build_report_body(
         &description,
         &app_version,
@@ -1205,6 +1226,32 @@ mod tests {
         let body = build_report_body("crash", "0.1.251", "", "", true, None, &[], Some(plain), None, None)
             .expect("the report builds");
         assert_eq!(body["document_json"], serde_json::from_str::<serde_json::Value>(plain).unwrap());
+    }
+
+    // GH #17: whether WebKit painted on the CPU is a fact the shell holds and
+    // the frontend cannot see. It has to lead the uploaded trail of a busy
+    // session (the frontend's 20-crumb tail would push it out otherwise), and a
+    // user path in a variable's value is redacted like any crumb's.
+    #[test]
+    fn the_shells_gpu_facts_lead_the_report_and_are_redacted() {
+        let facts = vec![
+            "[gpu] Nvidia driver detected — disabling the WebKitGTK DMABUF renderer (issue #6). Set SINDRICAD_NO_GPU_WORKAROUND=1 to keep it.".to_string(),
+            "[gpu] WebKit environment: WEBKIT_DISABLE_DMABUF_RENDERER=1 (set by SindriCAD), WEBKIT_EXEC_PATH=/home/alice/webkit (set by the user)".to_string(),
+            "[gpu] WebKitGTK 2.52.6, hardware acceleration policy read back: never (every frame is painted on the CPU)".to_string(),
+        ];
+        let mut crumbs = vec!["[gpu] Apple GPU".to_string()];
+        crumbs.extend((0..60).map(|i| format!("12:34:56 [info] noise {i}")));
+        let body = build_report_body(
+            "slow", "0.1.263", "", "2.52.6", true, None, &with_shell_facts(facts, crumbs), None, None, None,
+        )
+        .expect("the report builds");
+        let sent: Vec<&str> = body["breadcrumbs"].as_array().unwrap().iter().map(|c| c.as_str().unwrap()).collect();
+        assert!(sent[0].starts_with("[gpu] Nvidia driver detected"), "{sent:?}");
+        assert!(sent[1].contains("WEBKIT_DISABLE_DMABUF_RENDERER=1 (set by SindriCAD)"), "{sent:?}");
+        assert!(sent[2].ends_with("read back: never (every frame is painted on the CPU)"), "{sent:?}");
+        assert_eq!(sent[3], "[gpu] Apple GPU", "the frontend's own sticky facts follow");
+        assert_eq!(sent.len(), 4 + 20, "and the timestamped tail is still trimmed");
+        assert!(!serde_json::to_string(&body).unwrap().contains("alice"));
     }
 
     // The whole wire body, every user-supplied part carrying a name in a

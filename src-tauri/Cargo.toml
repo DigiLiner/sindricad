@@ -88,6 +88,12 @@ blake2 = "0.10"
 # compile the in-Rust OCCT geometry path (src/geom.rs) for VITE_GEOM=rust.
 rust-geom = ["dep:opencascade", "dep:opencascade-sys", "dep:glam", "dep:threemf"]
 
+# Linux-only: read the live webview's hardware-acceleration policy back after
+# creation (webkit.rs, GH #17). Already in the tree through wry, which enables
+# a superset of these features; naming it is what lets us call its methods.
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2", features = ["v2_16"] }
+
 # Windows-only: a Job Object with KILL_ON_JOB_CLOSE reaps the sidecar (and its
 # ProcessPoolExecutor workers) when the app exits or crashes. Unix uses a process
 # group + PR_SET_PDEATHSIG instead (no extra dep).

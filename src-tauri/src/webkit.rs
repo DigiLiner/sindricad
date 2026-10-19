@@ -8,8 +8,16 @@
 //! on hardware nobody here builds on, so the decision has to be assertable
 //! without the hardware. Nothing in this file has been exercised against an
 //! actual Nvidia GPU by me — see the test module.
+//!
+//! It also reports what WebKit ended up with (`record_renderer`): the variables
+//! and who set them, the WebKitGTK version, and the hardware-acceleration policy
+//! read back from the live webview. GH #17 took a video and a measurement round
+//! to learn that the webview was painting on the CPU; one log line says it.
 
 use std::path::Path;
+use std::sync::Mutex;
+
+use tauri::Manager;
 
 /// Our own opt-out. A user whose machine is made *worse* by the workaround
 /// needs an escape hatch, and the obvious one — setting
@@ -24,12 +32,15 @@ const OPT_OUT: &str = "SINDRICAD_NO_GPU_WORKAROUND";
 /// a WebGL canvas, and the mode under which the reporter of issue #6 also saw
 /// viewport pointer capture stick (that is bug 2 of the same issue, unfixed).
 ///
-/// This one is narrower: it does not disable WebGL or compositing, only the
-/// DMA-BUF path that carries composited frames from the web process to the GTK
-/// widget. It is not free, though. Without it, GTK3 (which is what
-/// webkit2gtk-4.1 gives us) downloads each buffer to the CPU and paints it with
-/// Cairo, so GPU-heavy content pays a per-frame cost. For the viewport that is a
-/// smoothness cost, not a correctness one, and it beats not launching.
+/// It is NOT narrower, though it was chosen as if it were. On WebKitGTK 2.44
+/// and later it turns hardware acceleration off entirely: measured on 2.52.6
+/// (GH #17, .fable/gh17-video/RESULT.md), webkit://gpu reports `Policy: never`,
+/// the settings' hardware-acceleration policy reads back `never` after an
+/// explicit ALWAYS, and the web process holds no GPU renderer. Every frame is
+/// painted on the CPU. Drawing a rectangle in an empty sketch ran at 22 ms a
+/// frame on a full fast core and 49 ms (20 fps) on half of one, against 16.7 ms
+/// with the GPU. That is a smoothness cost, not a correctness one, and it still
+/// beats not launching; `record_renderer` puts the policy in every log.
 ///
 /// WebKit documents the variable as a transitional debugging escape hatch that
 /// will eventually be removed. When it goes, this module has to be revisited
@@ -85,9 +96,9 @@ const SKIP_NO_NVIDIA: &str = "no Nvidia driver";
 ///
 /// This fires for every Nvidia machine, not only broken ones, because there is
 /// no way to tell them apart before the crash. That costs the working majority
-/// the per-frame cost described on `DMABUF`; the alternative costs the affected
-/// minority the entire application. The size of that cost is documented by
-/// WebKit, not measured by me — there is no Nvidia hardware here to measure on.
+/// the per-frame cost described on `DMABUF` (measured with the variable set on
+/// non-Nvidia hardware; there is no Nvidia hardware here); the alternative costs
+/// the affected minority the entire application.
 fn decide(
     nvidia_present: bool,
     dmabuf_already_set: bool,
@@ -128,10 +139,107 @@ fn nvidia_driver_present_under(root: &Path) -> bool {
         || root.join("sys/module/nvidia/version").exists()
 }
 
+/// Variables that decide how WebKitGTK renders, reported with who set them.
+/// Every `WEBKIT_*` one, since WebKit adds and retires them between releases,
+/// plus software GL and our own two switches.
+fn is_render_var(name: &str) -> bool {
+    name.starts_with("WEBKIT_") || [SOFTWARE_GL, OPT_OUT, FORCE_SOFTWARE].contains(&name)
+}
+
+/// The rendering variables currently set, sorted by name.
+fn render_env() -> Vec<(String, String)> {
+    let mut vars: Vec<(String, String)> = std::env::vars_os()
+        .filter_map(|(k, v)| {
+            let k = k.into_string().ok()?;
+            is_render_var(&k).then(|| (k, v.to_string_lossy().into_owned()))
+        })
+        .collect();
+    vars.sort();
+    vars
+}
+
+/// One `[gpu]` line naming each rendering variable and who set it: one that
+/// was already there with the same value is the user's, anything else is ours.
+/// Values are cut short; a bug report redacts paths in them like any other line.
+fn env_line(before: &[(String, String)], after: &[(String, String)]) -> String {
+    if after.is_empty() {
+        return "[gpu] WebKit environment: nothing set".to_string();
+    }
+    let vars: Vec<String> = after
+        .iter()
+        .map(|(name, value)| {
+            let who = if before.iter().any(|(n, v)| n == name && v == value) {
+                "the user"
+            } else {
+                "SindriCAD"
+            };
+            let value: String = value.chars().take(64).collect();
+            format!("{name}={value} (set by {who})")
+        })
+        .collect();
+    format!("[gpu] WebKit environment: {}", vars.join(", "))
+}
+
+/// What the live webview says about itself. `never` is the state GH #17 was:
+/// WebKit paints every frame on the CPU, whatever the GPU is.
+fn renderer_line(webkit_version: &str, policy: &str) -> String {
+    let note = if policy == "never" { " (every frame is painted on the CPU)" } else { "" };
+    format!("[gpu] WebKitGTK {webkit_version}, hardware acceleration policy read back: {policy}{note}")
+}
+
+fn policy_name(policy: webkit2gtk::HardwareAccelerationPolicy) -> &'static str {
+    use webkit2gtk::HardwareAccelerationPolicy as P;
+    match policy {
+        P::Always => "always",
+        P::Never => "never",
+        P::OnDemand => "on-demand",
+        _ => "unknown",
+    }
+}
+
+/// The `[gpu]` lines this shell knows, kept for bug reports (tinkeratlas.rs
+/// prepends them to the breadcrumbs, which is where a report's facts live).
+pub struct GpuFacts(pub Mutex<Vec<String>>);
+
+/// Keep the startup lines and add the live webview's own report: the WebKitGTK
+/// version and the hardware-acceleration policy read back AFTER creation, which
+/// is the only reliable sign of CPU painting (the WebGL renderer string the
+/// frontend logs reads the same in every mode). Call from `setup`, once the
+/// main window exists.
+pub fn record_renderer(app: &tauri::AppHandle, startup: Vec<String>) {
+    app.manage(GpuFacts(Mutex::new(startup)));
+    let Some(window) = app.get_webview_window("main") else { return };
+    let handle = app.clone();
+    let read = window.with_webview(move |webview| {
+        use webkit2gtk::{SettingsExt, WebViewExt};
+        let policy = webview
+            .inner()
+            .settings()
+            .map_or("unknown", |s| policy_name(s.hardware_acceleration_policy()));
+        let line = renderer_line(&tauri::webview_version().unwrap_or_default(), policy);
+        // through the sidecar so the line reaches sidecar.log as well as stdout
+        match handle.try_state::<crate::sidecar::Sidecar>() {
+            Some(sidecar) => sidecar.log_line(&line),
+            None => println!("{line}"),
+        }
+        if let Ok(mut facts) = handle.state::<GpuFacts>().0.lock() {
+            facts.push(line);
+        }
+    });
+    if let Err(e) = read {
+        println!("[gpu] could not read the webview's renderer settings: {e}");
+    }
+}
+
 /// Apply the workaround. MUST run before the webview is created: WebKit reads
 /// these variables when it spawns its web process, and the process inherits the
 /// environment as it stood at that moment.
-pub fn apply_gpu_workarounds() {
+///
+/// Returns the `[gpu]` lines it printed, for `record_renderer`. They are
+/// printed here, not later, so a launch that dies creating the webview (#6)
+/// still shows them.
+pub fn apply_gpu_workarounds() -> Vec<String> {
+    let user_env = render_env();
     let decision = decide(
         nvidia_driver_present_under(Path::new("/")),
         std::env::var_os(DMABUF).is_some(),
@@ -139,6 +247,7 @@ pub fn apply_gpu_workarounds() {
         std::env::var_os(FORCE_SOFTWARE).is_some(),
     );
 
+    let mut lines = Vec::new();
     match decision {
         Decision::ForceSoftware => {
             // Both, not just the first: the two faults this rescues are
@@ -149,27 +258,34 @@ pub fn apply_gpu_workarounds() {
             if std::env::var_os(DMABUF).is_none() {
                 std::env::set_var(DMABUF, "1");
             }
-            println!(
+            lines.push(format!(
                 "[gpu] {FORCE_SOFTWARE} is set — forcing {SOFTWARE_GL}=1 and disabling the \
                  WebKitGTK DMABUF renderer. Rendering will be slower."
-            );
+            ));
         }
         Decision::Disable => {
             std::env::set_var(DMABUF, "1");
             // Logged unconditionally: when this machine later files a bug, the
             // terminal output needs to show that we changed the renderer.
-            println!(
+            lines.push(format!(
                 "[gpu] Nvidia driver detected — disabling the WebKitGTK DMABUF renderer \
                  (issue #6). Set {OPT_OUT}=1 to keep it."
-            );
+            ));
         }
         // The two environment-driven skips are worth a line for the same reason;
         // "no Nvidia driver" is the ordinary case and stays quiet.
         Decision::Skip(SKIP_NO_NVIDIA) => {}
         Decision::Skip(reason) => {
-            println!("[gpu] leaving the WebKitGTK renderer alone: {reason}");
+            lines.push(format!("[gpu] leaving the WebKitGTK renderer alone: {reason}"));
         }
     }
+    // Every launch, the ordinary case included: a report needs to say what was
+    // set as much as what we changed.
+    lines.push(env_line(&user_env, &render_env()));
+    for line in &lines {
+        println!("{line}");
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -251,6 +367,55 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// GH #17: the report has to say who set each rendering variable, because
+    /// "we set DISABLE_DMABUF" and "the user did" call for different answers.
+    #[test]
+    fn the_env_line_says_who_set_each_variable() {
+        let v = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
+            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        };
+        let before = v(&[("LIBGL_ALWAYS_SOFTWARE", "0"), ("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1")]);
+        let after = v(&[
+            ("LIBGL_ALWAYS_SOFTWARE", "1"),
+            ("WEBKIT_DISABLE_DMABUF_RENDERER", "1"),
+            ("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1"),
+        ]);
+        assert_eq!(
+            env_line(&before, &after),
+            "[gpu] WebKit environment: LIBGL_ALWAYS_SOFTWARE=1 (set by SindriCAD), \
+             WEBKIT_DISABLE_DMABUF_RENDERER=1 (set by SindriCAD), \
+             WEBKIT_DMABUF_RENDERER_FORCE_SHM=1 (set by the user)",
+            "a variable we changed is ours even if the user had set it to something else"
+        );
+        assert_eq!(env_line(&[], &[]), "[gpu] WebKit environment: nothing set");
+        let long = "x".repeat(200);
+        assert_eq!(env_line(&[], &v(&[("WEBKIT_X", &long)])).matches('x').count(), 64);
+    }
+
+    #[test]
+    fn only_rendering_variables_are_reported() {
+        for name in ["WEBKIT_DISABLE_DMABUF_RENDERER", "WEBKIT_FORCE_DMABUF_RENDERER", SOFTWARE_GL, OPT_OUT, FORCE_SOFTWARE] {
+            assert!(is_render_var(name), "{name}");
+        }
+        for name in ["HOME", "PATH", "XDG_RUNTIME_DIR", "LIBGL_DRIVERS_PATH"] {
+            assert!(!is_render_var(name), "{name}");
+        }
+    }
+
+    /// `never` is the CPU-painting state, and the line has to say so in words:
+    /// the policy name alone did not tell anyone in GH #17.
+    #[test]
+    fn the_renderer_line_names_cpu_painting() {
+        assert_eq!(
+            renderer_line("2.52.6", policy_name(webkit2gtk::HardwareAccelerationPolicy::Never)),
+            "[gpu] WebKitGTK 2.52.6, hardware acceleration policy read back: never (every frame is painted on the CPU)"
+        );
+        assert_eq!(
+            renderer_line("2.52.6", policy_name(webkit2gtk::HardwareAccelerationPolicy::Always)),
+            "[gpu] WebKitGTK 2.52.6, hardware acceleration policy read back: always"
+        );
     }
 
     /// `decide` being right is worth nothing if the applier reads the wrong
