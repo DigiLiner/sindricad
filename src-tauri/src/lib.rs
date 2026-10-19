@@ -187,11 +187,16 @@ struct FrontendReady(std::sync::atomic::AtomicBool);
 /// logs and does not raise a dialog.
 const FRONTEND_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
 
-/// Called by `src/boot.ts` as the document loads. Its only job is to prove the
-/// webview got far enough to run our code and reach Tauri IPC.
+/// Called by `src/boot.ts` as the document loads, to prove the webview got far
+/// enough to run our code and reach Tauri IPC. It also starts the pass window of
+/// a GPU trial (webkit.rs).
 #[tauri::command]
-fn frontend_ready(state: tauri::State<'_, FrontendReady>) {
+fn frontend_ready(app: tauri::AppHandle, state: tauri::State<'_, FrontendReady>) {
     state.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(target_os = "linux")]
+    webkit::trial_event(&app, webkit::TrialEvent::Ready);
+    #[cfg(not(target_os = "linux"))]
+    let _ = app;
 }
 
 /// Watch for the frontend checking in, and write a diagnosis if it never does.
@@ -211,6 +216,10 @@ fn watch_frontend_load(app: tauri::AppHandle) {
         if ready {
             return;
         }
+        // On a launch trying shared-memory buffers this records the failure,
+        // so the next launch uses the fallback (webkit.rs).
+        #[cfg(target_os = "linux")]
+        webkit::trial_event(&app, webkit::TrialEvent::WatchdogFired);
 
         let secs = FRONTEND_READY_TIMEOUT.as_secs();
         let lines = [
@@ -403,6 +412,13 @@ pub fn run() {
         .expect("error while building SindriCAD");
 
     app.run(|app_handle, event| {
+        // A clean exit after the interface loaded passes a GPU trial that has
+        // not yet run its window (webkit.rs): the user closing the app early is
+        // not a crash.
+        #[cfg(target_os = "linux")]
+        if let RunEvent::Exit = event {
+            webkit::trial_event(app_handle, webkit::TrialEvent::Passed);
+        }
         if let RunEvent::ExitRequested { .. } | RunEvent::Exit = event {
             if let Some(s) = app_handle.try_state::<Sidecar>() {
                 s.kill();
