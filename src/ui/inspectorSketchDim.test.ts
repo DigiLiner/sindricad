@@ -7,7 +7,21 @@
 // entity by a constraint stayed exactly where it was. Both halves are observed
 // here through the REAL Inspector, the REAL DocumentStore and the REAL solver:
 // the geometry that comes out, not the call that went in.
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vitest";
+
+// A cold solver, the way the CI runner has one: with every core busy running
+// other test files, compiling planegcs's WASM (off the main thread) finished
+// after `settle`'s ten ticks, so the first edit read back unsolved ("expected
+// 10 to be close to 15"). The compile is made 30 ms slower here so that start
+// is as slow on every machine, and the warm-up below has to be what holds.
+const restoreInstantiate = vi.hoisted(() => {
+  const instantiate = WebAssembly.instantiate;
+  WebAssembly.instantiate = (async (...a: unknown[]) => {
+    await new Promise((r) => setTimeout(r, 30));
+    return (instantiate as (...b: unknown[]) => unknown).apply(WebAssembly, a);
+  }) as typeof WebAssembly.instantiate;
+  return () => { WebAssembly.instantiate = instantiate; };
+});
 
 declare const process: { cwd(): string };
 // the wasm `?url` import resolves root-relative under vitest (see
@@ -22,7 +36,7 @@ import { setUnit } from "./units";
 import { Inspector } from "./inspector";
 import { DocumentStore } from "../document/store";
 import { solveSketchFeature } from "../sketch/headlessSolve";
-import { SolverUnavailable } from "../sketch/solver";
+import { SolverUnavailable, initSolver } from "../sketch/solver";
 import { arcCenterRadius } from "../sketch/arc";
 import { constraintDims } from "../sketch/entityDims";
 import { liveSketch } from "../sketch/liveSketch.testkit";
@@ -120,6 +134,13 @@ function mount() {
   return { store, root };
 }
 
+// The app starts the solver at launch (main.ts), so an edit in the panel never
+// waits on it; `settle` counts ticks, which only means "done" once it is up.
+beforeAll(async () => {
+  expect(await initSolver()).toBe(true);
+});
+afterAll(restoreInstantiate);
+
 beforeEach(() => {
   fakeFocus.el = null;
 });
@@ -144,6 +165,23 @@ describe("inspector: a sketch dimension edits like it does on the canvas", () =>
     // look right — a raw-write regression must fail here too
     const dim = (sketchOf(store).constraints ?? []).find((k) => k.type === "diameter");
     expect(dim).toEqual({ type: "diameter", id: expect.any(String), circle: "c1", value: 30 });
+  });
+
+  it("lands the typed diameter however long the solve takes", async () => {
+    // Nothing on the panel's path is on a clock: a solve far slower than any
+    // frame (a slow machine, a big sketch) still lands the value, and lands it
+    // solved, not written in raw as if there were no solver.
+    const { store, root } = mount();
+    store.headlessSolve = async (f, p, bound, onConflict) => {
+      await new Promise((r) => setTimeout(r, 100));
+      return solveSketchFeature(f, p, bound, onConflict);
+    };
+    const row = input(root, "Circle 1 · Diameter mm");
+    row.value = "30";
+    row.dispatch("change");
+    await vi.waitFor(() => expect(entity(store, "c1").radius).toBeCloseTo(15, 6));
+    const c = entity(store, "c1");
+    expect(Math.abs(Math.abs(c.y - -10) - c.radius)).toBeLessThan(1e-6);
   });
 
   it("still writes the dimensions that have no constraint form", async () => {
