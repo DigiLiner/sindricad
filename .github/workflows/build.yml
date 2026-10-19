@@ -910,6 +910,15 @@ jobs:
           SC_TOKEN: citoken
           SC_CHROME: /usr/bin/google-chrome
         run: node e2e/sketch_zero_dim_e2e.cjs
+      # GH #17: the draw-time W/H box stopped re-selecting its text on every
+      # move and selects it on the next keystroke instead. Only a real engine
+      # says the typed digit lands over that selection rather than at the caret
+      # the value write left, so typing still replaces the live figure.
+      - name: Draw-time dimension box typing end-to-end
+        env:
+          SC_TOKEN: citoken
+          SC_CHROME: /usr/bin/google-chrome
+        run: node e2e/dim_box_typing_e2e.cjs
       # Field report f45fe95c: a construction plane drawn as a hardcoded 80x80
       # quad ends mid-body on any part wider than that, and its boundary slides
       # across the face while orbiting — "lines overlaying the surface of the

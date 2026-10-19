@@ -26,6 +26,9 @@ interface Field {
    *  the text it wrote for it. That text is rounded for display, so until the
    *  user types, the value is `mm`, not the parse of it. Typing clears it. */
   wrote?: { text: string; mm: number } | undefined;
+  /** Cursor tracking rewrote the text since it was last selected, which left
+   *  a caret at its end: the next keystroke selects it all first. */
+  selectOnKey?: boolean;
 }
 
 export class DimInput {
@@ -141,6 +144,10 @@ export class DimInput {
       wrap.appendChild(input);
       this.root.appendChild(wrap);
       const field: Field = { def, input, userDriven: false };
+      // A caret the user clicks into the figure is where their typing goes.
+      input.addEventListener("pointerdown", () => {
+        field.selectOnKey = false;
+      });
 
       input.addEventListener("keydown", (e) => this.onKey(e, field));
       input.addEventListener("input", () => {
@@ -197,6 +204,12 @@ export class DimInput {
   }
 
   private onKey(e: KeyboardEvent, field: Field) {
+    // Before the IME check: the first key of a conversion replaces the live
+    // figure too, as it did when the figure was kept selected.
+    if (field.selectOnKey) {
+      field.selectOnKey = false;
+      field.input.select();
+    }
     // Mid-IME-conversion the keystroke belongs to the input method (Enter
     // confirms a candidate, Tab walks the candidate list), not to this box —
     // committing there ends the whole tool on half-typed text. Still swallowed,
@@ -249,12 +262,20 @@ export class DimInput {
     for (const f of this.fields) {
       const v = values[f.def.name];
       if (!f.userDriven && v != null) {
-        f.input.value = fieldText(v, f.def.kind);
-        f.wrote = { text: f.input.value, mm: v };
+        const text = fieldText(v, f.def.kind);
+        f.wrote = { text, mm: v };
         f.input.classList.remove("invalid");
-        // Keep the live value SELECTED while it tracks the cursor (Fusion-style), so
-        // typing a number at any moment replaces it instead of appending.
-        if (document.activeElement === f.input) f.input.select();
+        // Typing at any moment must REPLACE the live value, not append to it
+        // (Fusion-style). That used to be a rewrite plus select() on every
+        // move, and a focused field holding a selection is costly to paint in
+        // software: 48 ms a frame against 43 without it, at half a core under
+        // WEBKIT_DISABLE_DMABUF_RENDERER (GH #17). So the text is written only
+        // when the shown figure changes, which leaves a caret at its end, and
+        // onKey selects it all on the next keystroke instead.
+        if (f.input.value !== text) {
+          f.input.value = text;
+          f.selectOnKey = true;
+        }
       }
     }
   }
@@ -276,6 +297,7 @@ export class DimInput {
     }
     f.input.classList.remove("invalid");
     f.userDriven = true;
+    f.selectOnKey = false; // the seeded text is not the tracking figure
   }
 
   isUserDriven(name: string): boolean {
