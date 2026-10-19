@@ -18,6 +18,28 @@ This file starts on 2026-08-03. For anything before that, see the
 
 ## Unreleased
 
+### Display
+
+- **NVIDIA Linux machines get GPU-accelerated drawing again.** The workaround for the NVIDIA
+  launch crash made WebKit paint every frame on the CPU, which is why drawing could drop to
+  20 fps. SindriCAD now keeps the GPU on and only changes how frames reach the window. If
+  your driver still crashes with that, it falls back to the safe mode by itself and
+  remembers it.
+- **Faces and hidden edges no longer show through each other as "squiggles" in the
+  perspective view.** On graphics setups with a shallow depth buffer, close surfaces fought
+  over which was in front and drew stair-steps and dashed lines across the model. The view
+  now spends its depth precision where the model is, so nothing changes on setups that
+  already looked right.
+- **Drawing with the size box open is lighter on slow Linux setups.** The W/H box no longer
+  re-selects its figure on every mouse move, which cost about 5 ms a frame where WebKit
+  paints on the CPU (most NVIDIA machines today). Typing still replaces the live figure.
+- **Bug reports from Linux say how the window is drawn.** The startup log and every bug
+  report now say which WebKit rendering settings were set, by you or by SindriCAD, and
+  whether WebKit draws on the GPU or on the CPU. That is the first thing I need to know when
+  a Linux machine runs slowly.
+
+## 0.1.263 (2026-10-19)
+
 ### Files
 
 - **Cmd+Q on a Mac asks before it throws your work away.** Cmd+Q and SindriCAD > Quit used
