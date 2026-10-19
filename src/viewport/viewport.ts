@@ -76,6 +76,7 @@ import { Highlighter } from "./highlight";
 import { ProgressiveModel } from "./progressive";
 import { SectionCaps } from "./sectionCaps";
 import { documentBox, framingBox, isSaneBox, wireBox } from "./modelBox";
+import { addBoxSpan, addSceneSpan, drawnBoxes, emptySpan, perspDepthRange } from "./depthRange";
 import { nearestEdgeByMid, midMatchTol, edgeSelectorFrom } from "./edgeMatch";
 import type { Plane3, PlaneDef, RebuildResult, Selector } from "../types";
 import { niceStep } from "../ui/units";
@@ -2303,6 +2304,37 @@ export class Viewport {
     this.caps.sync(plane, this.model?.bodies ?? [], (i) => this.capColor(i), BASE_COLOR.getHex());
   }
 
+  /** The model group's drawn boxes, re-measured only when the scene changed
+   *  (see syncDepthRange): bodies do not move between rebuilds, and a large
+   *  assembly is thousands of matrices to apply on every orbit frame. */
+  private modelBoxes: THREE.Box3[] = [];
+  private modelGroupKids = -1;
+
+  /** Aim the perspective camera's near and far planes at what is drawn, for the
+   *  frame about to be drawn: depthRange.ts says why. `sceneChanged` is false on
+   *  a frame only the camera moved for. */
+  private syncDepthRange(sceneChanged: boolean) {
+    const cam = this.rig.active;
+    if (!(cam instanceof THREE.PerspectiveCamera)) return; // ortho keeps its fixed slab
+    const { scene, modelGroup } = this.scene;
+    // render() would do this a moment later, but an object placed since the last
+    // frame still has the matrix of wherever it was before, and it is THAT one
+    // whose near edge must not be clipped
+    scene.updateMatrixWorld();
+    if (sceneChanged || modelGroup.children.length !== this.modelGroupKids) {
+      this.modelBoxes = drawnBoxes(modelGroup);
+      this.modelGroupKids = modelGroup.children.length;
+    }
+    const span = emptySpan();
+    for (const box of this.modelBoxes) addBoxSpan(box, cam.position, span);
+    addSceneSpan(scene, cam.position, span, modelGroup);
+    const { near, far } = perspDepthRange(span, cam.fov, cam.aspect);
+    if (near === cam.near && far === cam.far) return;
+    cam.near = near;
+    cam.far = far;
+    cam.updateProjectionMatrix();
+  }
+
   /** Body i's own colour as the viewport shows it, which its cap darkens: the
    *  Component hue under Component analysis, else its assigned colour, else the
    *  neutral shade. Overhang analysis colours faces, not bodies, so a cut body
@@ -3014,6 +3046,7 @@ export class Viewport {
   }
 
   screenshotPNG(): string {
+    this.syncDepthRange(true);
     this.syncSectionCaps();
     this.scene.renderer.render(this.scene.scene, this.rig.active);
     const url = this.canvas.toDataURL("image/png");
@@ -3051,6 +3084,7 @@ export class Viewport {
         // expected to be cheap when nothing changed (it is keyed, like
         // AdaptiveGrid) and must never call requestRender — this IS the frame.
         this.onZoomScale?.(this.pixelWorldSize(t), t.x, t.y, t.z);
+        this.syncDepthRange(this.needsRender || this.lingerFrames > 0);
         this.syncSectionCaps();
         this.scene.renderer.render(this.scene.scene, this.rig.active);
         this.cube.render(this.rig.active, this.viewSize); // draw the ViewCube overlay in the corner

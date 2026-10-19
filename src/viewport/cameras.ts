@@ -6,12 +6,13 @@ import * as THREE from "three";
 import CameraControls from "camera-controls";
 import { foldPivot } from "./orbitPivot";
 import { isSaneBox, isSaneCoord } from "./modelBox";
+import { PERSP_FAR_MIN, PERSP_NEAR_MIN } from "./depthRange";
 
 CameraControls.install({ THREE });
 
 const FOV = 45;
 // Closest the perspective camera may sit to its pivot (mm). Kept comfortably above
-// the camera's near plane (0.1) so an extreme zoom-in can't push the surface behind
+// the camera's smallest near plane (0.1, depthRange.ts) so an extreme zoom-in can't push the surface behind
 // near — which used to clip the whole model away, leaving just the grid.
 const MIN_PERSP_DIST = 0.5;
 /** Half-extent framed when there is nothing to frame (an empty document), in mm.
@@ -169,7 +170,8 @@ export function createCameraRig(
   dom: HTMLElement,
   aspect: number,
 ): CameraRig {
-  const persp = new THREE.PerspectiveCamera(FOV, aspect, 0.1, 10000);
+  // the viewport moves near/far to fit what is drawn, every frame (depthRange.ts)
+  const persp = new THREE.PerspectiveCamera(FOV, aspect, PERSP_NEAR_MIN, PERSP_FAR_MIN);
   persp.up.set(0, 0, 1); // Z-up
   persp.position.set(80, -120, 90);
 

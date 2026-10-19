@@ -930,6 +930,16 @@ jobs:
           SC_TOKEN: citoken
           SC_CHROME: /usr/bin/google-chrome
         run: node e2e/datum_plane_quad_e2e.cjs
+      # Doug's "squiggles" (miter gauge STEP, 2026-10): faces and hidden edges
+      # fighting in depth, from a perspective near plane fixed at 0.1 mm. CI has
+      # no 16-bit depth buffer, so the file makes one, and it checks the other
+      # side too: a near plane pulled out to the model must clip nothing. Carries
+      # its own RED control (the fixed planes forced back).
+      - name: Perspective depth precision end-to-end
+        env:
+          SC_TOKEN: citoken
+          SC_CHROME: /usr/bin/google-chrome
+        run: node e2e/depth_precision_e2e.cjs
       # Field report 50b719a3: a construction plane that gives no hover feedback
       # in the normal viewport, though a click there selects it. The unit test
       # drives handleHover with a stubbed picker; the path a user travels is
