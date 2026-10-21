@@ -20,6 +20,16 @@ const IDLE_AFTER_MS = 400;
 /** DOM writes per second. The readout only has to be readable, not live. */
 const REFRESH_MS = 250;
 
+/** The tooltip's GPU line. WebKit's own word on the web process's renderer
+ *  (diagnostics/glRenderer.ts) wins over the WebGL string, which WebKitGTK
+ *  spoofs; a software rasterizer is named as such. */
+export function gpuLineText(): string {
+  const w = window as { __gpu?: string; __glRenderer?: { name: string; software: boolean } };
+  const real = w.__glRenderer;
+  if (real) return `\n${t(real.software ? "viewport.fps.gpuSoftware" : "viewport.fps.gpu", { gpu: real.name })}`;
+  return w.__gpu ? `\n${t("viewport.fps.gpu", { gpu: w.__gpu })}` : "";
+}
+
 export class FpsMeter {
   private stamps: number[] = [];
   private el: HTMLElement | null;
@@ -41,8 +51,7 @@ export class FpsMeter {
 
   private paint() {
     if (!this.el) return;
-    const gpu = (window as { __gpu?: string }).__gpu;
-    const gpuLine = gpu ? `\n${t("viewport.fps.gpu", { gpu })}` : "";
+    const gpuLine = gpuLineText();
     const now = performance.now();
     const last = this.stamps[this.stamps.length - 1];
     if (last === undefined || now - last > IDLE_AFTER_MS) {

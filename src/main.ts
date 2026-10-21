@@ -9,6 +9,7 @@ import { featureErrorText } from "./geometry/featureErrorText";
 import { TauriGeometry } from "./geometry/tauriClient";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { watchGlRenderer } from "./diagnostics/glRenderer";
 import { DocumentStore, EMPTY_DOCUMENT } from "./document/store";
 import { soleFeatureForBody } from "./document/bodyMaker";
 import { Timeline } from "./ui/timeline";
@@ -143,6 +144,7 @@ void geometry.init(); // fetch the per-launch sidecar auth token + open the sock
 // model behind it could not be rebuilt). One message, and a way to ask again.
 let engineDown = false;
 if ("__TAURI_INTERNALS__" in window) {
+  watchGlRenderer(); // GH #17: the renderer WebKit really draws with (diagnostics/glRenderer.ts)
   void listen<SidecarDeathPayload>("sidecar:died", (e) => {
     engineDown = true;
     // haltReconnect emits a status change, which is what repaints the status

@@ -1011,6 +1011,8 @@
     "nothingReadable": "nothing readable",
     "report": "Report this",
     "reportsLabel": "What this machine reports",
+    "softwareNow": "The 3D view is drawing on the CPU, because the graphics driver fell back to software rendering ({name}). Large sketches and models will be slow.",
+    "softwareRetry": "The 3D view is drawing on the CPU, because this graphics setup fell back to software rendering ({name}). Large sketches and models will be slow. SindriCAD will try a different GPU setting the next time you start it.",
     "spoofedNote": "The renderer name above comes from the Linux webview, which reports the same fake value on every machine. Ignore it. The WebGL version line is real.",
     "title": "The 3D view could not start",
     "tryThese": "Two things are worth trying. Close SindriCAD, then start it again from a terminal with one of these in front of the usual command:",
@@ -2323,6 +2325,7 @@
     },
     "fps": {
       "gpu": "GPU: {gpu}",
+      "gpuSoftware": "GPU: {gpu} (software rendering: drawn on the CPU)",
       "idle": "idle",
       "idleTitle": "The viewport only draws when something changes — nothing to render right now.",
       "reading": "{fps} fps · {ms} ms",

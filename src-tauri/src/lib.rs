@@ -189,14 +189,30 @@ const FRONTEND_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_se
 
 /// Called by `src/boot.ts` as the document loads, to prove the webview got far
 /// enough to run our code and reach Tauri IPC. It also starts the pass window of
-/// a GPU trial (webkit.rs).
+/// a GPU trial and the webkit://gpu renderer probe (webkit.rs).
 #[tauri::command]
 fn frontend_ready(app: tauri::AppHandle, state: tauri::State<'_, FrontendReady>) {
     state.0.store(true, std::sync::atomic::Ordering::Relaxed);
     #[cfg(target_os = "linux")]
-    webkit::trial_event(&app, webkit::TrialEvent::Ready);
+    {
+        webkit::trial_event(&app, webkit::TrialEvent::Ready);
+        webkit::probe_renderer(&app);
+    }
     #[cfg(not(target_os = "linux"))]
     let _ = app;
+}
+
+/// What the web process draws with, read from webkit://gpu (webkit.rs
+/// `probe_renderer`); `null` until the probe has answered, and always off Linux.
+#[tauri::command]
+fn gl_renderer(app: tauri::AppHandle) -> Option<serde_json::Value> {
+    #[cfg(target_os = "linux")]
+    return webkit::gl_renderer(&app).and_then(|r| serde_json::to_value(r).ok());
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app;
+        None
+    }
 }
 
 /// Watch for the frontend checking in, and write a diagnosis if it never does.
@@ -302,6 +318,7 @@ pub fn run() {
         restart_for_update,
         updates_supported,
         frontend_ready,
+        gl_renderer,
         recovery_write,
         recovery_read,
         recovery_list,
@@ -345,6 +362,7 @@ pub fn run() {
         restart_for_update,
         updates_supported,
         frontend_ready,
+        gl_renderer,
         recovery_write,
         recovery_read,
         recovery_list,

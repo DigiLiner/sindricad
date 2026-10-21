@@ -93,7 +93,11 @@ rust-geom = ["dep:opencascade", "dep:opencascade-sys", "dep:glam", "dep:threemf"
 # tree through wry, which enables a superset of these features; naming it is
 # what lets us call its methods.
 [target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = { version = "2", features = ["v2_20"] }
+# v2_40 for evaluate_javascript (webkit.rs reads webkit://gpu); wry already turns
+# it on, so this requires no newer WebKitGTK than the app already does.
+webkit2gtk = { version = "2", features = ["v2_40"] }
+# the JS value type evaluate_javascript returns (already in the tree via wry)
+javascriptcore-rs = "1"
 
 # Windows-only: a Job Object with KILL_ON_JOB_CLOSE reaps the sidecar (and its
 # ProcessPoolExecutor workers) when the app exits or crashes. Unix uses a process

@@ -26,6 +26,18 @@ This file starts on 2026-08-03. For anything before that, see the
   drivers resolve depth more coarsely than they report. The view now uses a depth buffer whose
   precision does not depend on that range, so faces and edges stay clean either way. Bug
   reports also measure how much depth precision the graphics setup really has.
+- **Sketches with many dimensions stay smooth when the view is drawn in software.** Every
+  dimension label blurred the view behind it. Where the graphics driver falls back to
+  drawing on the CPU, that blur was redone for every label on every frame: drawing a
+  rectangle next to 20 dimensioned ones took 80 ms a frame instead of 25. The labels now
+  sit on a plain dark background.
+- **SindriCAD says when the 3D view is drawn on the CPU.** On Linux it now asks WebKit which
+  renderer it really uses. If that is a software rasterizer such as llvmpipe, a notice says
+  so, the tooltip on the fps readout names it, and bug reports carry it.
+- **NVIDIA laptops that land on software rendering try another GPU setting.** If the
+  shared-memory setting from 0.1.265 ends up drawing on the CPU, the next launch tries
+  WebKit's default renderer instead. If that crashes, it falls back to the safe mode by
+  itself, as before.
 
 ## 0.1.265 (2026-10-19)
 
