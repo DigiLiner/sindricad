@@ -2435,12 +2435,16 @@ button.finish:hover {
   pointer-events: none;
   z-index: 6;
 }
+/* No backdrop-filter on these, ever. There is one label per dimension, each over
+   the live canvas, so a blur is redone for every label on every frame. On a GPU
+   that is free; on software GL (llvmpipe) it cost ~3 ms a label: drawing a
+   rectangle next to 20 dimensioned ones went from 25 to 80 ms a frame (GH #17,
+   .fable/gh17-lag/RESULT.md). The tinted states stack their tint on the same
+   near-opaque base, so they read the same without one. */
 .sketch-dim {
   position: absolute;
   transform: translate(-50%, -50%);
   background: rgba(18, 20, 25, 0.92);
-  -webkit-backdrop-filter: blur(6px);
-          backdrop-filter: blur(6px);
   border: 1px solid var(--accent);
   color: var(--text);
   font-size: 11px;
@@ -2455,7 +2459,7 @@ button.finish:hover {
   transition: background var(--t-fast) var(--ease), border-color var(--t-fast) var(--ease);
 }
 .sketch-dim:hover {
-  background: var(--accent-tint);
+  background: linear-gradient(var(--accent-tint), var(--accent-tint)), rgba(18, 20, 25, 0.92);
   border-color: var(--accent-hot);
   color: var(--accent-hot);
 }
@@ -2490,7 +2494,7 @@ button.finish:hover {
 /* the dimension whose row the parameters panel is pointing at: the hover look,
    held, so the row and its label are seen together */
 .sketch-dim.sketch-dim-linked {
-  background: var(--accent-tint-2);
+  background: linear-gradient(var(--accent-tint-2), var(--accent-tint-2)), rgba(18, 20, 25, 0.92);
   border-color: var(--accent-hot);
   color: var(--accent-hot);
 }
