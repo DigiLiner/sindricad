@@ -8,6 +8,8 @@ import { toast } from "../ui/toast";
 import { t } from "../i18n";
 import { niceStep } from "../ui/units";
 import { isSaneCoord } from "./modelBox";
+import { installLogDepthOffset } from "./depthOffset";
+import { measureDepthBits } from "./depthProbe";
 
 export interface SceneBundle {
   renderer: THREE.WebGLRenderer;
@@ -123,8 +125,12 @@ function recordGpu(renderer: THREE.WebGLRenderer) {
   try {
     const gl = renderer.getContext();
     const a = gl.getContextAttributes();
+    // measured, next to what the context reports (depthProbe.ts: a stack can
+    // say 24 and resolve less, which is the open question in Doug's squiggles)
+    const resolved = gl instanceof WebGL2RenderingContext ? measureDepthBits(gl) : null;
+    renderer.resetState(); // the probe drew with raw GL behind three's back
     // i18n-ignore GPU diagnostics, English so a report stays searchable
-    depth = `depth bits: ${gl.getParameter(gl.DEPTH_BITS)}, samples: ${gl.getParameter(gl.SAMPLES)}`
+    depth = `depth bits: ${gl.getParameter(gl.DEPTH_BITS)} (resolves ${resolved ?? "?"}), samples: ${gl.getParameter(gl.SAMPLES)}`
       + `, attributes: depth=${a?.depth} stencil=${a?.stencil} antialias=${a?.antialias}`;
     const ext = gl.getExtension("WEBGL_debug_renderer_info");
     const r = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
@@ -233,11 +239,14 @@ function createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
     throw new NoWebGLError(anyGl ? "webgl1-only" : "no-webgl", facts);
   }
   try {
-    // stencil: the solid caps of a section cut are drawn through it (sectionCaps.ts)
-    return new THREE.WebGLRenderer({ canvas, antialias: true, stencil: true });
+    // stencil: the solid caps of a section cut are drawn through it (sectionCaps.ts).
+    // logarithmicDepthBuffer: depth precision that does not depend on the near
+    // plane (depthOffset.ts says why, and what it costs the polygon offset).
+    installLogDepthOffset();
+    return new THREE.WebGLRenderer({ canvas, antialias: true, stencil: true, logarithmicDepthBuffer: true });
   } catch {
     try {
-      const plain = new THREE.WebGLRenderer({ canvas, antialias: false });
+      const plain = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true });
       stickyFact("[gpu] the driver refused our context attributes, running on its defaults");
       return plain;
     } catch (e) {

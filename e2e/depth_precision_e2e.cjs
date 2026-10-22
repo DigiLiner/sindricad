@@ -14,11 +14,20 @@
 // DEPTH_COMPONENT16 and puts the colour on the canvas. Same THREE instance,
 // same scene, same camera, so the only thing that changes is the depth bits.
 //
+// Second round, 0.1.265 (Doug again, "still has the squiggles", his GPU
+// reporting 24-bit depth): a near plane that follows the nearest drawn object
+// falls back to 0.1 mm the moment anything drawn is next to the camera, and a
+// stack that draws shallower than it reports is back to square one. The
+// viewport now writes a LOGARITHMIC depth (depthOffset.ts), whose precision
+// does not depend on near at all, so the old fixed planes at 16 bits must now
+// draw clean too. On the code before it they changed 5,691 and 1,872 pixels.
+//
 // What it checks, per view:
 //   precision  16-bit vs 24-bit pixel difference stays within a few dozen.
-//   control    the same with the old fixed planes forced back in is RED (hundreds
-//              to thousands), or "precision" would also pass on a scene that
-//              simply had nothing close together in depth.
+//   collapsed  the same with near forced back to 0.1 mm (what any drawn thing
+//              next to the camera does to the adaptive planes) stays clean too.
+//   wired      the renderer really writes log depth and the model's faces carry
+//              the shader offset, so "collapsed" cannot pass by accident.
 //   no clip    at 24 bits, the fixed planes and the adaptive ones draw the SAME
 //              picture, including views where the camera sits inside the box,
 //              grazes the ground grid, or is right under a construction plane.
@@ -43,7 +52,6 @@ const SAME_BUDGET = 60;
 // 16-bit step is coarser. Measured: 0 (iso) and 128 (low, closer) with the fix,
 // 5,691 and 1,872 with the fixed planes. The two bands are far apart.
 const PRECISION_BUDGET = 250;
-const CONTROL_FLOOR = 1000;
 
 let fails = 0;
 const check = (ok, label, extra) => {
@@ -185,6 +193,14 @@ const DOC = {
     vp.rig.controls.setLookAt(...p, ...t, false);
   }, [pos, target]);
 
+  const wired = await page.evaluate(() => {
+    const vp = window.__sindri.viewport;
+    let offsetFaces = 0;
+    vp.scene.modelGroup.traverse((o) => { if (o.isMesh && o.material?.defines && "SINDRI_DEPTH_OFFSET" in o.material.defines) offsetFaces++; });
+    return { logDepth: vp.scene.renderer.capabilities.logarithmicDepthBuffer, offsetFaces };
+  });
+  check(wired.logDepth === true && wired.offsetFaces >= 2, "the viewport writes log depth and the faces carry the shader offset", wired);
+
   // --- precision: a 16-bit depth buffer draws what a 24-bit one does ----------
   // The datum plane sits this part out: it is translucent, and blending into the
   // emulation's render target tints it differently from the canvas, which would
@@ -194,14 +210,13 @@ const DOC = {
     await fitView(dir, zoom);
     const ref = await render(false, false);
     const now16 = await render(true, false);
-    const fixed24 = await render(false, true);
     const fixed16 = await render(true, true);
     const adaptive = await differing(ref.png, now16.png);
-    const control = await differing(fixed24.png, fixed16.png);
+    const collapsed = await differing(ref.png, fixed16.png);
     check(ref.cam.type === "PerspectiveCamera" && ref.cam.near > 1,
       `${name}: the perspective near plane follows the model, not 0.1 mm`, ref.cam);
     check(adaptive <= PRECISION_BUDGET, `${name}: 16-bit depth draws the same picture as 24-bit`, { differing: adaptive });
-    check(control >= CONTROL_FLOOR, `${name}: (control) the fixed 0.1 mm near plane does NOT at 16 bits`, { differing: control });
+    check(collapsed <= PRECISION_BUDGET, `${name}: ...and still does with near collapsed to 0.1 mm`, { differing: collapsed });
   }
 
   // --- no clip: what the fixed planes drew, the adaptive ones still draw -----

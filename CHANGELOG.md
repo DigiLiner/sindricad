@@ -20,6 +20,17 @@ This file starts on 2026-08-03. For anything before that, see the
 
 ### Display
 
+- **No more stair-steps or ghost lines along a model's edges, on any graphics setup.** 0.1.265
+  fixed the "squiggles" by fitting the 3D view's depth range to the model, but anything drawn
+  close to the camera, such as a sketch, a plane or the grid, undid that, and some graphics
+  drivers resolve depth more coarsely than they report. The view now uses a depth buffer whose
+  precision does not depend on that range, so faces and edges stay clean either way. Bug
+  reports also measure how much depth precision the graphics setup really has.
+
+## 0.1.265 (2026-10-19)
+
+### Display
+
 - **NVIDIA Linux machines get GPU-accelerated drawing again.** The workaround for the NVIDIA
   launch crash made WebKit paint every frame on the CPU, which is why drawing could drop to
   20 fps. SindriCAD now keeps the GPU on and only changes how frames reach the window. If

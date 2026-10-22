@@ -5,19 +5,20 @@
 
 import * as THREE from "three";
 import type { ModelView } from "./render";
+import { withDepthOffset } from "./depthOffset";
 
 /** A reflective zebra material: black/white bands follow the reflected view
  *  vector, so kinks/curvature discontinuities show as broken or bunched stripes.
  *  Uses three's built-in `cameraPosition` uniform — no per-frame updates needed. */
 export function makeZebraMaterial(frequency = 7): THREE.ShaderMaterial {
-  return new THREE.ShaderMaterial({
+  // the log-depth chunks and the offset keep it in the same depth as the
+  // standard model material, edge lines crisp on top (depthOffset.ts)
+  return withDepthOffset(new THREE.ShaderMaterial({
     uniforms: { uFreq: { value: frequency } },
     side: THREE.DoubleSide,
-    // keep edge lines crisp on top, matching the standard model material
-    polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
     vertexShader: /* glsl */ `
+      #include <common>
+      #include <logdepthbuf_pars_vertex>
       varying vec3 vN;
       varying vec3 vP;
       void main() {
@@ -25,12 +26,15 @@ export function makeZebraMaterial(frequency = 7): THREE.ShaderMaterial {
         vec4 wp = modelMatrix * vec4(position, 1.0);
         vP = wp.xyz;
         gl_Position = projectionMatrix * viewMatrix * wp;
+        #include <logdepthbuf_vertex>
       }`,
     fragmentShader: /* glsl */ `
+      #include <logdepthbuf_pars_fragment>
       uniform float uFreq;
       varying vec3 vN;
       varying vec3 vP;
       void main() {
+        #include <logdepthbuf_fragment>
         vec3 N = normalize(vN);
         vec3 V = normalize(cameraPosition - vP);
         vec3 R = reflect(-V, N);
@@ -38,7 +42,7 @@ export function makeZebraMaterial(frequency = 7): THREE.ShaderMaterial {
         vec3 col = mix(vec3(0.06), vec3(0.93), band);
         gl_FragColor = vec4(col, 1.0);
       }`,
-  });
+  }));
 }
 
 /** Build a curvature-comb overlay for every edge of the model: at each interior

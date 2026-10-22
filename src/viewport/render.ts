@@ -7,6 +7,7 @@ import * as THREE from "three";
 import type { RebuildResult } from "../types";
 import { disposeObject } from "./dispose";
 import { scheduleRaycastIndex } from "./raycastIndex";
+import { withDepthOffset } from "./depthOffset";
 import { BodyEdges, EDGE_IDLE_COLOR, EDGE_IDLE_WIDTH, type EdgeRef } from "./edgeLines";
 
 export { BodyEdges, EDGE_IDLE_COLOR, EDGE_IDLE_WIDTH };
@@ -340,12 +341,11 @@ export function buildBodyMesh(
     metalness: 0.1,
     roughness: 0.55,
     flatShading: false,
-    // push faces back so edge lines stay crisp on top (no z-fighting)
-    polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
     side: THREE.DoubleSide,
   });
+  // push faces back so edge lines stay crisp on top (no z-fighting), in a way
+  // that survives the log depth buffer (depthOffset.ts)
+  withDepthOffset(mat);
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = "model";
