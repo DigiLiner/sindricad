@@ -7,6 +7,8 @@ import { gpuLineText } from "../viewport/fpsMeter";
 
 // node environment: the module only reads and writes two window fields
 vi.stubGlobal("window", {});
+const store = new Map<string, string>();
+vi.stubGlobal("localStorage", { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => void store.set(k, v) });
 const w = globalThis.window as { __gpu?: string };
 
 describe("the real GL renderer", () => {
@@ -45,4 +47,23 @@ describe("the real GL renderer", () => {
     applyRenderer({ name: "AMD Radeon (radeonsi)", software: false, retry: false }, notify);
     expect(notify).not.toHaveBeenCalled();
   });
+
+  it("remembers the renderer, and on Ivy Bridge with MSAA on says once that a restart fixes the edges", () => {
+    const notify = vi.fn();
+    (globalThis.window as { __msaa?: boolean }).__msaa = true;
+    const ivb = { name: "Mesa Intel(R) HD Graphics 4000 (IVB GT2)", software: false, retry: false };
+    applyRenderer(ivb, notify);
+    applyRenderer(ivb, notify);
+    expect(store.get("sindri.gpu.glRenderer")).toBe(ivb.name);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(notify.mock.calls[0]![0]).toMatch(/HD Graphics 4000.*Restart SindriCAD/s);
+
+    // the next start already has MSAA off: nothing to say
+    resetGlRendererForTest();
+    const quiet = vi.fn();
+    (globalThis.window as { __msaa?: boolean }).__msaa = false;
+    applyRenderer(ivb, quiet);
+    expect(quiet).not.toHaveBeenCalled();
+  });
 });
+

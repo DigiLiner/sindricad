@@ -1008,6 +1008,7 @@
     "copied": "Copied",
     "copy": "Copy the details",
     "copyFailed": "Could not copy",
+    "msaaNextStart": "This graphics chip ({name}) draws antialiased edges wrong, which shows up as stair-steps and stray lines along a model's edges. Restart SindriCAD and it will smooth edges a different way on this computer.",
     "nothingReadable": "nothing readable",
     "report": "Report this",
     "reportsLabel": "What this machine reports",

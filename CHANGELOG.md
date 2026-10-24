@@ -20,6 +20,20 @@ This file starts on 2026-08-03. For anything before that, see the
 
 ### Display
 
+- **Clean edges on Intel HD Graphics 4000 and 2500 (Ivy Bridge).** These older Intel chips
+  draw antialiased edges wrong, which showed up as stair-steps and stray lines along a
+  model's edges whatever the depth settings. Chrome has worked around this for years; now
+  SindriCAD does too. It smooths edges by drawing at twice the size on these chips, from the
+  second start after updating, and says so once.
+- **The view cube no longer touches the depth of the 3D view.** It used to clear a patch of
+  the depth buffer in its corner every frame, which some older Intel graphics drivers get
+  wrong. It now draws in front without clearing anything. It looks the same.
+- **Bug reports say why depth precision could not be measured,** instead of a bare "?".
+
+## 0.1.269 (2026-10-23)
+
+### Display
+
 - **No more stair-steps or ghost lines along a model's edges, on any graphics setup.** 0.1.265
   fixed the "squiggles" by fitting the 3D view's depth range to the model, but anything drawn
   close to the camera, such as a sketch, a plane or the grid, undid that, and some graphics

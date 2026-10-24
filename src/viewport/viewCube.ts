@@ -23,6 +23,22 @@ import * as C from "./colors3d";
 import { t } from "../i18n";
 
 const SIZE = 120; // corner viewport, CSS px
+
+/** Maps the cube's depth into the front 1% of the buffer (window depth 0 to
+ *  0.01), so it draws over the main scene without clearing anything first.
+ *
+ *  It used to clear depth inside a scissor rectangle every frame. That is a
+ *  PARTIAL depth clear, which Mesa's crocus driver (Intel gen 4-7, Doug's
+ *  Ivy Bridge HD 4000) is reported to get wrong, and gen 7 tracks depth in
+ *  8x4-pixel HiZ blocks: his stair-steps are about that size and survived both
+ *  depth-precision fixes (.fable/doug-squiggles3/RESULT.md). The main scene
+ *  never draws that close (a log depth of 0.01 is ~0.1 mm from the eye). */
+const FRONT_DEPTH = new THREE.Matrix4().set(
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 0.01, -0.99, // ndc z' = 0.01 z - 0.99: [-1, 1] -> [-1, -0.98]
+  0, 0, 0, 1,
+);
 const MARGIN = 14; // gap from the top-right edge
 const HALF = 0.5; // half-extent of the unit cube
 
@@ -182,10 +198,16 @@ export class ViewCube {
     // orthographic so the cube doesn't distort; framed a touch larger than the
     // cube's corner-to-corner extent (√3·HALF ≈ 0.87) for padding.
     const r = 1.15;
-    this.camera = new THREE.OrthographicCamera(-r, r, r, -r, 0.01, 100);
+    // near/far hug the cube (6 ± 0.87 away) so its own depth keeps its precision
+    // once it is squeezed to the front of the buffer (frontDepth below)
+    this.camera = new THREE.OrthographicCamera(-r, r, r, -r, 4, 8);
     this.camera.position.set(0, 0, 6); // looks down -Z at the group (screen space)
     this.camera.up.set(0, 1, 0);
     this.camera.lookAt(0, 0, 0);
+    // DRAWN with the squeezed matrix; projectionMatrixInverse is left alone, so
+    // picking the cube (Raycaster.setFromCamera reads only the inverse) is
+    // exactly what it was
+    this.camera.projectionMatrix.premultiply(FRONT_DEPTH);
 
     this.scene.add(new THREE.AmbientLight(0xffffff, 0.85));
     const dir = new THREE.DirectionalLight(0xffffff, 0.6);
@@ -387,7 +409,7 @@ export class ViewCube {
     this.renderer.setViewport(x, y, SIZE, SIZE);
     this.renderer.setScissor(x, y, SIZE, SIZE);
     this.renderer.setScissorTest(true);
-    this.renderer.clearDepth(); // draw the cube over the main scene
+    // no clearDepth: FRONT_DEPTH puts the cube in front of the main scene
     this.renderer.render(this.scene, this.camera);
     this.renderer.setScissorTest(false);
     this.renderer.autoClear = prevAutoClear;

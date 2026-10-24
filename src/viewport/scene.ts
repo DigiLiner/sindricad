@@ -10,6 +10,7 @@ import { niceStep } from "../ui/units";
 import { isSaneCoord } from "./modelBox";
 import { installLogDepthOffset } from "./depthOffset";
 import { measureDepthBits } from "./depthProbe";
+import { msaaBroken, rememberedRenderer } from "./gpuQuirks";
 
 export interface SceneBundle {
   renderer: THREE.WebGLRenderer;
@@ -127,10 +128,12 @@ function recordGpu(renderer: THREE.WebGLRenderer) {
     const a = gl.getContextAttributes();
     // measured, next to what the context reports (depthProbe.ts: a stack can
     // say 24 and resolve less, which is the open question in Doug's squiggles)
-    const resolved = gl instanceof WebGL2RenderingContext ? measureDepthBits(gl) : null;
-    renderer.resetState(); // the probe drew with raw GL behind three's back
     // i18n-ignore GPU diagnostics, English so a report stays searchable
-    depth = `depth bits: ${gl.getParameter(gl.DEPTH_BITS)} (resolves ${resolved ?? "?"}), samples: ${gl.getParameter(gl.SAMPLES)}`
+    const m = gl instanceof WebGL2RenderingContext ? measureDepthBits(gl) : { bits: null, why: "not WebGL2" };
+    renderer.resetState(); // the probe drew with raw GL behind three's back
+    const resolved = `${m.bits ?? "?"}${m.why ? `: ${m.why}` : ""}`;
+    // i18n-ignore GPU diagnostics, English so a report stays searchable
+    depth = `depth bits: ${gl.getParameter(gl.DEPTH_BITS)} (resolves ${resolved}), samples: ${gl.getParameter(gl.SAMPLES)}`
       + `, attributes: depth=${a?.depth} stencil=${a?.stencil} antialias=${a?.antialias}`;
     const ext = gl.getExtension("WEBGL_debug_renderer_info");
     const r = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
@@ -243,7 +246,9 @@ function createRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
     // logarithmicDepthBuffer: depth precision that does not depend on the near
     // plane (depthOffset.ts says why, and what it costs the polygon offset).
     installLogDepthOffset();
-    return new THREE.WebGLRenderer({ canvas, antialias: true, stencil: true, logarithmicDepthBuffer: true });
+    // antialias: MSAA, except on a GPU known to draw it wrong (gpuQuirks.ts),
+    // which createScene supersamples instead
+    return new THREE.WebGLRenderer({ canvas, antialias: !msaaBroken(rememberedRenderer()), stencil: true, logarithmicDepthBuffer: true });
   } catch {
     try {
       const plain = new THREE.WebGLRenderer({ canvas, antialias: false, logarithmicDepthBuffer: true });
@@ -295,7 +300,19 @@ function watchContextLoss(
 
 export function createScene(canvas: HTMLCanvasElement, onContextRestored?: () => void): SceneBundle {
   const renderer = createRenderer(canvas);
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  const msaa = renderer.getContext().getContextAttributes()?.antialias === true;
+  (window as { __msaa?: boolean }).__msaa = msaa;
+  // Without MSAA, draw at twice the size and let the page scale it down: the
+  // same smooth edges by plain supersampling. Line widths are in CSS pixels
+  // (viewport.ts resize), so they do not change.
+  // (Only for the quirk: a driver that refused our attributes is struggling
+  // already and does not get twice the pixels.)
+  const quirk = !msaa && msaaBroken(rememberedRenderer());
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio * (quirk ? 2 : 1), 2));
+  if (quirk) {
+    // i18n-ignore GPU diagnostic, English on purpose
+    stickyFact(`[gpu] MSAA off for ${rememberedRenderer()} (known to draw it wrong), supersampling instead`);
+  }
   renderer.setClearColor(CLEAR_COLOR, 1);
   watchContextLoss(canvas, renderer, onContextRestored);
   recordGpu(renderer);

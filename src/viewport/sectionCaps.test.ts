@@ -356,7 +356,7 @@ describe("the wiring that puts caps on screen", () => {
   });
 
   it("the renderer asks for a stencil buffer and reports whether it got one", () => {
-    expect(sceneSrc).toMatch(/new THREE\.WebGLRenderer\(\{ canvas, antialias: true, stencil: true[,}]/);
+    expect(sceneSrc).toMatch(/new THREE\.WebGLRenderer\(\{ canvas, antialias: [^,]+, stencil: true[,}]/);
     expect(sceneSrc).toMatch(/getContextAttributes\(\)\?\.stencil === true/);
   });
 });

@@ -14,6 +14,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { t } from "../i18n";
 import { toast } from "../ui/toast";
+import { msaaBroken, rememberRenderer } from "../viewport/gpuQuirks";
 
 export interface RendererReport {
   name: string;
@@ -23,11 +24,19 @@ export interface RendererReport {
 }
 
 let said = false;
+let saidMsaa = false;
 
 /** Record the report where the fps tooltip reads it, and say a software
  *  rasterizer once per launch. Safe to call twice with the same report. */
 export function applyRenderer(r: RendererReport, notify: typeof toast = toast) {
-  (window as { __glRenderer?: RendererReport }).__glRenderer = r;
+  const w = window as { __glRenderer?: RendererReport; __msaa?: boolean };
+  w.__glRenderer = r;
+  // the next start builds its context for this GPU (viewport/gpuQuirks.ts)
+  rememberRenderer(r.name);
+  if (msaaBroken(r.name) && w.__msaa === true && !saidMsaa) {
+    saidMsaa = true;
+    notify(t("gpu.msaaNextStart", { name: r.name }), { kind: "warning" });
+  }
   if (!r.software || said) return;
   said = true;
   notify(t(r.retry ? "gpu.softwareRetry" : "gpu.softwareNow", { name: r.name }), { kind: "warning" });
@@ -41,5 +50,6 @@ export function watchGlRenderer() {
 /** test seam */
 export function resetGlRendererForTest() {
   said = false;
+  saidMsaa = false;
   delete (window as { __glRenderer?: RendererReport }).__glRenderer;
 }

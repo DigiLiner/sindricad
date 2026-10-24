@@ -1,3 +1,4 @@
+// i18n-ignore-file GPU diagnostics only: English so a bug report stays searchable
 // How many depth bits the canvas really resolves, measured rather than asked.
 //
 // Doug's reports say `depth bits: 24` and his view draws the way a 16-bit buffer
@@ -6,7 +7,12 @@
 // This draws two flat quads into one pixel, the second a step 2^-k nearer than
 // the first, and reads back which one won: the largest k where the nearer one
 // still wins is the precision the buffer actually has. It runs once, before the
-// first frame, on a 1x1 scissor in the corner the first clear paints over.
+// first frame, whose clear paints over it.
+//
+// It clears the WHOLE buffer, never a scissored part: 0.1.269 cleared a 1x1
+// scissor, and on Doug's Ivy Bridge (Mesa crocus, where partial depth clears are
+// reported broken) it came back "?" with no way to tell why. Every way it can
+// fail now says which.
 
 /** The largest k in [lo, hi] for which `resolves(k)` holds, scanning upward and
  *  stopping at the first failure (precision does not come back at finer steps),
@@ -30,11 +36,17 @@ uniform vec4 c;
 out vec4 o;
 void main() { o = c; }`;
 
-/** Effective depth bits of the default framebuffer (or `fb`, for a test), 0
- *  when the depth test does not work at all, or null if it could not be
- *  measured. The caller must reset its GL state tracking afterwards (three:
+export interface DepthMeasure {
+  /** bits resolved, 0 when the depth test does not work at all, null when unknown */
+  bits: number | null;
+  /** why `bits` is 0 or null, for the bug report */
+  why?: string;
+}
+
+/** Effective depth bits of the default framebuffer (or `fb`, for a test). The
+ *  caller must reset its GL state tracking afterwards (three:
  *  renderer.resetState()). */
-export function measureDepthBits(gl: WebGL2RenderingContext, fb: WebGLFramebuffer | null = null): number | null {
+export function measureDepthBits(gl: WebGL2RenderingContext, fb: WebGLFramebuffer | null = null): DepthMeasure {
   const sh = (type: number, src: string) => {
     const s = gl.createShader(type)!;
     gl.shaderSource(s, src);
@@ -49,7 +61,9 @@ export function measureDepthBits(gl: WebGL2RenderingContext, fb: WebGLFramebuffe
   const buf = gl.createBuffer();
   const vao = gl.createVertexArray();
   try {
-    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return null;
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+      return { bits: null, why: `link failed: ${(gl.getProgramInfoLog(prog) || gl.getShaderInfoLog(vs) || gl.getShaderInfoLog(fs) || "no log").slice(0, 80)}` };
+    }
     gl.useProgram(prog);
     gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
     gl.bindVertexArray(vao);
@@ -60,8 +74,7 @@ export function measureDepthBits(gl: WebGL2RenderingContext, fb: WebGLFramebuffe
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     const uz = gl.getUniformLocation(prog, "z"), uc = gl.getUniformLocation(prog, "c");
     gl.viewport(0, 0, 1, 1);
-    gl.enable(gl.SCISSOR_TEST);
-    gl.scissor(0, 0, 1, 1);
+    gl.disable(gl.SCISSOR_TEST);
     gl.disable(gl.BLEND);
     gl.disable(gl.CULL_FACE);
     gl.disable(gl.STENCIL_TEST);
@@ -79,29 +92,32 @@ export function measureDepthBits(gl: WebGL2RenderingContext, fb: WebGLFramebuffe
       gl.uniform4f(uc, r, g, 0, 1);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     };
-    /** red at `base`, then green at `base + dz`: does green end up in the pixel? */
-    const greenWins = (dz: number) => {
+    /** red at `base`, then green at `base + dz`: what is in the pixel? */
+    const read = (dz: number) => {
       gl.clearDepth(1);
       gl.clearColor(0, 0, 0, 1);
       gl.clear(gl.DEPTH_BUFFER_BIT | gl.COLOR_BUFFER_BIT);
       draw(base, 1, 0);
       draw(base + dz, 0, 1);
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
-      return px[1]! > 128 && px[0]! < 128;
+      return px[1]! > 128 && px[0]! < 128 ? "green" : px[0]! > 128 && px[1]! < 128 ? "red" : `rgb ${px[0]},${px[1]},${px[2]}`;
     };
-    // control: a quad clearly BEHIND must lose, or there is no working depth
-    // test and every finer step below would "resolve"
-    if (greenWins(2 ** -6)) return 0;
-    const bits = highestResolved(8, 24, (k) => greenWins(-(2 ** -k)));
-    return bits >= 8 ? bits : null;
-  } catch {
-    return null; // a diagnostic must never break startup
+    // controls: a quad clearly BEHIND must lose and one clearly in FRONT must
+    // win, or the readings below mean nothing
+    const behind = read(2 ** -6), front = read(-(2 ** -6));
+    if (behind !== "red" || front !== "green") {
+      return { bits: behind === "green" && front === "green" ? 0 : null, why: `controls: behind=${behind} front=${front}` };
+    }
+    const bits = highestResolved(8, 24, (k) => read(-(2 ** -k)) === "green");
+    return bits >= 8 ? { bits } : { bits: null, why: "even a 2^-8 step did not resolve" };
+  } catch (e) {
+    // a diagnostic must never break startup
+    return { bits: null, why: `threw: ${String((e as Error)?.message ?? e).slice(0, 80)}` };
   } finally {
     gl.deleteProgram(prog);
     gl.deleteShader(vs);
     gl.deleteShader(fs);
     gl.deleteBuffer(buf);
     gl.deleteVertexArray(vao);
-    gl.disable(gl.SCISSOR_TEST);
   }
 }
